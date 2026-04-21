@@ -20,6 +20,19 @@ import { registerLmTools } from './lmTools'
 
 export const api = new GitBraidAPI()
 
+/**
+ * Wraps an async command handler so that any rejection is caught, logged, and
+ * shown to the user as an error notification instead of being silently swallowed.
+ */
+function cmd<T extends unknown[]>(fn: (...args: T) => Promise<void>) {
+	return (...args: T) =>
+		fn(...args).catch((e: unknown) => {
+			const msg = e instanceof Error ? e.message : String(e)
+			log.error('command error: ' + msg)
+			void vscode.window.showErrorMessage('GitBraid: ' + msg)
+		})
+}
+
 export async function activate(context: vscode.ExtensionContext) {
 	const commands: vscode.Disposable[] = []
 
@@ -88,18 +101,18 @@ export async function activate(context: vscode.ExtensionContext) {
 			})
 		}),
 
-		vscode.commands.registerCommand('gitbraid.scm.commitBranch', (arg: string | BranchNode) => {
+		vscode.commands.registerCommand('gitbraid.scm.commitBranch', cmd(async (arg: string | BranchNode) => {
 			const name = arg instanceof BranchNode ? arg.entry.name : arg
-			void scmManager.commitBranch(name)
-		}),
+			await scmManager.commitBranch(name)
+		})),
 
-		vscode.commands.registerCommand('gitbraid.scm.refreshAll', () => {
-			void scmManager.refreshAll()
-		}),
+		vscode.commands.registerCommand('gitbraid.scm.refreshAll', cmd(async () => {
+			await scmManager.refreshAll()
+		})),
 
 		vscode.commands.registerCommand(
 			'gitbraid.assignHunk',
-			async (uri: vscode.Uri, hunkIndex: number) => {
+			cmd(async (uri: vscode.Uri, hunkIndex: number) => {
 				const rel = vscode.workspace.asRelativePath(uri, false)
 				const stack = configService.getStack()
 				if (stack.length === 0) {
@@ -116,12 +129,12 @@ export async function activate(context: vscode.ExtensionContext) {
 				await configService.setHunkAssignment(rel, hunkIndex, picked.label)
 				await vscode.window.showInformationMessage(`Hunk ${String(hunkIndex)} → ${picked.label}`)
 				await overlayDiagnostics.refreshForUri(uri)
-			},
+			}),
 		),
 
 		vscode.commands.registerCommand(
 			'gitbraid.routeHunks',
-			async (uri?: vscode.Uri) => {
+			cmd(async (uri?: vscode.Uri) => {
 				const target = uri ?? vscode.window.activeTextEditor?.document.uri
 				if (!target) {
 					await vscode.window.showWarningMessage('No file active to route hunks for.')
@@ -147,7 +160,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					await configService.clearHunkAssignments(rel)
 					await vscode.window.showInformationMessage(`Routed hunks for ${rel} successfully.`)
 				}
-			},
+			}),
 		),
 	)
 
@@ -159,16 +172,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
-		vscode.commands.registerCommand('gitbraid.assignFile', async (arg?: vscode.Uri | FloatingFileNode) => {
+		vscode.commands.registerCommand('gitbraid.assignFile', cmd(async (arg?: vscode.Uri | FloatingFileNode) => {
 			const target = arg instanceof FloatingFileNode ? arg.resourceUri : (arg ?? vscode.window.activeTextEditor?.document.uri)
 			if (!target) {
-				void vscode.window.showWarningMessage('No file selected to assign.')
+				await vscode.window.showWarningMessage('No file selected to assign.')
 				return
 			}
 			const rel = vscode.workspace.asRelativePath(target)
 			const stack = configService.getStack()
 			if (stack.length === 0) {
-				void vscode.window.showWarningMessage('No branches in the stack. Add a branch first.')
+				await vscode.window.showWarningMessage('No branches in the stack. Add a branch first.')
 				return
 			}
 			const picked = await vscode.window.showQuickPick(
@@ -179,21 +192,21 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			await configService.setAssignment(rel, picked.label)
-			void vscode.window.showInformationMessage(`Assigned ${rel} → ${picked.label}`)
-		}),
+			await vscode.window.showInformationMessage(`Assigned ${rel} → ${picked.label}`)
+		})),
 
-		vscode.commands.registerCommand('gitbraid.unassignFile', async (arg?: vscode.Uri | FileNode) => {
+		vscode.commands.registerCommand('gitbraid.unassignFile', cmd(async (arg?: vscode.Uri | FileNode) => {
 			const target = arg instanceof FileNode ? arg.resourceUri : (arg ?? vscode.window.activeTextEditor?.document.uri)
 			if (!target) {
-				void vscode.window.showWarningMessage('No file selected to unassign.')
+				await vscode.window.showWarningMessage('No file selected to unassign.')
 				return
 			}
 			const rel = vscode.workspace.asRelativePath(target)
 			await configService.removeAssignment(rel)
-			void vscode.window.showInformationMessage(`Unassigned ${rel}`)
-		}),
+			await vscode.window.showInformationMessage(`Unassigned ${rel}`)
+		})),
 
-		vscode.commands.registerCommand('gitbraid.addStackBranch', async () => {
+		vscode.commands.registerCommand('gitbraid.addStackBranch', cmd(async () => {
 			const workspaceUri = vscode.workspace.workspaceFolders![0].uri
 			const stackBranchNames = new Set(configService.getStack().map(e => e.name))
 
@@ -263,13 +276,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			const bases = ['main', ...stack.map((e) => e.name)]
 			const base = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch (used when creating a new branch)' }) ?? 'main'
 			await branchStack.addBranchToStack(name, base)
-			void vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
-		}),
+			await vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
+		})),
 
-		vscode.commands.registerCommand('gitbraid.removeStackBranch', async (node?: BranchNode) => {
+		vscode.commands.registerCommand('gitbraid.removeStackBranch', cmd(async (node?: BranchNode) => {
 			const stack = configService.getStack()
 			if (stack.length === 0) {
-				void vscode.window.showWarningMessage('Stack is empty.')
+				await vscode.window.showWarningMessage('Stack is empty.')
 				return
 			}
 			const picked = node instanceof BranchNode
@@ -282,10 +295,10 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			await branchStack.removeBranchFromStack(picked)
-			void vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
-		}),
+			await vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
+		})),
 
-		vscode.commands.registerCommand('gitbraid.rebaseBranch', async (arg?: string | BranchNode) => {
+		vscode.commands.registerCommand('gitbraid.rebaseBranch', cmd(async (arg?: string | BranchNode) => {
 			const stack = configService.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showWarningMessage('Stack is empty.')
@@ -301,7 +314,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			await rebaseSvc.rebaseBranch(name)
-		}),
+		})),
 	)
 
 	// ─── Phase 5: Exported API & LM tools ─────────────────────────────────────

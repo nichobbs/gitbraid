@@ -66,6 +66,18 @@ export class HunkRouter {
 			return true
 		}
 
+		// Reject overlapping assignments before touching any worktree
+		const overlaps = this.detectOverlaps(hunks, assignments)
+		if (overlaps.length > 0) {
+			const pairs = overlaps.map((o) => `hunks ${o.hunkA} & ${o.hunkB}`).join(', ')
+			log.error(`HunkRouter.routeFile: overlapping assignments detected — ${pairs}`)
+			await vscode.window.showErrorMessage(
+				`gitbraid: cannot route hunks for "${relativePath}" — overlapping assignments detected (${pairs}). ` +
+				'Reassign the conflicting hunks so each line belongs to at most one branch.',
+			)
+			return false
+		}
+
 		// Group hunk indices by branch
 		const byBranch = new Map<string, DiffHunk[]>()
 		for (const [hunkIndex, branchName] of assignments) {
