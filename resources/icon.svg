@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e3a5f;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0d1f36;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="strand1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4ec9b0" />
+      <stop offset="100%" style="stop-color:#007acc" />
+    </linearGradient>
+    <linearGradient id="strand2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#c586c0" />
+      <stop offset="100%" style="stop-color:#9b3096" />
+    </linearGradient>
+    <linearGradient id="strand3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#dcdcaa" />
+      <stop offset="100%" style="stop-color:#c8a228" />
+    </linearGradient>
+  </defs>
+
+  <!-- background rounded rect -->
+  <rect width="128" height="128" rx="18" ry="18" fill="url(#bg)" />
+
+  <!-- Braid strands — three sinusoidal paths that interweave -->
+  <!-- Strand 1 (teal) -->
+  <path d="M 30 12
+           C 30 30, 64 30, 64 48
+           C 64 66, 98 66, 98 84
+           C 98 102, 64 102, 64 116"
+        fill="none" stroke="url(#strand1)" stroke-width="9" stroke-linecap="round" />
+
+  <!-- Strand 2 (purple) — offset phase -->
+  <path d="M 64 12
+           C 64 30, 98 30, 98 48
+           C 98 66, 64 66, 64 84
+           C 64 102, 30 102, 30 116"
+        fill="none" stroke="url(#strand2)" stroke-width="9" stroke-linecap="round" />
+
+  <!-- Strand 3 (gold) — middle strand -->
+  <path d="M 98 12
+           C 98 30, 64 30, 64 48
+           C 64 66, 30 66, 30 84
+           C 30 102, 64 102, 64 116"
+        fill="none" stroke="url(#strand3)" stroke-width="9" stroke-linecap="round" />
+
+  <!-- Crossover mask segments to give the "over/under" braid illusion -->
+  <!-- Hide strand2 behind strand1 at first crossover (~y=48) -->
+  <line x1="59" y1="42" x2="69" y2="54" stroke="url(#bg)" stroke-width="11" stroke-linecap="round" />
+  <!-- Hide strand3 behind strand2 at second crossover (~y=84) -->
+  <line x1="59" y1="78" x2="69" y2="90" stroke="url(#bg)" stroke-width="11" stroke-linecap="round" />
+</svg>

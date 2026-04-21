@@ -1,41 +1,39 @@
 {
-	"name": "multi-branch-checkout",
-	"displayName": "Multi Branch Checkout",
-	"description": "Checkout and commit different working sets to multiple branches in parallel from a single repository",
+	"name": "gitbraid",
+	"displayName": "GitBraid",
+	"description": "Braid multiple branches together — assign files and hunks to branches, commit per-branch, and manage a stacked branch hierarchy from a single workspace",
 	"version": "0.1.0",
 	"preview": true,
-	"publisher": "kherring",
+	"publisher": "nihobbs",
 	"private": true,
 	"license": "MIT",
 	"author": {
-		"name": "Ken Herring",
-		"url": "https://kenherring.com"
+		"name": "nihobbs"
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/kenherring/multi-branch-checkout"
+		"url": "https://github.com/nihobbs/gitbraid"
 	},
-	"homepage": "https://github.com/kenherring/multi-branch-checkout",
+	"homepage": "https://github.com/nihobbs/gitbraid",
 	"bugs": {
-		"url": "https://github.com/kenherring/multi-branch-checkout/issues"
+		"url": "https://github.com/nihobbs/gitbraid/issues"
 	},
 	"keywords": [
 		"git",
 		"branch",
 		"worktree",
-		"checkout",
-		"commit",
-		"multi",
-		"stash",
-		"multi-branch-checkout",
-		"multi branch"
+		"stacked branches",
+		"branch stack",
+		"gitbraid",
+		"multi-branch",
+		"hunk routing"
 	],
 	"badges": [],
 	"galleryBanner": {
 		"color": "#007ACC",
 		"theme": "dark"
 	},
-	"icon": "resources/icon.jpg",
+	"icon": "resources/icon.svg",
 	"engines": {
 		"vscode": "^1.94.0"
 	},
