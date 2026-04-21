@@ -204,8 +204,10 @@ suite('parseDiffHunks (edge cases)', () => {
 		const hunks = parseDiffHunks(diff)
 		assert.strictEqual(hunks.length, 1)
 		assert.strictEqual(hunks[0].startLine, 5)
-		// 0 lines in new file → endLine = 5 + max(0-1, 0) = 5
-		assert.strictEqual(hunks[0].endLine, 5)
+		// Pure deletion: newCount === 0 → represent as empty range (endLine < startLine)
+		// so overlap detection doesn't falsely claim the hunk intersects line 5.
+		// See docs/reviews/bugs.md B3 + remediation task T64.
+		assert.strictEqual(hunks[0].endLine, 4)
 	})
 
 	test('hunk with count=1 (omitted) has correct endLine', () => {
@@ -256,5 +258,63 @@ suite('parseDiffHunks (edge cases)', () => {
 		assert.ok(hunks[0].patch.includes('@@ -1,2 +1,2 @@'))
 	})
 
+})
+
+// ─── Suite: DiffEngine path sanitisation ─────────────────────────────────────
+// Regression coverage for reviews/02-bugs-and-correctness.md "Quote-escape
+// no-op" / reviews/03-security.md "Systemic issue — shell string
+// concatenation".  Until the full spawn migration (remediation T18) lands,
+// DiffEngine refuses to operate on paths that contain shell metacharacters
+// instead of relying on the no-op `String.raw\`"\`` replacement.
+
+suite('DiffEngine._sanitisePath injection', () => {
+	const engine = new DiffEngine()
+	// Tiny helper so the test can exercise the private sanitiser without a
+	// repo on disk.  The implementation throws synchronously, so we catch.
+	const tryPath = (p: string): Error | undefined => {
+		try {
+			// Invoking any method that calls _sanitisePath is enough; the stub
+			// `vscode` module in the test host doesn't run real git, so
+			// getHunksForFile will noop on a path that passes the sanitiser.
+			;(engine as unknown as { _sanitisePath: (p: string) => string })
+				._sanitisePath(p)
+			return undefined
+		} catch (e) {
+			return e as Error
+		}
+	}
+
+	const payloads = [
+		'foo"; touch /tmp/pwned; echo ".ts',
+		'foo$(whoami).ts',
+		'foo`id`.ts',
+		'foo\\bar.ts',
+		'foo;bar.ts',
+		'foo|bar.ts',
+		'foo&bar.ts',
+		'foo>out.ts',
+		'foo<in.ts',
+		'foo(bar).ts',
+		'foo\nbar.ts',
+		'-evil.ts',
+	]
+
+	for (const p of payloads) {
+		test(`rejects path with shell metacharacter: ${JSON.stringify(p)}`, () => {
+			const err = tryPath(p)
+			assert.ok(err instanceof Error, 'should throw')
+			assert.match(err!.message, /unsafe/i)
+		})
+	}
+
+	test('accepts an innocuous relative path', () => {
+		const err = tryPath('src/foo/bar.ts')
+		assert.strictEqual(err, undefined)
+	})
+
+	test('accepts a path with spaces', () => {
+		const err = tryPath('dir with spaces/file.ts')
+		assert.strictEqual(err, undefined)
+	})
 })
 

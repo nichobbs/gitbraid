@@ -197,15 +197,16 @@ export class FloatingStatusBarItem implements vscode.Disposable {
 
 	private _update(): void {
 		const count = this._sync.getFloatingDirty().length
-		if (count === 0) {
-			this._item.text = '$(check) MBC'
-			this._item.tooltip = 'Multi-Branch Checkout: no floating files'
-			this._item.backgroundColor = undefined
-		} else {
-			this._item.text = `$(warning) ${count} unassigned`
-			this._item.tooltip = `Multi-Branch Checkout: ${count} floating file(s) not assigned to a branch`
-			this._item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground')
+		const stackSize = this._config.getStack().length
+		if (stackSize === 0 || count === 0) {
+			// T41: hide the status bar item when the stack is empty or no
+			// floating files — it's pure noise otherwise.
+			this._item.hide()
+			return
 		}
+		this._item.text = `$(warning) ${count} unassigned`
+		this._item.tooltip = `GitBraid: ${count} floating file(s) not assigned to a branch`
+		this._item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground')
 		this._item.show()
 	}
 

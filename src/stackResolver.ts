@@ -154,11 +154,20 @@ export class StackResolver implements vscode.Disposable {
 	}
 }
 
-/** Strip path traversal and escape double-quotes for shell use. */
+/**
+ * Strip path traversal and reject shell metacharacters.  The old implementation
+ * only escaped `"`, which was not enough to block command injection via
+ * backticks, `$(…)`, `;`, `|`, newlines, or leading `-`.  The full fix is the
+ * spawn-with-argv migration (remediation plan T18); until that lands we fail
+ * loudly instead of relying on brittle quoting.
+ */
 function _sanitise(input: string): string {
 	const stripped = input
 		.split(node_path.sep).join('/')
 		.replaceAll('../', '')
 		.replaceAll('./', '')
-	return stripped.replaceAll('"', String.raw`\"`)
+	if (/["`$\\\n|;&<>()]/.test(stripped) || stripped.startsWith('-')) {
+		throw new Error(`Refusing to operate on input with unsafe characters: ${input}`)
+	}
+	return stripped
 }

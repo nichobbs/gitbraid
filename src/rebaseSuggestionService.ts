@@ -154,6 +154,9 @@ export class RebaseSuggestionService implements vscode.Disposable {
 			: this._workspaceRoot.fsPath
 
 		try {
+			if (/["`$\\\n|;&<>()]/.test(entry.base) || entry.base.startsWith('-')) {
+				throw new Error(`Refusing to rebase onto base with unsafe characters: ${entry.base}`)
+			}
 			const safeBase = entry.base.replaceAll('"', String.raw`\"`)
 			await execAsync(`git rebase "${safeBase}"`, { cwd })
 			this._notified.delete(`${entry.name}←${entry.base}`)
@@ -176,7 +179,16 @@ async function _countRevsBehind(
 	childBranch: string,
 	parentBranch: string,
 ): Promise<number | undefined> {
-	const safe = (s: string) => s.replaceAll('"', String.raw`\"`)
+	// Reject branch names that could inject shell metacharacters. Upstream
+	// validation already limits branches via `git check-ref-format`, but this
+	// is defence in depth until the spawn-with-argv migration (remediation
+	// plan T18) lands.
+	const safe = (s: string) => {
+		if (/["`$\\\n|;&<>()]/.test(s) || s.startsWith('-')) {
+			throw new Error(`Refusing to operate on branch with unsafe characters: ${s}`)
+		}
+		return s.replaceAll('"', String.raw`\"`)
+	}
 	try {
 		const { stdout } = await execAsync(
 			`git rev-list --count "${safe(childBranch)}..${safe(parentBranch)}"`,
@@ -184,7 +196,8 @@ async function _countRevsBehind(
 		)
 		const n = Number.parseInt(stdout.trim(), 10)
 		return Number.isNaN(n) ? undefined : n
-	} catch {
+	} catch (e) {
+		log.warn(`_countRevsBehind: ${childBranch}..${parentBranch} failed: ${e instanceof Error ? e.message : String(e)}`)
 		return undefined
 	}
 }

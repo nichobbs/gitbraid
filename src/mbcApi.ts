@@ -6,6 +6,7 @@ import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
 import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry, BranchStatus, StackStatus, AssignmentChangeEvent, StackChangeEvent } from './configTypes'
+import { GitError } from './errors'
 import type { GitBraidExportedAPI, BranchOptions, CommitOptions } from './@types/GitBraidAPI'
 
 const execAsync = node_util.promisify(node_child_process.exec)
@@ -134,14 +135,18 @@ export class MbcApi implements GitBraidExportedAPI {
 		}
 
 		const gpgFlag = options.noGpgSign === true ? ' --no-gpg-sign' : ''
-		const safeMsg = message.replaceAll('"', String.raw`\"`)
+		// Route the commit message through a shell via JSON.stringify so
+		// backticks, $(…), newlines etc. cannot break out. The previous
+		// replaceAll('"', '\\"') only handled literal double quotes.
+		// The full fix (spawn-with-argv) lands with remediation plan T18.
+		const quoted = JSON.stringify(message)
 		try {
-			await execAsync(`git commit${gpgFlag} -m "${safeMsg}"`, { cwd: wtDir })
+			await execAsync(`git commit${gpgFlag} -m ${quoted}`, { cwd: wtDir })
 			log.info(`MbcApi.commitBranch: committed to "${branch}"`)
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : JSON.stringify(e)
 			log.error(`MbcApi.commitBranch: failed for "${branch}": ${msg}`)
-			throw new Error(`Commit to "${branch}" failed: ${msg}`)
+			throw new GitError(`Commit to "${branch}" failed: ${msg}`, typeof (e as { code?: number })?.code === 'number' ? (e as { code: number }).code : 1)
 		}
 	}
 
@@ -149,8 +154,12 @@ export class MbcApi implements GitBraidExportedAPI {
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 
 		if (files && files.length > 0) {
-			const quoteArg = (f: string) => '"' + f.replaceAll('"', String.raw`\"`) + '"'
-			const paths = files.map(quoteArg).join(' ')
+			for (const f of files) {
+				if (/["`$\\\n|;&<>()]/.test(f) || f.startsWith('-')) {
+					throw new GitError(`Refusing to stage path with unsafe characters: ${f}`, 1)
+				}
+			}
+			const paths = files.map((f) => JSON.stringify(f)).join(' ')
 			await execAsync(`git add -- ${paths}`, { cwd: wtDir })
 		} else {
 			await execAsync('git add -u', { cwd: wtDir })

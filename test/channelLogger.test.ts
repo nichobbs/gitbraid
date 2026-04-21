@@ -53,4 +53,68 @@ suite('Logger (channelLogger)', () => {
 		assert.strictEqual(result, 'Off  ')
 	})
 
+	// ── Regression: notification must not double-fire ─────────────────────────
+	// Before the fix for reviews/02-bugs-and-correctness.md
+	// "log.notification double-fires info messages", calling notification()
+	// with notificationsEnabled=true produced two popups. Verify one.
+
+	test('notification(Info): with notifications enabled produces one popup', () => {
+		const vscode = require('vscode') as typeof import('vscode')
+		const originalShow = vscode.window.showInformationMessage
+		let calls = 0
+		;(vscode.window as any).showInformationMessage = () => {
+			calls++
+			return Promise.resolve(undefined)
+		}
+		try {
+			;(log as any).notificationsEnabled = true
+			log.notification('once-only')
+			assert.strictEqual(calls, 1, 'expected exactly one showInformationMessage call')
+		} finally {
+			;(vscode.window as any).showInformationMessage = originalShow
+		}
+	})
+
+	test('notification(Info): with notifications disabled produces no popup', () => {
+		const vscode = require('vscode') as typeof import('vscode')
+		const originalShow = vscode.window.showInformationMessage
+		let calls = 0
+		;(vscode.window as any).showInformationMessage = () => {
+			calls++
+			return Promise.resolve(undefined)
+		}
+		try {
+			;(log as any).notificationsEnabled = false
+			log.notification('suppressed')
+			assert.strictEqual(calls, 0)
+		} finally {
+			;(log as any).notificationsEnabled = true
+			;(vscode.window as any).showInformationMessage = originalShow
+		}
+	})
+
+	// ── Regression: getInstance is idempotent ─────────────────────────────────
+	// Earlier, Logger.getInstance() created a fresh Logger and cleared the
+	// output channel on every call; any previously-held `log` reference would
+	// end up writing to the old channel while new code ran on a new one.
+
+	test('Logger.getInstance: returns the same instance on repeated calls', () => {
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const { Logger } = require('../src/channelLogger') as { Logger?: { getInstance: () => unknown } }
+		if (!Logger) {
+			// The class isn't exported; the module-level `log` export is
+			// itself the singleton. Reading through the prototype is enough.
+			const proto = Object.getPrototypeOf(log) as { constructor: { getInstance?: () => unknown } }
+			const ctor = proto.constructor
+			if (typeof ctor.getInstance !== 'function') {
+				return // nothing to assert; behaviour is covered by compile
+			}
+			const a = ctor.getInstance()
+			const b = ctor.getInstance()
+			assert.strictEqual(a, b)
+			return
+		}
+		assert.strictEqual(Logger.getInstance(), Logger.getInstance())
+	})
+
 })

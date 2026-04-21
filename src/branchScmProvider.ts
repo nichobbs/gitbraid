@@ -68,8 +68,8 @@ class BranchScmEntry implements vscode.Disposable {
 		private readonly _worktreeDir: string,
 	) {
 		this._sc = vscode.scm.createSourceControl(
-			`mbc-${_entry.name}`,
-			`MBC: ${_entry.name}`,
+			`gitbraid-${_entry.name}`,
+			`GitBraid: ${_entry.name}`,
 			vscode.Uri.file(_worktreeDir),
 		)
 		this._sc.inputBox.placeholder = `Commit to ${_entry.name} (message)`
@@ -150,8 +150,8 @@ export class BranchScmProviderManager implements vscode.Disposable {
 	) {
 		// Top-level "Floating" source control — unassigned dirty files
 		this._floatingSc = vscode.scm.createSourceControl(
-			'mbc-floating',
-			'MBC: Floating (unassigned)',
+			'gitbraid-floating',
+			'GitBraid: Floating (unassigned)',
 			_workspaceRoot,
 		)
 		this._floatingSc.inputBox.visible = false
