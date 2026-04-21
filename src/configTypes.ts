@@ -30,11 +30,22 @@ export interface BranchStackEntry {
  */
 export type AssignmentMap = Record<string, string>
 
+/**
+ * Per-file hunk-level assignments.
+ *
+ * Outer key: workspace-relative file path (forward-slash normalised).
+ * Inner key: hunk index (as string for JSON compatibility).
+ * Value: branch name that should receive that hunk's changes.
+ */
+export type HunkAssignmentMap = Record<string, Record<string, string>>
+
 /** Root structure of `.worktrees/local-config.json`. */
 export interface BranchConfig {
 	version: number
 	stack: BranchStackEntry[]
 	assignments: AssignmentMap
+	/** Hunk-level assignments — present only when the user has assigned individual hunks. */
+	hunkAssignments?: HunkAssignmentMap
 }
 
 // ─── Runtime status types ────────────────────────────────────────────────────
@@ -79,6 +90,7 @@ export function emptyConfig(): BranchConfig {
 		version: CONFIG_SCHEMA_VERSION,
 		stack: [],
 		assignments: {},
+		hunkAssignments: {},
 	}
 }
 
@@ -125,6 +137,10 @@ export function migrateConfig(config: BranchConfig): BranchConfig {
 	if (unsorted.length > 0) {
 		const maxOrder = config.stack.reduce((m, e) => Math.max(m, e.order || 0), 0)
 		unsorted.forEach((e, i) => { e.order = maxOrder + i + 1 })
+	}
+	// Ensure hunkAssignments object exists
+	if (!config.hunkAssignments) {
+		config.hunkAssignments = {}
 	}
 	config.version = CONFIG_SCHEMA_VERSION
 	return config

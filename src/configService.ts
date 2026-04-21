@@ -95,6 +95,79 @@ export class ConfigService implements vscode.Disposable {
 		return { ...this._config.assignments }
 	}
 
+	// ─── Hunk assignment queries ──────────────────────────────────────────────
+
+	/**
+	 * Returns the hunk-level assignment map for a file, or `undefined` if
+	 * no hunk assignments have been set for that file.
+	 *
+	 * The returned `Map` maps `hunkIndex → branchName`.
+	 */
+	getHunkAssignments(relativePath: string): Map<number, string> | undefined {
+		const key = normalisePath(relativePath)
+		const raw = this._config.hunkAssignments?.[key]
+		if (!raw || Object.keys(raw).length === 0) {
+			return undefined
+		}
+		const result = new Map<number, string>()
+		for (const [idxStr, branch] of Object.entries(raw)) {
+			result.set(Number.parseInt(idxStr, 10), branch)
+		}
+		return result
+	}
+
+	/**
+	 * Returns the workspace-relative paths of all files that have at least
+	 * one hunk assignment.
+	 */
+	getHunkAssignedFiles(): string[] {
+		return Object.keys(this._config.hunkAssignments ?? {})
+	}
+
+	// ─── Hunk assignment mutations ────────────────────────────────────────────
+
+	/** Assign a specific hunk index in a file to a branch. */
+	async setHunkAssignment(relativePath: string, hunkIndex: number, branch: string): Promise<void> {
+		const key = normalisePath(relativePath)
+		if (!this._config.stack.some((e) => e.name === branch)) {
+			throw new ConfigError(`Branch "${branch}" is not in the stack`)
+		}
+		if (!this._config.hunkAssignments) {
+			this._config.hunkAssignments = {}
+		}
+		if (!this._config.hunkAssignments[key]) {
+			this._config.hunkAssignments[key] = {}
+		}
+		this._config.hunkAssignments[key][String(hunkIndex)] = branch
+		await this._writeToDisk()
+		this._onDidChangeAssignment.fire({ relativePath: key, branch, previousBranch: undefined })
+	}
+
+	/** Remove the assignment for a specific hunk index in a file. */
+	async removeHunkAssignment(relativePath: string, hunkIndex: number): Promise<void> {
+		const key = normalisePath(relativePath)
+		const fileHunks = this._config.hunkAssignments?.[key]
+		if (!fileHunks) {
+			return
+		}
+		delete fileHunks[String(hunkIndex)]
+		if (Object.keys(fileHunks).length === 0 && this._config.hunkAssignments) {
+			delete this._config.hunkAssignments[key]
+		}
+		await this._writeToDisk()
+		this._onDidChangeAssignment.fire({ relativePath: key, branch: undefined, previousBranch: undefined })
+	}
+
+	/** Remove all hunk assignments for a file. */
+	async clearHunkAssignments(relativePath: string): Promise<void> {
+		const key = normalisePath(relativePath)
+		if (this._config.hunkAssignments?.[key]) {
+			delete this._config.hunkAssignments[key]
+			await this._writeToDisk()
+			this._onDidChangeAssignment.fire({ relativePath: key, branch: undefined, previousBranch: undefined })
+		}
+	}
+
 	// ─── Mutations ────────────────────────────────────────────────────────────
 
 	async setAssignment(relativePath: string, branch: string): Promise<void> {
