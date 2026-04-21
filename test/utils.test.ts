@@ -2,7 +2,7 @@ import * as assert from 'node:assert'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
-import { fileExists, dirExists, deleteFile } from '../src/utils'
+import { validateUri, fileExists, dirExists, deleteFile } from '../src/utils'
 
 function wsRoot(): vscode.Uri {
 	return vscode.workspace.workspaceFolders![0].uri
@@ -20,6 +20,26 @@ suite('utils', () => {
 
 	suiteTeardown(() => {
 		try { fs.rmSync(tmpPath(), { recursive: true }) } catch {}
+	})
+
+	// ── validateUri ─────────────────────────────────────────────────────────────
+
+	test('validateUri: returns true when uri is defined', () => {
+		const fakeNode = { id: 'test', uri: vscode.Uri.file('/tmp') } as any
+		assert.strictEqual(validateUri(fakeNode), true)
+	})
+
+	test('validateUri: throws when uri is undefined and throwError=true (default)', () => {
+		const fakeNode = { id: 'missing-uri', uri: undefined } as any
+		assert.throws(
+			() => validateUri(fakeNode),
+			/Uri is undefined/,
+		)
+	})
+
+	test('validateUri: returns false when uri is undefined and throwError=false', () => {
+		const fakeNode = { id: 'missing-uri', uri: undefined } as any
+		assert.strictEqual(validateUri(fakeNode, false), false)
 	})
 
 	// ── fileExists ────────────────────────────────────────────────────────────

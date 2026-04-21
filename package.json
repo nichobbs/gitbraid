@@ -261,6 +261,16 @@
 					"command": "gitbraid.createWorktree",
 					"when": "view == gitbraid.worktreeView",
 					"group": "navigation"
+				},
+				{
+					"command": "gitbraid.addStackBranch",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
+				},
+				{
+					"command": "gitbraid.stackView.refresh",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
 				}
 			],
 			"view/item/context": [
@@ -332,6 +342,31 @@
 					"command": "gitbraid.moveToWorktree",
 					"when": "view == gitbraid.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked)",
 					"group": "inline@8"
+				},
+				{
+					"command": "gitbraid.assignFile",
+					"when": "view == gitbraid.stackView && viewItem == floatingFile",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.unassignFile",
+					"when": "view == gitbraid.stackView && viewItem == assignedFile",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.scm.commitBranch",
+					"when": "view == gitbraid.stackView && viewItem == branch",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.rebaseBranch",
+					"when": "view == gitbraid.stackView && viewItem == branch",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.removeStackBranch",
+					"when": "view == gitbraid.stackView && viewItem == branch",
+					"group": "inline"
 				}
 			]
 		},

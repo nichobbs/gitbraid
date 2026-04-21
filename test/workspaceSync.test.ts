@@ -45,6 +45,19 @@ function waitForEvent<T>(event: vscode.Event<T>, timeoutMs = 2000): Promise<T> {
 	})
 }
 
+/** Wait for an event where the emitted value satisfies a predicate. */
+function waitForFilteredEvent<T>(event: vscode.Event<T>, predicate: (v: T) => boolean, timeoutMs = 3000): Promise<T> {
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error('Filtered event timeout')), timeoutMs)
+		const disposable = event((value) => {
+			if (!predicate(value)) { return }
+			clearTimeout(timer)
+			disposable.dispose()
+			resolve(value)
+		})
+	})
+}
+
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 suite('WorkspaceSync', () => {
@@ -120,14 +133,14 @@ suite('WorkspaceSync', () => {
 		// No assignment for this file
 		await writeWorkspaceFile('src/unassigned.ts', 'const y = 2')
 
-		const ev = await waitForEvent(sync.onDidFloatFile, 3000)
+		const ev = await waitForFilteredEvent(sync.onDidFloatFile, (e) => e.relativePath === 'src/unassigned.ts')
 		assert.strictEqual(ev.relativePath, 'src/unassigned.ts')
 		assert.ok(sync.isFloating('src/unassigned.ts'))
 	})
 
 	test('floating file: cleared from dirty set once assigned', async () => {
 		await writeWorkspaceFile('src/will-assign.ts', 'x')
-		await waitForEvent(sync.onDidFloatFile, 3000)
+		await waitForFilteredEvent(sync.onDidFloatFile, (e) => e.relativePath === 'src/will-assign.ts')
 		assert.ok(sync.isFloating('src/will-assign.ts'))
 
 		// Now assign it — should trigger sync and clear floating
@@ -176,6 +189,8 @@ suite('WorkspaceSync', () => {
 
 	test('changes inside .worktrees/ are not re-synced', async () => {
 		await config.setAssignment('src/hello.ts', branchName)
+		// Wait for the assignment-triggered sync to complete before counting
+		await waitForEvent(sync.onDidSyncFile, 3000)
 		let syncCount = 0
 		const disposable = sync.onDidSyncFile(() => { syncCount++ })
 

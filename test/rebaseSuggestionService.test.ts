@@ -90,11 +90,48 @@ suite('RebaseSuggestionService', function () {
 		await assert.doesNotReject(() => svc.rebaseBranch('nonexistent-branch'))
 	})
 
+	test('_checkAll: covers loop body with 2-branch stack (branches at same commit)', async () => {
+		// Stub showInformationMessage so any dialog resolves immediately
+		const origInfo = vscode.window.showInformationMessage
+		;(vscode.window as any).showInformationMessage = async () => undefined
+		try {
+			await config.addBranch({ name: 'feature/a', color: '#fff', base: 'main' })
+			await config.addBranch({ name: 'feature/b', color: '#fff', base: 'feature/a' })
+			svc.init(wsRoot())
+			// Call _checkAll directly — branches are at same commit so behind===0 → continue
+			await (svc as any)._checkAll()
+		} finally {
+			;(vscode.window as any).showInformationMessage = origInfo
+			svc.dispose()
+			svc = new RebaseSuggestionService(config, branchStack)
+		}
+	})
+
 	test('rebaseBranch: no-op when workspace root not set (before init)', async () => {
 		// Workspace root is only set when init() is called
 		// So calling rebaseBranch before init should be a no-op
 		await config.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
 		await assert.doesNotReject(() => svc.rebaseBranch('feature/docs'))
+	})
+
+	test('rebaseBranch: after init, error path when git rebase fails', async () => {
+		// Use a nonexistent upstream so git rebase will fail (covering the catch block).
+		// Stub vscode.window dialogs so the awaited showErrorMessage resolves immediately.
+		const origError = vscode.window.showErrorMessage
+		const origInfo = vscode.window.showInformationMessage
+		;(vscode.window as any).showErrorMessage = async () => undefined
+		;(vscode.window as any).showInformationMessage = async () => undefined
+		try {
+			await config.addBranch({ name: 'feature/docs', color: '#fff', base: 'nonexistent-upstream-xyz' })
+			svc.init(wsRoot())
+			// Should NOT throw — errors are caught and shown as VS Code notifications
+			await assert.doesNotReject(() => svc.rebaseBranch('feature/docs'))
+		} finally {
+			;(vscode.window as any).showErrorMessage = origError
+			;(vscode.window as any).showInformationMessage = origInfo
+			svc.dispose()
+			svc = new RebaseSuggestionService(config, branchStack)
+		}
 	})
 
 })

@@ -95,9 +95,10 @@ suite('BranchStackTreeProvider', () => {
 
 	test('branch children: files assigned to that branch', async () => {
 		await svc.addBranch({ name: 'feature/docs', color: '#4CAF50', base: 'main' })
+		await svc.addBranch({ name: 'feature/impl', color: '#2196F3', base: 'feature/docs' })
 		await svc.setAssignment('README.md', 'feature/docs')
 		await svc.setAssignment('docs/PLAN.md', 'feature/docs')
-		await svc.setAssignment('src/bar.ts', 'feature/impl')  // different branch — not in config yet
+		await svc.setAssignment('src/bar.ts', 'feature/impl')  // different branch
 
 		const docsEntry = svc.getBranch('feature/docs')
 		assert.ok(docsEntry, 'Expected feature/docs in stack')
@@ -106,7 +107,7 @@ suite('BranchStackTreeProvider', () => {
 
 		assert.strictEqual(children.length, 2)
 		const relPaths = (children as FileNode[]).map((n) => n.relativePath).sort((a, b) => a.localeCompare(b))
-		assert.deepStrictEqual(relPaths, ['README.md', 'docs/PLAN.md'])
+		assert.deepStrictEqual(relPaths, ['docs/PLAN.md', 'README.md'])
 	})
 
 	test('branch children: no files assigned → empty array', async () => {

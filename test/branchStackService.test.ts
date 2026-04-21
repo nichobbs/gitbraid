@@ -171,6 +171,20 @@ suite('BranchStackService', () => {
 
 	// ── Orphan pruning ────────────────────────────────────────────────────────
 
+	test('initStack: skips non-directory entries inside .worktrees/ during pruning', async () => {
+		// Create .worktrees/ dir and put a plain file (not a branch dir) inside it
+		await svc.initStack(wsRoot())
+		const wtDir = path.join(wsRoot().fsPath, '.worktrees')
+		const orphanFile = path.join(wtDir, 'some-random-file.txt')
+		fs.writeFileSync(orphanFile, 'not a branch')
+		// Re-init — _pruneOrphans should skip non-directories (covers the !isDirectory() continue)
+		BranchStackService.resetInstance()
+		const freshSvc = BranchStackService.getInstance(config)
+		await assert.doesNotReject(() => freshSvc.initStack(wsRoot()))
+		// The plain file should still be there (it was skipped, not deleted)
+		assert.ok(fs.existsSync(orphanFile), 'non-directory entry should not be deleted')
+	})
+
 	test('initStack: prunes orphaned worktree directories', async () => {
 		// Manually create a worktree not in config
 		await svc.initStack(wsRoot())

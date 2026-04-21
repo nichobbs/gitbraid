@@ -170,6 +170,8 @@ export class WorkspaceSync implements vscode.Disposable {
 		if (!this._workspaceRoot) {
 			return
 		}
+		// Clear floating status — file is now assigned to a branch
+		this._floatingDirty.delete(normalisePath(relativePath))
 		const wtPath = worktreePath(this._workspaceRoot, branch)
 		const destUri = vscode.Uri.joinPath(wtPath, relativePath)
 

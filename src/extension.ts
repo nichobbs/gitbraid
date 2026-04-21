@@ -9,7 +9,7 @@ import { BranchStackService } from './branchStackService'
 import { WorkspaceSync } from './workspaceSync'
 import { BranchFileDecorationProvider } from './fileDecorationProvider'
 import { BranchScmProviderManager } from './branchScmProvider'
-import { BranchStackTreeProvider, FloatingStatusBarItem } from './branchStackTreeProvider'
+import { BranchNode, BranchStackTreeProvider, FileNode, FloatingFileNode, FloatingStatusBarItem } from './branchStackTreeProvider'
 import { DiffEngine } from './diffEngine'
 import { HunkRouter } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
@@ -88,8 +88,9 @@ export async function activate(context: vscode.ExtensionContext) {
 			})
 		}),
 
-		vscode.commands.registerCommand('gitbraid.scm.commitBranch', (branchName: string) => {
-			void scmManager.commitBranch(branchName)
+		vscode.commands.registerCommand('gitbraid.scm.commitBranch', (arg: string | BranchNode) => {
+			const name = arg instanceof BranchNode ? arg.entry.name : arg
+			void scmManager.commitBranch(name)
 		}),
 
 		vscode.commands.registerCommand('gitbraid.scm.refreshAll', () => {
@@ -158,8 +159,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
-		vscode.commands.registerCommand('gitbraid.assignFile', async (uri?: vscode.Uri) => {
-			const target = uri ?? vscode.window.activeTextEditor?.document.uri
+		vscode.commands.registerCommand('gitbraid.assignFile', async (arg?: vscode.Uri | FloatingFileNode) => {
+			const target = arg instanceof FloatingFileNode ? arg.resourceUri : (arg ?? vscode.window.activeTextEditor?.document.uri)
 			if (!target) {
 				void vscode.window.showWarningMessage('No file selected to assign.')
 				return
@@ -181,8 +182,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage(`Assigned ${rel} → ${picked.label}`)
 		}),
 
-		vscode.commands.registerCommand('gitbraid.unassignFile', async (uri?: vscode.Uri) => {
-			const target = uri ?? vscode.window.activeTextEditor?.document.uri
+		vscode.commands.registerCommand('gitbraid.unassignFile', async (arg?: vscode.Uri | FileNode) => {
+			const target = arg instanceof FileNode ? arg.resourceUri : (arg ?? vscode.window.activeTextEditor?.document.uri)
 			if (!target) {
 				void vscode.window.showWarningMessage('No file selected to unassign.')
 				return
@@ -204,16 +205,18 @@ export async function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
 		}),
 
-		vscode.commands.registerCommand('gitbraid.removeStackBranch', async () => {
+		vscode.commands.registerCommand('gitbraid.removeStackBranch', async (node?: BranchNode) => {
 			const stack = configService.getStack()
 			if (stack.length === 0) {
 				void vscode.window.showWarningMessage('Stack is empty.')
 				return
 			}
-			const picked = await vscode.window.showQuickPick(
-				stack.map((e) => e.name),
-				{ placeHolder: 'Remove branch from stack' }
-			)
+			const picked = node instanceof BranchNode
+				? node.entry.name
+				: await vscode.window.showQuickPick(
+					stack.map((e) => e.name),
+					{ placeHolder: 'Remove branch from stack' }
+				)
 			if (!picked) {
 				return
 			}
@@ -221,16 +224,18 @@ export async function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
 		}),
 
-		vscode.commands.registerCommand('gitbraid.rebaseBranch', async (branchName?: string) => {
+		vscode.commands.registerCommand('gitbraid.rebaseBranch', async (arg?: string | BranchNode) => {
 			const stack = configService.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showWarningMessage('Stack is empty.')
 				return
 			}
-			const name = branchName ?? (await vscode.window.showQuickPick(
-				stack.map((e) => e.name),
-				{ placeHolder: 'Rebase branch onto its parent' },
-			))
+			const name = arg instanceof BranchNode
+				? arg.entry.name
+				: (arg ?? (await vscode.window.showQuickPick(
+					stack.map((e) => e.name),
+					{ placeHolder: 'Rebase branch onto its parent' },
+				)))
 			if (!name) {
 				return
 			}

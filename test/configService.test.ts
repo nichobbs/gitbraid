@@ -356,6 +356,14 @@ suite('ConfigService', () => {
 		await svc.clearHunkAssignments('src/nothing.ts')
 	})
 
+	test('addBranch: throws ConfigError if load() was not called', async () => {
+		// svc is freshly created in setup but load() has NOT been called
+		await assert.rejects(
+			() => svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' }),
+			(e: Error) => e.constructor.name === 'ConfigError',
+		)
+	})
+
 	test('getHunkAssignedFiles: returns paths of files with hunk assignments', async () => {
 		await svc.load(wsRoot())
 		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
