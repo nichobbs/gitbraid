@@ -194,13 +194,74 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 
 		vscode.commands.registerCommand('gitbraid.addStackBranch', async () => {
-			const name = await vscode.window.showInputBox({ prompt: 'Branch name', placeHolder: 'feature/my-feature' })
+			const workspaceUri = vscode.workspace.workspaceFolders![0].uri
+			const stackBranchNames = new Set(configService.getStack().map(e => e.name))
+
+			// Build the initial local branch list
+			const { local: localBranches } = await git.listBranches(workspaceUri)
+			const availableLocal = localBranches.filter(b => !stackBranchNames.has(b))
+
+			type BranchItem = vscode.QuickPickItem & { isNew?: boolean }
+
+			const qp = vscode.window.createQuickPick<BranchItem>()
+			qp.placeholder = 'Branch name — pick existing or type a new name'
+			qp.matchOnDescription = false
+			qp.items = availableLocal.map(b => ({ label: b, description: 'local' }))
+
+			let remoteDebounce: ReturnType<typeof setTimeout> | undefined
+
+			qp.onDidChangeValue(async (value) => {
+				if (remoteDebounce) {
+					clearTimeout(remoteDebounce)
+				}
+				const localMatches = availableLocal
+					.filter(b => b.includes(value))
+					.map<BranchItem>(b => ({ label: b, description: 'local' }))
+
+				const newItem: BranchItem[] = value.trim()
+					? [{ label: value.trim(), description: 'new branch', isNew: true }]
+					: []
+
+				qp.items = [...localMatches, ...newItem]
+
+				if (value.trim().length >= 2) {
+					remoteDebounce = setTimeout(async () => {
+						try {
+							const { remote } = await git.listBranches(workspaceUri, value.trim())
+							const remoteItems = remote
+								.filter(b => !stackBranchNames.has(b))
+								.map<BranchItem>(b => ({ label: b, description: 'remote' }))
+							// Refresh — keep local matches + new + remote
+							qp.items = [
+								...availableLocal.filter(b => b.includes(value)).map<BranchItem>(b => ({ label: b, description: 'local' })),
+								...remoteItems,
+								...(value.trim() ? [{ label: value.trim(), description: 'new branch', isNew: true } as BranchItem] : []),
+							]
+						} catch { /* remote search failed — ignore */ }
+					}, 300)
+				}
+			})
+
+			const name = await new Promise<string | undefined>((resolve) => {
+				qp.onDidAccept(() => {
+					const selected = qp.selectedItems[0]
+					resolve((selected?.label ?? qp.value.trim()) || undefined)
+					qp.dispose()
+				})
+				qp.onDidHide(() => { resolve(undefined); qp.dispose() })
+				qp.show()
+			})
+
+			if (remoteDebounce) {
+				clearTimeout(remoteDebounce)
+			}
 			if (!name) {
 				return
 			}
+
 			const stack = configService.getStack()
 			const bases = ['main', ...stack.map((e) => e.name)]
-			const base = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch' }) ?? 'main'
+			const base = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch (used when creating a new branch)' }) ?? 'main'
 			await branchStack.addBranchToStack(name, base)
 			void vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
 		}),

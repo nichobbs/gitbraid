@@ -228,6 +228,38 @@ class Git {
 		})
 	}
 
+	/**
+	 * Returns all local branch names, and optionally remote branches
+	 * whose names contain `filter`.
+	 */
+	async listBranches(workspaceUri?: vscode.Uri, filter?: string): Promise<{ local: string[], remote: string[] }> {
+		const root = workspaceUri ?? vscode.workspace.workspaceFolders![0].uri
+
+		const localRaw = await this.gitExec('branch --format=%(refname:short)', root).catch(() => '')
+		const local = localRaw.split('\n').map(s => s.trim()).filter(Boolean)
+
+		let remote: string[] = []
+		try {
+			const remoteArgs = filter
+				? `branch -r --format=%(refname:short) --list "*${filter}*"`
+				: 'branch -r --format=%(refname:short)'
+			const remoteRaw = await this.gitExec(remoteArgs, root)
+			remote = remoteRaw
+				.split('\n')
+				.map(s => s.trim())
+				.filter(Boolean)
+				// strip the leading "origin/" and remove HEAD pointer
+				.map(s => s.replace(/^[^/]+\//, ''))
+				.filter(s => s !== 'HEAD')
+				// exclude branches that are already local
+				.filter(s => !local.includes(s))
+		} catch {
+			// remote listing failing is non-fatal
+		}
+
+		return { local, remote }
+	}
+
 	checkIgnore (path: string) {
 		return this.gitExec('check-ignore ' + path)
 			.then(() => {

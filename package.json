@@ -59,25 +59,37 @@
 						"id": "addBranch",
 						"title": "Add a branch to the stack",
 						"description": "Build a stack of related branches. Run the Add Stack Branch command to create a worktree-backed branch on top of an existing one.\n\n[Add Stack Branch](command:gitbraid.addStackBranch)",
-						"media": { "image": "resources/walkthrough-add-branch.png", "altText": "Stack view showing two branches" }
+						"media": {
+							"image": "resources/walkthrough-add-branch.png",
+							"altText": "Stack view showing two branches"
+						}
 					},
 					{
 						"id": "assignFile",
 						"title": "Assign a file to a branch",
 						"description": "Right-click any file in the Explorer and choose **Assign to branch**, or run the command below.\n\n[Assign File](command:gitbraid.assignFile)",
-						"media": { "image": "resources/walkthrough-assign-file.png", "altText": "File assigned to branch" }
+						"media": {
+							"image": "resources/walkthrough-assign-file.png",
+							"altText": "File assigned to branch"
+						}
 					},
 					{
 						"id": "makeCommit",
 						"title": "Commit to a branch",
 						"description": "Each branch in the stack has its own SCM entry. Type a message there and press the commit button, or run the command below.\n\n[Commit Branch](command:gitbraid.scm.commitBranch)",
-						"media": { "image": "resources/walkthrough-commit.png", "altText": "SCM panel showing per-branch commit" }
+						"media": {
+							"image": "resources/walkthrough-commit.png",
+							"altText": "SCM panel showing per-branch commit"
+						}
 					},
 					{
 						"id": "addLayer",
 						"title": "Add another layer",
 						"description": "Continue stacking branches for independent sets of changes. Use Rebase Branch to keep each layer up-to-date with its parent.\n\n[Rebase Branch](command:gitbraid.rebaseBranch)",
-						"media": { "image": "resources/walkthrough-rebase.png", "altText": "Stack after rebase" }
+						"media": {
+							"image": "resources/walkthrough-rebase.png",
+							"altText": "Stack after rebase"
+						}
 					}
 				]
 			}
@@ -400,15 +412,17 @@
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
-		"clean": "bash -c scripts/clean.sh",
 		"build": "node esbuild.js",
 		"compile": "node esbuild.js",
+		"package": "npx vsce package",
+		"install-vsix": "npm run package && code --install-extension gitbraid-${npm_package_version}.vsix",
 		"watch": "npm run build -- --watch",
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
 		"build-tsc": "tsc -p ./",
 		"compile-tsc": "tsc -p ./",
-		"watch-tsc": "tsc -watch -p ./"
+		"watch-tsc": "tsc -watch -p ./",
+		"refresh": "npm run compile && npm run package && npm run install-vsix"
 	},
 	"devDependencies": {
 		"@stylistic/eslint-plugin": "^2.11.0",
@@ -418,9 +432,9 @@
 		"@types/vscode": "^1.94.0",
 		"@typescript-eslint/eslint-plugin": "^7.18.0",
 		"@typescript-eslint/parser": "^7.18.0",
-		"@vscode/test-cli": "^0.0.10",
+		"@vscode/test-cli": "^0.0.11",
 		"@vscode/test-electron": "^2.4.1",
-		"@vscode/vsce": "^3.2.1",
+		"@vscode/vsce": "^3.9.1",
 		"esbuild": "0.24.0",
 		"eslint": "^8.57.1",
 		"eslint-plugin-promise": "^7.2.1",
