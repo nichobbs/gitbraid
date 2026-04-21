@@ -14,8 +14,12 @@ export function validateUri (node: WorktreeNode, throwError = true) {
 }
 
 export function pathExists (uri: vscode.Uri) {
-	const r = fs.statSync(uri.fsPath)
-	return r !== undefined
+	try {
+		fs.statSync(uri.fsPath)
+		return true
+	} catch {
+		return false
+	}
 }
 
 export function fileExists (uri: vscode.Uri) {

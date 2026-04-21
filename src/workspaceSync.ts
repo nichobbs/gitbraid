@@ -117,12 +117,13 @@ export class WorkspaceSync implements vscode.Disposable {
 		if (!this._workspaceRoot) {
 			return
 		}
-		// Skip writes we made ourselves to worktrees
-		if (this._syncing) {
-			return
-		}
 		const rel = this._relativePath(uri)
 		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/')) {
+			return
+		}
+		// A sync is in progress — re-queue so this save isn't silently dropped
+		if (this._syncing) {
+			setTimeout(() => this._onChanged(uri), DEBOUNCE_MS)
 			return
 		}
 

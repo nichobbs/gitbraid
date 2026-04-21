@@ -1,11 +1,15 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
+import util from 'node:util'
+import child_process from 'node:child_process'
 import { log } from './channelLogger'
 import { BranchStackError } from './errors'
 import { BranchStackEntry } from './configTypes'
 import { ConfigService } from './configService'
 import { git } from './gitFunctions'
+
+const execAsync = util.promisify(child_process.exec)
 
 const WORKTREES_DIR = '.worktrees'
 
@@ -127,7 +131,9 @@ export class BranchStackService implements vscode.Disposable {
 
 	/**
 	 * Remove a branch from the stack. Removes its worktree and config entry.
-	 * Fails if the worktree has uncommitted changes unless `force` is true.
+	 * If the worktree has uncommitted changes the user is prompted to confirm
+	 * before proceeding. Passing `force = true` bypasses the prompt (for
+	 * programmatic callers that have already confirmed with the user).
 	 */
 	async removeBranchFromStack(name: string, force = false): Promise<void> {
 		this._assertInitialised()
@@ -135,11 +141,31 @@ export class BranchStackService implements vscode.Disposable {
 
 		const wtPath = worktreePath(this._workspaceRoot!, name)
 		if (fs.existsSync(wtPath.fsPath)) {
+			if (!force && await this._worktreeIsDirty(wtPath.fsPath)) {
+				const answer = await vscode.window.showWarningMessage(
+					`Branch "${name}" has uncommitted changes in its worktree. Remove anyway?`,
+					{ modal: true },
+					'Remove',
+				)
+				if (answer !== 'Remove') {
+					return
+				}
+				force = true
+			}
 			await git.worktree.remove('"' + wtPath.fsPath + '"', force)
 		}
 		await this._config.removeBranch(name)
 
 		log.info(`BranchStackService: branch "${name}" removed from stack`)
+	}
+
+	private async _worktreeIsDirty(worktreeFsPath: string): Promise<boolean> {
+		try {
+			const { stdout } = await execAsync('git status --porcelain', { cwd: worktreeFsPath })
+			return stdout.trim().length > 0
+		} catch {
+			return false
+		}
 	}
 
 	/**
