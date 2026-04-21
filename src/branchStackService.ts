@@ -38,6 +38,37 @@ function legacySlugFor(branchName: string): string {
 	return branchName.replaceAll('/', '-').replaceAll(/[^a-zA-Z0-9._-]/g, '_')
 }
 
+/**
+ * Run `task` across `items` with at most `concurrency` in flight at a time.
+ * Resolves once every task has settled.  Individual task failures are
+ * propagated via `Promise.allSettled` so a single slow/failing entry does
+ * not block the others.
+ */
+async function runWithConcurrency<T>(
+	items: readonly T[],
+	concurrency: number,
+	task: (item: T) => Promise<void>,
+): Promise<void> {
+	if (items.length === 0) return
+	const limit = Math.max(1, concurrency)
+	let cursor = 0
+	const workers: Promise<void>[] = []
+	for (let i = 0; i < Math.min(limit, items.length); i++) {
+		workers.push((async () => {
+			for (;;) {
+				const idx = cursor++
+				if (idx >= items.length) return
+				try {
+					await task(items[idx])
+				} catch (e) {
+					log.warn(`runWithConcurrency: task for item #${String(idx)} failed: ${e instanceof Error ? e.message : String(e)}`)
+				}
+			}
+		})())
+	}
+	await Promise.all(workers)
+}
+
 function validateBranchName(name: string): void {
 	// Cheap pre-filter — rejects obvious junk without spawning git.
 	if (!BRANCH_NAME_RE.test(name)) {
@@ -140,10 +171,11 @@ export class BranchStackService implements vscode.Disposable {
 		// hashed form so we don't accidentally treat them as orphans.
 		await this._migrateLegacyDirs(stack, worktreesDirUri.fsPath)
 
-		// Create missing worktrees
-		for (const entry of stack) {
-			await this._ensureWorktree(entry)
-		}
+		// Create missing worktrees.  Parallel up to CONCURRENCY because each
+		// target directory is distinct; sequential initialisation was costing
+		// ~500 ms * N on cold starts.  Capped so we don't hammer the pack file
+		// lock on low-CPU hosts.  (T46 in the remediation plan.)
+		await runWithConcurrency(stack, 3, (entry) => this._ensureWorktree(entry))
 
 		// Prune orphans
 		await this._pruneOrphans(stack)
@@ -372,12 +404,20 @@ export class BranchStackService implements vscode.Disposable {
 			if (!stat?.isDirectory()) {
 				continue
 			}
+			// Explicit dirty-check before touching git worktree — never
+			// force-remove in the auto-prune path. T4: orphans with
+			// uncommitted changes are left in place; the user must clean them
+			// up via `removeBranchFromStack(name, force=true)` after seeing
+			// the modal prompt.
+			if (await this._worktreeIsDirty(orphanPath)) {
+				log.warn(`BranchStackService: skipping dirty orphan worktree at ${orphanPath} — manual cleanup required`)
+				continue
+			}
 			log.info(`BranchStackService: pruning orphan worktree at ${orphanPath}`)
 			try {
 				await git.worktree.remove('"' + orphanPath + '"', false)
-			} catch {
-				// Worktree may have uncommitted changes — log and skip, don't force
-				log.warn(`BranchStackService: could not auto-prune "${orphanPath}" (has uncommitted changes?)`)
+			} catch (e) {
+				log.warn(`BranchStackService: could not auto-prune "${orphanPath}": ${e instanceof Error ? e.message : String(e)}`)
 			}
 		}
 

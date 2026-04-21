@@ -6,6 +6,8 @@ import { ConfigService } from './configService'
 import { worktreePath } from './branchStackService'
 
 const DEFAULT_DEBOUNCE_MS = 200
+/** Hard cap on `_floatingDirty` so a long-running session can't leak memory. */
+const FLOATING_DIRTY_CAP = 10_000
 
 /** Read the workspace-level syncDebounceMs with a sane fallback. */
 function getDebounceMs(): number {
@@ -33,6 +35,12 @@ export class WorkspaceSync implements vscode.Disposable {
 
 	private _workspaceRoot: vscode.Uri | undefined
 	private _syncing = false
+	/**
+	 * Set of workspace-relative paths whose most recent save produced no
+	 * assignment (yet).  Capped at {@link FLOATING_DIRTY_CAP} to bound
+	 * memory use — paths evicted by the cap are just forgotten; the worst
+	 * case is a lost notification, not a sync error (T51).
+	 */
 	private readonly _floatingDirty = new Set<string>()
 	private readonly _disposables: vscode.Disposable[] = []
 
@@ -207,6 +215,13 @@ export class WorkspaceSync implements vscode.Disposable {
 		const branch = this._config.getAssignment(relativePath)
 		if (!branch) {
 			const key = normalisePath(relativePath)
+			// Bound memory (T51): evict the oldest entry once we hit the cap.
+			// Set iteration order is insertion order, so `next().value` is
+			// the oldest key.
+			if (!this._floatingDirty.has(key) && this._floatingDirty.size >= FLOATING_DIRTY_CAP) {
+				const oldest = this._floatingDirty.values().next().value
+				if (oldest !== undefined) this._floatingDirty.delete(oldest)
+			}
 			this._floatingDirty.add(key)
 			this._onDidFloatFile.fire({ relativePath: key })
 			return

@@ -18,6 +18,8 @@ const CONFIG_FILENAME = 'local-config.json'
 const WORKTREES_DIR = '.worktrees'
 /** Max retries when another writer races us on local-config.json. */
 const MAX_WRITE_RETRIES = 3
+/** Debounce window for coalescing rapid mutations into one flush (T48). */
+const FLUSH_DEBOUNCE_MS = 50
 
 /**
  * Merge an externally-modified config with our in-memory version.  The goal
@@ -64,6 +66,13 @@ export class ConfigService implements vscode.Disposable {
 	 */
 	private _lastSeenMtimeMs: number | undefined
 
+	/** Pending flush handle — coalesces rapid mutations (T48). */
+	private _flushTimer: ReturnType<typeof setTimeout> | undefined
+	/** Resolves when the current flush (if any) completes. */
+	private _flushPromise: Promise<void> = Promise.resolve()
+	private _flushResolver: (() => void) | undefined
+	private _flushRejector: ((e: unknown) => void) | undefined
+
 	private readonly _onDidChangeAssignment = new vscode.EventEmitter<AssignmentChangeEvent>()
 	private readonly _onDidChangeStack = new vscode.EventEmitter<StackChangeEvent>()
 
@@ -86,6 +95,14 @@ export class ConfigService implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		// Flush any pending coalesced write before tearing down the emitters.
+		// Deactivate hooks can't await, so we fire-and-forget — the flush will
+		// complete synchronously via its timer callback in most cases.
+		if (this._flushTimer) {
+			clearTimeout(this._flushTimer)
+			this._flushTimer = undefined
+			void this._performFlush()
+		}
 		this._onDidChangeAssignment.dispose()
 		this._onDidChangeStack.dispose()
 	}
@@ -319,9 +336,10 @@ export class ConfigService implements vscode.Disposable {
 			return emptyConfig()
 		}
 		try {
-			const raw = fs.readFileSync(this._configPath, 'utf-8')
+			const raw = await fs.promises.readFile(this._configPath, 'utf-8')
 			try {
-				this._lastSeenMtimeMs = fs.statSync(this._configPath).mtimeMs
+				const stat = await fs.promises.stat(this._configPath)
+				this._lastSeenMtimeMs = stat.mtimeMs
 			} catch {
 				this._lastSeenMtimeMs = undefined
 			}
@@ -361,12 +379,58 @@ export class ConfigService implements vscode.Disposable {
 	 * After {@link MAX_WRITE_RETRIES} collisions we throw `ConfigError` so
 	 * the user can investigate rather than entering a retry loop.
 	 */
-	private async _writeToDisk(): Promise<void> {
+	private _writeToDisk(): Promise<void> {
+		// Coalesce rapid mutations into one on-disk flush (T48).  Multiple
+		// awaited calls within FLUSH_DEBOUNCE_MS share a single write and all
+		// resolve when that write completes.  The snapshot captured at flush
+		// time reflects all mutations accumulated in the coalescing window.
+		if (!this._flushResolver) {
+			this._flushPromise = new Promise<void>((resolve, reject) => {
+				this._flushResolver = () => resolve()
+				this._flushRejector = reject
+			})
+		}
+		if (this._flushTimer) {
+			clearTimeout(this._flushTimer)
+		}
+		this._flushTimer = setTimeout(() => { void this._performFlush() }, FLUSH_DEBOUNCE_MS)
+		return this._flushPromise
+	}
+
+	/**
+	 * Immediately flush any pending write.  Callers that need a synchronous
+	 * "the file is on disk NOW" guarantee — e.g. before extension
+	 * deactivation — can await this.
+	 */
+	async flushPendingWrites(): Promise<void> {
+		if (this._flushTimer) {
+			clearTimeout(this._flushTimer)
+			this._flushTimer = undefined
+			await this._performFlush()
+		}
+	}
+
+	private async _performFlush(): Promise<void> {
+		this._flushTimer = undefined
+		const resolver = this._flushResolver
+		const rejector = this._flushRejector
+		this._flushResolver = undefined
+		this._flushRejector = undefined
+
+		try {
+			await this._writeNow()
+			resolver?.()
+		} catch (e) {
+			rejector?.(e)
+		}
+	}
+
+	private async _writeNow(): Promise<void> {
 		if (!this._configPath) {
 			throw new ConfigError('ConfigService not initialised — call load() first')
 		}
 		const dir = path.dirname(this._configPath)
-		fs.mkdirSync(dir, { recursive: true })
+		await fs.promises.mkdir(dir, { recursive: true })
 
 		for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
 			const conflictDetected = this._detectDiskConflict()
@@ -379,11 +443,12 @@ export class ConfigService implements vscode.Disposable {
 
 			const content = JSON.stringify(this._config, null, 2) + '\n'
 			const tmpPath = this._configPath + '.tmp'
-			fs.writeFileSync(tmpPath, content, 'utf-8')
-			fs.renameSync(tmpPath, this._configPath)
+			await fs.promises.writeFile(tmpPath, content, 'utf-8')
+			await fs.promises.rename(tmpPath, this._configPath)
 
 			try {
-				this._lastSeenMtimeMs = fs.statSync(this._configPath).mtimeMs
+				const stat = await fs.promises.stat(this._configPath)
+				this._lastSeenMtimeMs = stat.mtimeMs
 			} catch {
 				// stat failure is non-fatal
 			}
@@ -432,7 +497,7 @@ export class ConfigService implements vscode.Disposable {
 		const entry = '.worktrees/'
 		const MARKER = '## gitbraid: manage .worktrees/ (do not remove this line)'
 		try {
-			const existing = fs.readFileSync(gitignorePath, 'utf-8')
+			const existing = await fs.promises.readFile(gitignorePath, 'utf-8')
 			if (existing.split(/\r?\n/).some((l) => l.trim() === entry || l.trim() === '.worktrees')) {
 				return
 			}
@@ -440,11 +505,11 @@ export class ConfigService implements vscode.Disposable {
 			// consistent after append.
 			const eol = existing.includes('\r\n') ? '\r\n' : '\n'
 			const separator = existing.endsWith('\n') || existing.endsWith('\r\n') ? '' : eol
-			fs.appendFileSync(gitignorePath, `${separator}${MARKER}${eol}${entry}${eol}`, 'utf-8')
+			await fs.promises.appendFile(gitignorePath, `${separator}${MARKER}${eol}${entry}${eol}`, 'utf-8')
 			log.info('ConfigService: added .worktrees/ to .gitignore')
 		} catch (e: unknown) {
 			if (isNodeError(e) && e.code === 'ENOENT') {
-				fs.writeFileSync(gitignorePath, `${MARKER}\n${entry}\n`, 'utf-8')
+				await fs.promises.writeFile(gitignorePath, `${MARKER}\n${entry}\n`, 'utf-8')
 				log.info('ConfigService: created .gitignore with .worktrees/ entry')
 				return
 			}
