@@ -458,6 +458,12 @@
 					"default": 10240,
 					"description": "Skip sync for files larger than this size (in KB). Set to 0 to disable the limit.",
 					"minimum": 0
+				},
+				"gitbraid.rebaseCheckIntervalMinutes": {
+					"type": "number",
+					"default": 5,
+					"description": "Minutes between background checks for branches behind their parent. Set to 0 to disable the periodic check (the event-driven checks on stack changes still run).",
+					"minimum": 0
 				}
 			}
 		},

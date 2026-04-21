@@ -1,13 +1,10 @@
 import * as vscode from 'vscode'
-import util from 'node:util'
-import child_process from 'node:child_process'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { WorkspaceSync } from './workspaceSync'
 import { worktreePath } from './branchStackService'
 import { BranchStackEntry } from './configTypes'
-
-const exec = util.promisify(child_process.exec)
+import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 
 // ─── Git status parsing ───────────────────────────────────────────────────────
 
@@ -17,24 +14,26 @@ interface WorktreeFileStatus {
 	relativePath: string
 }
 
-async function gitStatusInDir(dir: string): Promise<WorktreeFileStatus[]> {
-	try {
-		const { stdout } = await exec('git status --porcelain=v1 -z', { cwd: dir })
-		const results: WorktreeFileStatus[] = []
-		// null-separated entries; each entry is "<XY> <path>" (or rename "XY old\0new")
-		const entries = stdout.split('\0').filter((s) => s.length > 0)
-		for (const entry of entries) {
-			const xy = entry.slice(0, 2)
-			const file = entry.slice(3)
-			if (file) {
-				results.push({ xy, relativePath: file })
-			}
-		}
-		return results
-	} catch {
+async function gitStatusInDir(runner: IGitRunner, dir: string): Promise<WorktreeFileStatus[]> {
+	const { stdout, exitCode } = await runner.run(
+		['status', '--porcelain=v1', '-z'],
+		{ cwd: dir },
+	)
+	if (exitCode !== 0) {
 		// Worktree may not exist yet or git is unavailable — treat as empty
 		return []
 	}
+	const results: WorktreeFileStatus[] = []
+	// null-separated entries; each entry is "<XY> <path>" (or rename "XY old\0new")
+	const entries = stdout.split('\0').filter((s) => s.length > 0)
+	for (const entry of entries) {
+		const xy = entry.slice(0, 2)
+		const file = entry.slice(3)
+		if (file) {
+			results.push({ xy, relativePath: file })
+		}
+	}
+	return results
 }
 
 function toResourceState(uri: vscode.Uri): vscode.SourceControlResourceState {
@@ -66,6 +65,7 @@ class BranchScmEntry implements vscode.Disposable {
 	constructor(
 		private readonly _entry: BranchStackEntry,
 		private readonly _worktreeDir: string,
+		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {
 		this._sc = vscode.scm.createSourceControl(
 			`gitbraid-${_entry.name}`,
@@ -94,7 +94,7 @@ class BranchScmEntry implements vscode.Disposable {
 	get inputBox(): vscode.SourceControlInputBox { return this._sc.inputBox }
 
 	async refresh(): Promise<void> {
-		const statuses = await gitStatusInDir(this._worktreeDir)
+		const statuses = await gitStatusInDir(this._runner, this._worktreeDir)
 		const stagedUris: vscode.SourceControlResourceState[] = []
 		const changedUris: vscode.SourceControlResourceState[] = []
 
@@ -147,6 +147,7 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		private readonly _config: ConfigService,
 		private readonly _sync: WorkspaceSync,
 		private readonly _workspaceRoot: vscode.Uri,
+		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {
 		// Top-level "Floating" source control — unassigned dirty files
 		this._floatingSc = vscode.scm.createSourceControl(
@@ -194,7 +195,7 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		for (const branchEntry of this._config.getStack()) {
 			if (!this._entries.has(branchEntry.name)) {
 				const wtDir = worktreePath(this._workspaceRoot, branchEntry.name).fsPath
-				const scmEntry = new BranchScmEntry(branchEntry, wtDir)
+				const scmEntry = new BranchScmEntry(branchEntry, wtDir, this._runner)
 				this._entries.set(branchEntry.name, scmEntry)
 			}
 		}
@@ -272,15 +273,17 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			if (proceed !== 'Commit anyway') { return }
 		}
 
-		try {
-			await exec(`git commit -m ${JSON.stringify(message)}`, { cwd: entry.worktreeDir })
+		const { exitCode, stderr } = await this._runner.run(
+			['commit', '-m', message],
+			{ cwd: entry.worktreeDir },
+		)
+		if (exitCode === 0) {
 			entry.inputBox.value = ''
 			log.info(`[BranchScmProvider] committed to "${branchName}"`)
 			await entry.refresh()
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			await vscode.window.showErrorMessage(`Commit to "${branchName}" failed: ${msg}`)
-			log.error(`[BranchScmProvider] commit error: ${msg}`)
+		} else {
+			await vscode.window.showErrorMessage(`Commit to "${branchName}" failed: ${stderr}`)
+			log.error(`[BranchScmProvider] commit error (exit=${String(exitCode)}): ${stderr}`)
 		}
 	}
 

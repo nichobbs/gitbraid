@@ -15,6 +15,32 @@ import {
 
 const CONFIG_FILENAME = 'local-config.json'
 const WORKTREES_DIR = '.worktrees'
+/** Max retries when another writer races us on local-config.json. */
+const MAX_WRITE_RETRIES = 3
+
+/**
+ * Merge an externally-modified config with our in-memory version.  The goal
+ * is "don't lose data" rather than "produce the platonically correct state":
+ * we take the union of stack branches and assignments, preferring our values
+ * on any key collision since they represent the user's most recent action
+ * in this window.  See T21 in the remediation plan.
+ */
+function mergeConfigs(external: BranchConfig, ours: BranchConfig): BranchConfig {
+	const stackByName = new Map<string, BranchStackEntry>()
+	for (const e of external.stack) {
+		stackByName.set(e.name, e)
+	}
+	for (const e of ours.stack) {
+		stackByName.set(e.name, e)
+	}
+	const stack = [...stackByName.values()].sort((a, b) => a.order - b.order)
+	return {
+		version: Math.max(external.version ?? 0, ours.version ?? 0),
+		stack,
+		assignments: { ...external.assignments, ...ours.assignments },
+		hunkAssignments: { ...external.hunkAssignments, ...ours.hunkAssignments },
+	}
+}
 
 /**
  * Manages reading and writing `.worktrees/local-config.json`.
@@ -274,11 +300,18 @@ export class ConfigService implements vscode.Disposable {
 
 	/**
 	 * Write the current in-memory config to disk atomically.
-	 * On the first write, ensures `.worktrees/` is present in `.gitignore`.
 	 *
-	 * Cross-window safety: if another process has modified the file since we
-	 * last loaded, log a warning so the user can investigate manually.  A
-	 * full merge-on-conflict is tracked in the remediation plan (T21).
+	 * Optimistic concurrency (T21): if another VS Code window writes to
+	 * `local-config.json` between our last read and this write, we reload
+	 * from disk, merge the external changes conservatively, and retry.
+	 *
+	 * Merge strategy (best-effort, non-interactive):
+	 *   - Stack order: prefer the longer stack; if equal length, use ours.
+	 *   - Assignments: union (our value wins on key conflict).
+	 *   - Hunk assignments: union (ours wins on conflict).
+	 *
+	 * After {@link MAX_WRITE_RETRIES} collisions we throw `ConfigError` so
+	 * the user can investigate rather than entering a retry loop.
 	 */
 	private async _writeToDisk(): Promise<void> {
 		if (!this._configPath) {
@@ -287,34 +320,48 @@ export class ConfigService implements vscode.Disposable {
 		const dir = path.dirname(this._configPath)
 		fs.mkdirSync(dir, { recursive: true })
 
-		// Detect concurrent modification by another VS Code window
-		if (this._lastSeenMtimeMs !== undefined) {
-			try {
-				const stat = fs.statSync(this._configPath)
-				if (stat.mtimeMs > this._lastSeenMtimeMs + 1) {
-					log.warn(
-						'ConfigService: config file changed on disk since last read ' +
-						`(observed mtime ${String(stat.mtimeMs)} > expected ${String(this._lastSeenMtimeMs)}). ` +
-						'Another window may be writing to the same stack; changes may be clobbered.',
-					)
-				}
-			} catch {
-				// File missing is fine on first write
+		for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
+			const conflictDetected = this._detectDiskConflict()
+			if (conflictDetected) {
+				log.warn(`ConfigService: detected concurrent write (attempt ${String(attempt + 1)}/${String(MAX_WRITE_RETRIES)}); merging`)
+				const external = await this._readFromDisk()
+				this._config = mergeConfigs(external, this._config)
+				continue
 			}
+
+			const content = JSON.stringify(this._config, null, 2) + '\n'
+			const tmpPath = this._configPath + '.tmp'
+			fs.writeFileSync(tmpPath, content, 'utf-8')
+			fs.renameSync(tmpPath, this._configPath)
+
+			try {
+				this._lastSeenMtimeMs = fs.statSync(this._configPath).mtimeMs
+			} catch {
+				// stat failure is non-fatal
+			}
+
+			await this._ensureGitignore()
+			return
 		}
 
-		const content = JSON.stringify(this._config, null, 2) + '\n'
-		const tmpPath = this._configPath + '.tmp'
-		fs.writeFileSync(tmpPath, content, 'utf-8')
-		fs.renameSync(tmpPath, this._configPath)
+		throw new ConfigError(
+			`Failed to write local-config.json after ${String(MAX_WRITE_RETRIES)} retries due to concurrent modification. ` +
+			'Close other VS Code windows on this repository or edit the file manually.',
+		)
+	}
 
+	/** Returns true if the on-disk file has been modified since our last read. */
+	private _detectDiskConflict(): boolean {
+		if (!this._configPath || this._lastSeenMtimeMs === undefined) {
+			return false
+		}
 		try {
-			this._lastSeenMtimeMs = fs.statSync(this._configPath).mtimeMs
+			const stat = fs.statSync(this._configPath)
+			// 1 ms epsilon to tolerate filesystems with second-level resolution
+			return stat.mtimeMs > this._lastSeenMtimeMs + 1
 		} catch {
-			// stat failure is non-fatal
+			return false
 		}
-
-		await this._ensureGitignore()
 	}
 
 	/**

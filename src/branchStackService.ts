@@ -2,15 +2,12 @@ import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as crypto from 'node:crypto'
-import util from 'node:util'
-import child_process from 'node:child_process'
 import { log } from './channelLogger'
 import { BranchStackError } from './errors'
 import { BranchStackEntry } from './configTypes'
 import { ConfigService } from './configService'
 import { git, checkRefFormat } from './gitFunctions'
-
-const execAsync = util.promisify(child_process.exec)
+import { getDefaultGitRunner } from './gitRunner'
 
 const WORKTREES_DIR = '.worktrees'
 
@@ -244,16 +241,15 @@ export class BranchStackService implements vscode.Disposable {
 	}
 
 	private async _worktreeIsDirty(worktreeFsPath: string): Promise<boolean> {
-		try {
-			const { stdout } = await execAsync('git status --porcelain', { cwd: worktreeFsPath })
-			return stdout.trim().length > 0
-		} catch (e) {
-			// Log so an unexpected failure (git missing, permissions, corrupted
-			// worktree) doesn't silently report "clean" and let the caller
-			// force-remove a dirty worktree.
-			log.warn(`_worktreeIsDirty(${worktreeFsPath}): ${e instanceof Error ? e.message : String(e)}`)
+		const { stdout, exitCode, stderr } = await getDefaultGitRunner().run(
+			['status', '--porcelain'],
+			{ cwd: worktreeFsPath },
+		)
+		if (exitCode !== 0) {
+			log.warn(`_worktreeIsDirty(${worktreeFsPath}): exit=${String(exitCode)}: ${stderr}`)
 			return false
 		}
+		return stdout.trim().length > 0
 	}
 
 	/**

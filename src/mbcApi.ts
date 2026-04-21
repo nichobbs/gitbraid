@@ -1,15 +1,12 @@
 import * as vscode from 'vscode'
-import * as node_util from 'node:util'
-import * as node_child_process from 'node:child_process'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
 import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry, BranchStatus, StackStatus, AssignmentChangeEvent, StackChangeEvent } from './configTypes'
 import { GitError } from './errors'
+import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import type { GitBraidExportedAPI, BranchOptions, CommitOptions } from './@types/GitBraidAPI'
-
-const execAsync = node_util.promisify(node_child_process.exec)
 
 // ─── Git status helper ────────────────────────────────────────────────────────
 
@@ -17,21 +14,23 @@ interface WorktreeFileStatus {
 	xy: string
 }
 
-async function _gitStatus(worktreeDir: string): Promise<WorktreeFileStatus[]> {
-	try {
-		const { stdout } = await execAsync('git status --porcelain=v1 -z', { cwd: worktreeDir })
-		const results: WorktreeFileStatus[] = []
-		const entries = stdout.split('\0').filter((s) => s.length > 0)
-		for (const entry of entries) {
-			const xy = entry.slice(0, 2)
-			if (entry.length > 3) {
-				results.push({ xy })
-			}
-		}
-		return results
-	} catch {
+async function _gitStatus(runner: IGitRunner, worktreeDir: string): Promise<WorktreeFileStatus[]> {
+	const { stdout, exitCode } = await runner.run(
+		['status', '--porcelain=v1', '-z'],
+		{ cwd: worktreeDir },
+	)
+	if (exitCode !== 0) {
 		return []
 	}
+	const results: WorktreeFileStatus[] = []
+	const entries = stdout.split('\0').filter((s) => s.length > 0)
+	for (const entry of entries) {
+		const xy = entry.slice(0, 2)
+		if (entry.length > 3) {
+			results.push({ xy })
+		}
+	}
+	return results
 }
 
 // ─── MbcApi ───────────────────────────────────────────────────────────────────
@@ -49,6 +48,7 @@ export class MbcApi implements GitBraidExportedAPI {
 		private readonly _branchStack: BranchStackService,
 		private readonly _sync: WorkspaceSync,
 		private readonly _workspaceRoot: vscode.Uri,
+		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {}
 
 	// ── Stack management ──────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ export class MbcApi implements GitBraidExportedAPI {
 
 	async getBranchStatus(branch: string): Promise<BranchStatus> {
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
-		const statuses = await _gitStatus(wtDir)
+		const statuses = await _gitStatus(this._runner, wtDir)
 
 		let staged = 0
 		let unstaged = 0
@@ -131,38 +131,50 @@ export class MbcApi implements GitBraidExportedAPI {
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 
 		if (options.stageAll) {
-			await execAsync('git add -u', { cwd: wtDir })
+			const addResult = await this._runner.run(['add', '-u'], { cwd: wtDir })
+			if (addResult.exitCode !== 0) {
+				throw new GitError(`git add -u failed in "${branch}": ${addResult.stderr}`, addResult.exitCode)
+			}
 		}
 
-		const gpgFlag = options.noGpgSign === true ? ' --no-gpg-sign' : ''
-		// Route the commit message through a shell via JSON.stringify so
-		// backticks, $(…), newlines etc. cannot break out. The previous
-		// replaceAll('"', '\\"') only handled literal double quotes.
-		// The full fix (spawn-with-argv) lands with remediation plan T18.
-		const quoted = JSON.stringify(message)
-		try {
-			await execAsync(`git commit${gpgFlag} -m ${quoted}`, { cwd: wtDir })
-			log.info(`MbcApi.commitBranch: committed to "${branch}"`)
-		} catch (e: unknown) {
-			const msg = e instanceof Error ? e.message : JSON.stringify(e)
-			log.error(`MbcApi.commitBranch: failed for "${branch}": ${msg}`)
-			throw new GitError(`Commit to "${branch}" failed: ${msg}`, typeof (e as { code?: number })?.code === 'number' ? (e as { code: number }).code : 1)
+		const commitArgs: string[] = ['commit']
+		if (options.noGpgSign === true) {
+			commitArgs.push('--no-gpg-sign')
 		}
+		commitArgs.push('-m', message)
+		const { exitCode, stderr } = await this._runner.run(commitArgs, { cwd: wtDir })
+		if (exitCode !== 0) {
+			log.error(`MbcApi.commitBranch: failed for "${branch}": ${stderr}`)
+			throw new GitError(`Commit to "${branch}" failed: ${stderr}`, exitCode)
+		}
+		log.info(`MbcApi.commitBranch: committed to "${branch}"`)
 	}
 
 	async stageBranch(branch: string, files?: string[]): Promise<void> {
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 
 		if (files && files.length > 0) {
+			// With spawn the shell never sees these arguments, so the
+			// metacharacter check is no longer strictly required — but we keep
+			// a leading-dash guard so a malicious path can't be mistaken for
+			// a git option.
 			for (const f of files) {
-				if (/["`$\\\n|;&<>()]/.test(f) || f.startsWith('-')) {
-					throw new GitError(`Refusing to stage path with unsafe characters: ${f}`, 1)
+				if (f.startsWith('-')) {
+					throw new GitError(`Refusing to stage path that would be parsed as a flag: ${f}`, 1)
 				}
 			}
-			const paths = files.map((f) => JSON.stringify(f)).join(' ')
-			await execAsync(`git add -- ${paths}`, { cwd: wtDir })
+			const { exitCode, stderr } = await this._runner.run(
+				['add', '--', ...files],
+				{ cwd: wtDir },
+			)
+			if (exitCode !== 0) {
+				throw new GitError(`git add failed in "${branch}": ${stderr}`, exitCode)
+			}
 		} else {
-			await execAsync('git add -u', { cwd: wtDir })
+			const { exitCode, stderr } = await this._runner.run(['add', '-u'], { cwd: wtDir })
+			if (exitCode !== 0) {
+				throw new GitError(`git add -u failed in "${branch}": ${stderr}`, exitCode)
+			}
 		}
 		log.info(`MbcApi.stageBranch: staged in "${branch}"`)
 	}
