@@ -172,13 +172,43 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
-		vscode.commands.registerCommand('gitbraid.assignFile', cmd(async (arg?: vscode.Uri | FloatingFileNode) => {
-			const target = arg instanceof FloatingFileNode ? arg.resourceUri : (arg ?? vscode.window.activeTextEditor?.document.uri)
-			if (!target) {
+		vscode.commands.registerCommand('gitbraid.assignFile', cmd(async (arg?: vscode.Uri | FloatingFileNode, allArgs?: vscode.Uri[]) => {
+			// Collect initial URIs — multi-selection from Explorer passes all selected URIs as allArgs
+			let uris: vscode.Uri[]
+			if (allArgs && allArgs.length > 0) {
+				uris = allArgs
+			} else if (arg instanceof FloatingFileNode) {
+				uris = arg.resourceUri ? [arg.resourceUri] : []
+			} else if (arg instanceof vscode.Uri) {
+				uris = [arg]
+			} else {
+				const active = vscode.window.activeTextEditor?.document.uri
+				if (!active) {
+					await vscode.window.showWarningMessage('No file selected to assign.')
+					return
+				}
+				uris = [active]
+			}
+			if (uris.length === 0) {
 				await vscode.window.showWarningMessage('No file selected to assign.')
 				return
 			}
-			const rel = vscode.workspace.asRelativePath(target)
+			// Expand any folders to their contained files
+			const targets: vscode.Uri[] = []
+			for (const uri of uris) {
+				const stat = await vscode.workspace.fs.stat(uri)
+				if (stat.type === vscode.FileType.Directory) {
+					const rel = vscode.workspace.asRelativePath(uri)
+					const found = await vscode.workspace.findFiles(`${rel}/**`, '**/.git/**')
+					targets.push(...found)
+				} else {
+					targets.push(uri)
+				}
+			}
+			if (targets.length === 0) {
+				void vscode.window.showWarningMessage('No files found to assign.')
+				return
+			}
 			const stack = configService.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showWarningMessage('No branches in the stack. Add a branch first.')
@@ -191,8 +221,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!picked) {
 				return
 			}
-			await configService.setAssignment(rel, picked.label)
-			await vscode.window.showInformationMessage(`Assigned ${rel} → ${picked.label}`)
+			for (const target of targets) {
+				await configService.setAssignment(vscode.workspace.asRelativePath(target), picked.label)
+			}
+			const msg = targets.length === 1
+				? `Assigned ${vscode.workspace.asRelativePath(targets[0])} → ${picked.label}`
+				: `Assigned ${targets.length} files → ${picked.label}`
+			await vscode.window.showInformationMessage(msg)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.unassignFile', cmd(async (arg?: vscode.Uri | FileNode) => {
