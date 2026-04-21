@@ -1,7 +1,19 @@
 import path from 'node:path'
+import { promises as fsp } from 'node:fs'
 import { log } from './channelLogger'
 import { requireInside } from './pathGuard'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
+
+/** LRU cap on the DiffEngine hunk cache. */
+const HUNK_CACHE_MAX = 32
+/** Minimum time (ms) a cache entry is trusted without a stat check. */
+const HUNK_CACHE_TTL_MS = 1_500
+
+interface CachedHunks {
+	hunks: DiffHunk[]
+	mtimeMs: number
+	stampedAt: number
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -120,6 +132,9 @@ export function parseDiffHunks(unifiedDiff: string): DiffHunk[] {
  */
 export class DiffEngine {
 
+	/** LRU cache keyed by `${wsRoot}::${relativePath}` (T53). */
+	private readonly _hunkCache = new Map<string, CachedHunks>()
+
 	/**
 	 * @param runner  Optional git runner for test injection.  Defaults to the
 	 *                module-level singleton returned by `getDefaultGitRunner`.
@@ -136,9 +151,36 @@ export class DiffEngine {
 	 * @param relativePath Path to the file relative to `wsRoot`.
 	 */
 	async getHunksForFile(wsRoot: string, relativePath: string): Promise<DiffHunk[]> {
-		log.info(`DiffEngine.getHunksForFile: ${relativePath} in ${wsRoot}`)
+		log.debug(`DiffEngine.getHunksForFile: ${relativePath} in ${wsRoot}`)
 		requireInside(wsRoot, relativePath)
 		const safe = this._normalisePath(relativePath)
+
+		const cacheKey = `${wsRoot}::${safe}`
+		const absPath = path.join(wsRoot, safe)
+		const cached = this._hunkCache.get(cacheKey)
+		const now = Date.now()
+
+		// Cache hit if the entry is recent AND the on-disk mtime matches.
+		// Quick TTL short-circuits the stat call when the cache was just filled.
+		if (cached) {
+			if (now - cached.stampedAt < HUNK_CACHE_TTL_MS) {
+				this._hunkCache.delete(cacheKey)
+				this._hunkCache.set(cacheKey, cached)
+				return cached.hunks
+			}
+			try {
+				const st = await fsp.stat(absPath)
+				if (st.mtimeMs === cached.mtimeMs) {
+					cached.stampedAt = now
+					this._hunkCache.delete(cacheKey)
+					this._hunkCache.set(cacheKey, cached)
+					return cached.hunks
+				}
+			} catch {
+				// File missing — fall through and let git report the truth.
+			}
+		}
+
 		const { stdout, exitCode, stderr } = await this.runner.run(
 			['diff', 'HEAD', '--', safe],
 			{ cwd: wsRoot },
@@ -147,7 +189,22 @@ export class DiffEngine {
 			log.error(`DiffEngine.getHunksForFile: git diff exited ${String(exitCode)}: ${stderr}`)
 			return []
 		}
-		return parseDiffHunks(stdout)
+		const hunks = parseDiffHunks(stdout)
+
+		let mtimeMs = 0
+		try { mtimeMs = (await fsp.stat(absPath)).mtimeMs } catch { /* ignore */ }
+		if (this._hunkCache.size >= HUNK_CACHE_MAX) {
+			const oldest = this._hunkCache.keys().next().value
+			if (oldest !== undefined) this._hunkCache.delete(oldest)
+		}
+		this._hunkCache.set(cacheKey, { hunks, mtimeMs, stampedAt: now })
+		return hunks
+	}
+
+	/** Drop cached diff output for a specific file. */
+	invalidateCache(wsRoot: string, relativePath: string): void {
+		const safe = this._normalisePath(relativePath)
+		this._hunkCache.delete(`${wsRoot}::${safe}`)
 	}
 
 	/**

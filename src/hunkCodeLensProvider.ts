@@ -24,10 +24,24 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 	private readonly _onDidChangeCodeLenses = new vscode.EventEmitter<void>()
 	readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event
 
-	/** Cache: file fsPath → { version, hunks } — invalidated on each save. */
+	/**
+	 * Cache: file fsPath → { version, hunks } — invalidated on each save.
+	 * Bounded via LRU eviction to keep memory in check on users who cycle
+	 * through a large codebase (T45).
+	 */
 	private readonly _cache = new Map<string, { version: number; hunks: DiffHunk[] }>()
+	/** Soft cap on `_cache` entries; oldest insertion is evicted on overflow. */
+	private static readonly _cacheMax = 50
 
 	private readonly _disposables: vscode.Disposable[] = []
+
+	/**
+	 * Pending debounce handle for coalesced lens-refresh fires.  VS Code calls
+	 * `provideCodeLenses` aggressively (per keystroke version bump); spawning
+	 * a `git diff` per call was costly — we now wait until the user pauses
+	 * typing for a short window before recomputing.  (T45 in the plan.)
+	 */
+	private _fireDebounce: ReturnType<typeof setTimeout> | undefined
 
 	constructor(
 		private readonly _diffEngine: DiffEngine,
@@ -36,14 +50,28 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		// Refresh lenses when assignments change, or when a document is saved
 		this._disposables.push(
 			this._onDidChangeCodeLenses,
-			this._config.onDidChangeAssignment(() => {
-				this._onDidChangeCodeLenses.fire()
-			}),
+			this._config.onDidChangeAssignment(() => { this._scheduleFire() }),
 			vscode.workspace.onDidSaveTextDocument((doc) => {
 				this._cache.delete(doc.uri.fsPath)
-				this._onDidChangeCodeLenses.fire()
+				this._scheduleFire()
+			}),
+			vscode.workspace.onDidChangeTextDocument((e) => {
+				// Invalidate the version cache so the next provide call sees
+				// the updated document, but debounce the fire itself.
+				this._cache.delete(e.document.uri.fsPath)
+				this._scheduleFire()
 			}),
 		)
+	}
+
+	private _scheduleFire(): void {
+		if (this._fireDebounce) {
+			clearTimeout(this._fireDebounce)
+		}
+		this._fireDebounce = setTimeout(() => {
+			this._fireDebounce = undefined
+			this._onDidChangeCodeLenses.fire()
+		}, 300)
 	}
 
 	// ── CodeLensProvider ───────────────────────────────────────────────────────
@@ -121,6 +149,10 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 	// ── Disposal ───────────────────────────────────────────────────────────────
 
 	dispose() {
+		if (this._fireDebounce) {
+			clearTimeout(this._fireDebounce)
+			this._fireDebounce = undefined
+		}
 		for (const d of this._disposables) {
 			d.dispose()
 		}
@@ -133,14 +165,22 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		document: vscode.TextDocument,
 		wsRoot: string,
 	): Promise<DiffHunk[]> {
-		const cached = this._cache.get(document.uri.fsPath)
+		const key = document.uri.fsPath
+		const cached = this._cache.get(key)
 		if (cached && cached.version === document.version) {
+			// Refresh LRU position on hit.
+			this._cache.delete(key)
+			this._cache.set(key, cached)
 			return cached.hunks
 		}
 		const relativePath = vscode.workspace.asRelativePath(document.uri, false)
 		const hunks = await this._diffEngine.getHunksForFile(wsRoot, relativePath)
-		this._cache.set(document.uri.fsPath, { version: document.version, hunks })
-		log.info(`HunkCodeLensProvider: ${hunks.length} hunks for ${relativePath}`)
+		if (this._cache.size >= HunkCodeLensProvider._cacheMax) {
+			const oldest = this._cache.keys().next().value
+			if (oldest !== undefined) this._cache.delete(oldest)
+		}
+		this._cache.set(key, { version: document.version, hunks })
+		log.debug(`HunkCodeLensProvider: ${hunks.length} hunks for ${relativePath}`)
 		return hunks
 	}
 }

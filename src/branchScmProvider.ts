@@ -93,7 +93,20 @@ class BranchScmEntry implements vscode.Disposable {
 	get worktreeDir(): string { return this._worktreeDir }
 	get inputBox(): vscode.SourceControlInputBox { return this._sc.inputBox }
 
-	async refresh(): Promise<void> {
+	/** Last status snapshot; used to skip redundant group updates (T47). */
+	private _lastStatusHash: string | undefined
+	/** Timestamp of the last refresh; combined with REFRESH_TTL_MS to coalesce bursts. */
+	private _lastRefreshAt = 0
+
+	async refresh(force = false): Promise<void> {
+		const now = Date.now()
+		if (!force && now - this._lastRefreshAt < 2_000) {
+			// Within the TTL window — skip.  A rapid burst of save events
+			// (common when a formatter touches many files) collapses to one
+			// SCM redraw.
+			return
+		}
+		this._lastRefreshAt = now
 		const statuses = await gitStatusInDir(this._runner, this._worktreeDir)
 		const stagedUris: vscode.SourceControlResourceState[] = []
 		const changedUris: vscode.SourceControlResourceState[] = []
@@ -114,6 +127,15 @@ class BranchScmEntry implements vscode.Disposable {
 				changedUris.push(toResourceState(uri))
 			}
 		}
+
+		// Skip the resource-state update when the status set is unchanged —
+		// VS Code treats every assignment as a state mutation that re-renders
+		// the SCM pane (T47).
+		const hash = statuses.map((s) => `${s.xy}\t${s.relativePath}`).join('\n')
+		if (hash === this._lastStatusHash) {
+			return
+		}
+		this._lastStatusHash = hash
 
 		this._staged.resourceStates = stagedUris
 		this._changes.resourceStates = changedUris
@@ -163,9 +185,24 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			this._floatingSc,
 			this._floatingGroup,
 			_config.onDidChangeStack(() => void this._rebuild()),
-			_sync.onDidSyncFile(() => void this._refreshAll()),
+			// Targeted per-branch refresh (T47) — only the branch whose
+			// worktree received the sync needs to re-run `git status`.  The
+			// old `_refreshAll()` fired N forks per save.
+			_sync.onDidSyncFile((e) => void this._refreshBranch(e.branch)),
 			_sync.onDidFloatFile(() => this._refreshFloating()),
 		)
+	}
+
+	/** Refresh SCM status for a single branch (cache-aware). */
+	private async _refreshBranch(branchName: string): Promise<void> {
+		const entry = this._entries.get(branchName)
+		if (!entry) return
+		try {
+			await entry.refresh()
+		} catch (e) {
+			log.warn(`[BranchScmProvider] refresh "${branchName}" failed: ${e instanceof Error ? e.message : String(e)}`)
+		}
+		this._refreshFloating()
 	}
 
 	/**
