@@ -163,7 +163,11 @@ export class BranchStackService implements vscode.Disposable {
 		try {
 			const { stdout } = await execAsync('git status --porcelain', { cwd: worktreeFsPath })
 			return stdout.trim().length > 0
-		} catch {
+		} catch (e) {
+			// Log so an unexpected failure (git missing, permissions, corrupted
+			// worktree) doesn't silently report "clean" and let the caller
+			// force-remove a dirty worktree.
+			log.warn(`_worktreeIsDirty(${worktreeFsPath}): ${e instanceof Error ? e.message : String(e)}`)
 			return false
 		}
 	}
@@ -219,6 +223,17 @@ export class BranchStackService implements vscode.Disposable {
 		const wtPath = worktreePath(this._workspaceRoot!, branchName)
 		const absPath = wtPath.fsPath
 
+		// Detect the already-checked-out case up-front rather than relying on
+		// git's "already exists" error for diagnosis.  Emits a friendly error
+		// before any worktree directory is created (T74 in the remediation plan).
+		const alreadyCheckedOut = await this._isCheckedOut(branchName)
+		if (alreadyCheckedOut) {
+			throw new BranchStackError(
+				`Branch "${branchName}" is already checked out in another worktree. ` +
+				`Remove that worktree first before adding it to the stack.`
+			)
+		}
+
 		try {
 			// Attempt to create a new branch from base and add a worktree for it
 			await git.worktree.add(`-b "${branchName}" "${absPath}" "${base}"`)
@@ -228,14 +243,7 @@ export class BranchStackService implements vscode.Disposable {
 			if (!msg.includes('already exists')) {
 				throw e
 			}
-			// Branch already exists — check it out into the new worktree
-			const checkedOut = await this._isCheckedOut(branchName)
-			if (checkedOut) {
-				throw new BranchStackError(
-					`Branch "${branchName}" is already checked out in another worktree. ` +
-					`Remove that worktree first before adding it to the stack.`
-				)
-			}
+			// Branch already exists on disk — check it out into the new worktree
 			await git.worktree.add(`"${absPath}" "${branchName}"`)
 			log.info(`BranchStackService: added existing branch "${branchName}" at ${absPath}`)
 		}
@@ -245,7 +253,8 @@ export class BranchStackService implements vscode.Disposable {
 		try {
 			const worktrees = await git.worktree.list()
 			return worktrees.some((wt) => wt.branch === 'refs/heads/' + branchName)
-		} catch {
+		} catch (e) {
+			log.warn(`_isCheckedOut(${branchName}): git worktree list failed — ${e instanceof Error ? e.message : String(e)}`)
 			return false
 		}
 	}
@@ -266,7 +275,8 @@ export class BranchStackService implements vscode.Disposable {
 		let entries: string[]
 		try {
 			entries = fs.readdirSync(worktreesDirPath)
-		} catch {
+		} catch (e) {
+			log.warn(`_pruneOrphans: failed to read ${worktreesDirPath}: ${e instanceof Error ? e.message : String(e)}`)
 			return
 		}
 

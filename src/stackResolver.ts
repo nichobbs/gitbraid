@@ -115,7 +115,8 @@ export class StackResolver implements vscode.Disposable {
 				{ cwd: workspaceRoot },
 			)
 			return stdout.trim() || undefined
-		} catch {
+		} catch (e) {
+			log.warn(`StackResolver.getStackDiff: ${safeBase}...${safeTop} ${safeFile}: ${e instanceof Error ? e.message : String(e)}`)
 			return undefined
 		}
 	}

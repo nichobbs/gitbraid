@@ -256,52 +256,74 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			type BranchItem = vscode.QuickPickItem & { isNew?: boolean }
 
+			// Build grouped items (new branch on top, then local separator +
+			// locals, then remote separator + remotes).
+			const buildItems = (value: string, remote: string[] = []): BranchItem[] => {
+				const items: BranchItem[] = []
+				const trimmed = value.trim()
+				if (trimmed && !availableLocal.includes(trimmed) && !remote.includes(trimmed)) {
+					items.push({
+						label: `$(plus) ${trimmed}`,
+						description: 'Create a new branch',
+						detail: trimmed,
+						isNew: true,
+					})
+				}
+				const localMatches = availableLocal.filter(b => b.includes(trimmed))
+				if (localMatches.length > 0) {
+					items.push({ label: 'Local', kind: vscode.QuickPickItemKind.Separator })
+					for (const b of localMatches) items.push({ label: b, description: 'local' })
+				}
+				const remoteMatches = remote.filter(b => !stackBranchNames.has(b))
+				if (remoteMatches.length > 0) {
+					items.push({ label: 'Remote', kind: vscode.QuickPickItemKind.Separator })
+					for (const b of remoteMatches) items.push({ label: b, description: 'remote' })
+				}
+				return items
+			}
+
 			const qp = vscode.window.createQuickPick<BranchItem>()
 			qp.placeholder = 'Branch name — pick existing or type a new name'
 			qp.matchOnDescription = false
-			qp.items = availableLocal.map(b => ({ label: b, description: 'local' }))
+			qp.items = buildItems('')
 
 			let remoteDebounce: ReturnType<typeof setTimeout> | undefined
 
-			qp.onDidChangeValue(async (value) => {
+			qp.onDidChangeValue((value) => {
 				if (remoteDebounce) {
 					clearTimeout(remoteDebounce)
 				}
-				const localMatches = availableLocal
-					.filter(b => b.includes(value))
-					.map<BranchItem>(b => ({ label: b, description: 'local' }))
-
-				const newItem: BranchItem[] = value.trim()
-					? [{ label: value.trim(), description: 'new branch', isNew: true }]
-					: []
-
-				qp.items = [...localMatches, ...newItem]
+				qp.items = buildItems(value)
 
 				if (value.trim().length >= 2) {
 					remoteDebounce = setTimeout(async () => {
 						try {
 							const { remote } = await git.listBranches(workspaceUri, value.trim())
-							const remoteItems = remote
-								.filter(b => !stackBranchNames.has(b))
-								.map<BranchItem>(b => ({ label: b, description: 'remote' }))
-							// Refresh — keep local matches + new + remote
-							qp.items = [
-								...availableLocal.filter(b => b.includes(value)).map<BranchItem>(b => ({ label: b, description: 'local' })),
-								...remoteItems,
-								...(value.trim() ? [{ label: value.trim(), description: 'new branch', isNew: true } as BranchItem] : []),
-							]
-						} catch { /* remote search failed — ignore */ }
+							qp.items = buildItems(value, remote)
+						} catch (e) {
+							log.warn(`addStackBranch: remote search failed: ${e instanceof Error ? e.message : String(e)}`)
+						}
 					}, 300)
 				}
 			})
 
 			const name = await new Promise<string | undefined>((resolve) => {
+				let resolved = false
+				const resolveOnce = (value: string | undefined) => {
+					if (resolved) return
+					resolved = true
+					resolve(value)
+					qp.dispose()
+				}
 				qp.onDidAccept(() => {
 					const selected = qp.selectedItems[0]
-					resolve((selected?.label ?? qp.value.trim()) || undefined)
-					qp.dispose()
+					if (selected?.isNew && selected.detail) {
+						resolveOnce(selected.detail)
+					} else {
+						resolveOnce((selected?.label ?? qp.value.trim()) || undefined)
+					}
 				})
-				qp.onDidHide(() => { resolve(undefined); qp.dispose() })
+				qp.onDidHide(() => { resolveOnce(undefined) })
 				qp.show()
 			})
 
@@ -313,9 +335,17 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			const stack = configService.getStack()
-			const bases = ['main', ...stack.map((e) => e.name)]
-			const base = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch (used when creating a new branch)' }) ?? 'main'
-			await branchStack.addBranchToStack(name, base)
+			// Detect the repo's default branch (main / master / trunk / develop)
+			// instead of hard-coding "main" (T73 in the remediation plan).
+			const defaultBranch = await detectDefaultBranch(workspaceUri).catch(() => 'main')
+			const bases = [defaultBranch, ...stack.map((e) => e.name).filter(n => n !== defaultBranch)]
+			const basePick = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch (used when creating a new branch)' })
+			if (!basePick) {
+				// Pressing Escape cancels the whole command rather than defaulting
+				// to main — avoids creating a branch the user didn't confirm.
+				return
+			}
+			await branchStack.addBranchToStack(name, basePick)
 			await vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
 		})),
 
@@ -456,6 +486,29 @@ export async function activate(context: vscode.ExtensionContext) {
 	log.info('extension activation complete')
 	return mbcExportedApi
 
+}
+
+/**
+ * Best-effort detection of the repository's default branch.  Checks, in order:
+ * 1. `refs/remotes/origin/HEAD` symbolic-ref (the GitHub/GitLab default).
+ * 2. `git config init.defaultBranch` (user override).
+ * 3. Falls back to the already-loaded current branch.
+ * 4. Finally defaults to `main` if nothing is conclusive.
+ */
+async function detectDefaultBranch(workspaceUri: vscode.Uri): Promise<string> {
+	try {
+		const symbolic = await git.defaultBranch()
+		if (symbolic) return symbolic
+	} catch {
+		// fall through to current branch
+	}
+	try {
+		const cur = await git.branch(workspaceUri)
+		if (cur) return cur
+	} catch {
+		// fall through
+	}
+	return 'main'
 }
 
 async function filesExcludeWorktreesDir () {

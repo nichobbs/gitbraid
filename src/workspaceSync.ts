@@ -5,7 +5,16 @@ import { SyncError } from './errors'
 import { ConfigService } from './configService'
 import { worktreePath } from './branchStackService'
 
-const DEBOUNCE_MS = 200
+const DEFAULT_DEBOUNCE_MS = 200
+
+/** Read the workspace-level syncDebounceMs with a sane fallback. */
+function getDebounceMs(): number {
+	const raw = vscode.workspace.getConfiguration('gitbraid').get<number>('syncDebounceMs', DEFAULT_DEBOUNCE_MS)
+	if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) {
+		return DEFAULT_DEBOUNCE_MS
+	}
+	return raw
+}
 
 /**
  * Watches the workspace for file saves and copies modified files to the
@@ -123,7 +132,7 @@ export class WorkspaceSync implements vscode.Disposable {
 		}
 		// A sync is in progress — re-queue so this save isn't silently dropped
 		if (this._syncing) {
-			setTimeout(() => this._onChanged(uri), DEBOUNCE_MS)
+			setTimeout(() => this._onChanged(uri), getDebounceMs())
 			return
 		}
 
@@ -135,7 +144,7 @@ export class WorkspaceSync implements vscode.Disposable {
 		const timer = setTimeout(() => {
 			this._pending.delete(rel)
 			void this._handleSave(rel, uri)
-		}, DEBOUNCE_MS)
+		}, getDebounceMs())
 		this._pending.set(rel, timer)
 	}
 
@@ -175,6 +184,21 @@ export class WorkspaceSync implements vscode.Disposable {
 		this._floatingDirty.delete(normalisePath(relativePath))
 		const wtPath = worktreePath(this._workspaceRoot, branch)
 		const destUri = vscode.Uri.joinPath(wtPath, relativePath)
+
+		// Skip sync for files over the configured size limit to avoid reading
+		// huge blobs into memory on every save (T52 in the remediation plan).
+		const maxKb = vscode.workspace.getConfiguration('gitbraid').get<number>('maxSyncFileSizeKb', 10240)
+		if (maxKb > 0) {
+			try {
+				const stat = await vscode.workspace.fs.stat(uri)
+				if (stat.size > maxKb * 1024) {
+					log.warn(`WorkspaceSync: skipping ${relativePath} (${Math.round(stat.size / 1024)} KB > ${maxKb} KB limit)`)
+					return
+				}
+			} catch {
+				// stat failed — file may not exist yet; fall through to read
+			}
+		}
 
 		let content: Uint8Array
 		try {

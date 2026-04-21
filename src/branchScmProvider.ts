@@ -203,7 +203,23 @@ export class BranchScmProviderManager implements vscode.Disposable {
 	}
 
 	private async _refreshAll(): Promise<void> {
-		await Promise.all([...this._entries.values()].map((e) => e.refresh()))
+		// Use allSettled so a single failing branch doesn't poison the whole
+		// refresh (reviews/06-error-handling-and-logging.md "Error flow in
+		// long-running operations").
+		const results = await Promise.allSettled(
+			[...this._entries.entries()].map(async ([name, e]) => {
+				try {
+					await e.refresh()
+				} catch (err) {
+					log.warn(`[BranchScmProvider] refresh "${name}" failed: ${err instanceof Error ? err.message : String(err)}`)
+					throw err
+				}
+			}),
+		)
+		const failed = results.filter((r) => r.status === 'rejected').length
+		if (failed > 0) {
+			log.warn(`[BranchScmProvider] ${failed} of ${results.length} SCM refreshes failed`)
+		}
 		this._refreshFloating()
 	}
 
@@ -239,9 +255,13 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			return
 		}
 
-		// Warn about floating files (non-blocking)
+		// Warn about floating files (non-blocking), honouring
+		// gitbraid.showFloatingWarningOnCommit (declared in package.json but
+		// previously unread — see reviews/02-bugs-and-correctness.md
+		// "showFloatingWarningOnCommit setting is ignored").
+		const showWarning = vscode.workspace.getConfiguration('gitbraid').get<boolean>('showFloatingWarningOnCommit', true)
 		const floating = this._sync.getFloatingDirty()
-		if (floating.length > 0) {
+		if (showWarning && floating.length > 0) {
 			const suffix = floating.length > 5 ? ` …and ${floating.length - 5} more` : ''
 			const fileList = floating.slice(0, 5).join(', ') + suffix
 			const proceed = await vscode.window.showWarningMessage(

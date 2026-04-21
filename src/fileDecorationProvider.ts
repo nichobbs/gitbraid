@@ -58,6 +58,13 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
 
 	provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
 		if (!vscode.workspace.workspaceFolders?.length) { return undefined }
+
+		// Honour gitbraid.prDecorationsEnabled (previously declared but never
+		// read — see reviews/02-bugs-and-correctness.md
+		// "FileDecorationProvider ignores prDecorationsEnabled setting").
+		const enabled = vscode.workspace.getConfiguration('gitbraid').get<boolean>('prDecorationsEnabled', true)
+		if (!enabled) { return undefined }
+
 		const rel = vscode.workspace.asRelativePath(uri, false)
 
 		// Skip anything inside .worktrees/
@@ -67,14 +74,18 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
 		const branchName = this._config.getAssignment(rel)
 		if (branchName) {
 			const entry = this._config.getBranch(branchName)
+			// Initial letter forms a low-cardinality but human-recognisable
+			// differentiator when many branches share a coarse chart colour.
+			const badge = branchBadge(branchName)
 			if (entry?.color) {
 				return {
+					badge,
 					color: new vscode.ThemeColor(`charts.${colorNameForHex(entry.color)}`),
 					tooltip: `Assigned to branch: ${branchName}`,
 				}
 			}
-			// Branch entry missing colour — still show tooltip
 			return {
+				badge,
 				tooltip: `Assigned to branch: ${branchName}`,
 			}
 		}
@@ -119,6 +130,15 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
  * Supported names (from VS Code theme tokens):
  * `blue`, `green`, `yellow`, `orange`, `red`, `purple`
  */
+/**
+ * Produce a 1–2 character badge from a branch name so that multiple branches
+ * mapping to the same chart colour can still be visually distinguished.
+ */
+function branchBadge(branchName: string): string {
+	const slug = branchName.replace(/^[^A-Za-z0-9]*/, '').slice(0, 2)
+	return slug.length > 0 ? slug.toUpperCase() : '·'
+}
+
 function colorNameForHex(hex: string): string {
 	// Parse to RGB
 	const r = Number.parseInt(hex.slice(1, 3), 16)

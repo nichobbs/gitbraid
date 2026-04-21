@@ -422,6 +422,12 @@
 					"default": "#4ec9b0",
 					"description": "Default hex color for newly added stack branches.",
 					"pattern": "^#[0-9a-fA-F]{6}$"
+				},
+				"gitbraid.maxSyncFileSizeKb": {
+					"type": "number",
+					"default": 10240,
+					"description": "Skip sync for files larger than this size (in KB). Set to 0 to disable the limit.",
+					"minimum": 0
 				}
 			}
 		}
