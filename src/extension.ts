@@ -10,10 +10,11 @@ import { BranchFileDecorationProvider } from './fileDecorationProvider'
 import { BranchScmProviderManager } from './branchScmProvider'
 import { BranchNode, BranchStackTreeProvider, FileNode, FloatingFileNode, FloatingStatusBarItem } from './branchStackTreeProvider'
 import { DiffEngine } from './diffEngine'
-import { HunkRouter } from './hunkRouter'
+import { HunkRouter, anchorFor } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
 import { StackResolver } from './stackResolver'
 import { StackContentProvider } from './stackContentProvider'
+import { FileChangeBus } from './fileChangeBus'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
@@ -151,7 +152,12 @@ export async function activate(context: vscode.ExtensionContext) {
 				if (!picked) {
 					return
 				}
-				await configService.setHunkAssignment(rel, hunkIndex, picked.label)
+				// Capture a stable anchor for this hunk so later edits that
+				// renumber the hunks don't silently apply the assignment to a
+				// different line range (T8).
+				const hunks = await diffEngine.getHunksForFile(workspaceRoot.fsPath, rel)
+				const anchor = hunks[hunkIndex] ? anchorFor(hunks[hunkIndex]) : undefined
+				await configService.setHunkAssignment(rel, hunkIndex, picked.label, anchor)
 				await vscode.window.showInformationMessage(`Hunk ${String(hunkIndex)} → ${picked.label}`)
 				await overlayDiagnostics.refreshForUri(uri)
 			}),
@@ -224,11 +230,20 @@ export async function activate(context: vscode.ExtensionContext) {
 				for (const entry of configService.getStack()) {
 					worktreeDirs.set(entry.name, branchStack.getWorktreePath(entry.name).fsPath)
 				}
+				// Collect stored anchors for the reconciler (T8).  Missing
+				// anchors are tolerated — those assignments fall back to the
+				// raw index.
+				const anchors = new Map<number, import('./configTypes').HunkAnchor>()
+				for (const idx of assignments.keys()) {
+					const a = configService.getHunkAnchor(rel, idx)
+					if (a) anchors.set(idx, a)
+				}
 				const ok = await hunkRouter.routeFile(
 					workspaceRoot.fsPath,
 					rel,
 					worktreeDirs,
 					assignments,
+					anchors,
 				)
 				if (ok) {
 					await configService.clearHunkAssignments(rel)
@@ -524,43 +539,27 @@ export async function activate(context: vscode.ExtensionContext) {
 	log.info('register worktreeView')
 	vscode.window.registerTreeDataProvider('gitbraid.worktreeView', api.worktreeView)
 
-	log.info('register filewatcher')
-	const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.workspace.workspaceFolders[0], '**/*'), false, true, false)
-	const watcherChange = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.workspace.workspaceFolders[0], '**/.git/index'), true, false, true)
-	context.subscriptions.push(watcher)
+	log.info('register filewatcher (FileChangeBus)')
+	// Collapsed watcher (T10): one FileSystemWatcher + domain events instead of
+	// three overlapping `**/*` watchers.  Downstream services keep their own
+	// watchers for now — this is only the legacy worktree-view refresh path.
+	const bus = new FileChangeBus(vscode.workspace.workspaceFolders[0].uri)
+	context.subscriptions.push(bus)
 
-	watcherChange.onDidChange(async (e) => {
-		if (e.scheme !== 'file') {
+	bus.onDidSavePrimary((e) => {
+		if (git.ignoreCache.includes(e.uri.fsPath)) {
 			return
 		}
-		const stat = await vscode.workspace.fs.stat(e).then((s) => { return s}, (e) => { return undefined })
-		if (!stat) {
-			return
-		}
-		if (stat.type == vscode.FileType.Directory) {
-			return
-		}
-		if (git.ignoreCache.includes(e.fsPath)) {
-			return
-		}
-		log.info('onDidChange: ' + e.fsPath + ' ' + stat.type)
-		const repoNode = nodeMaps.getWorktreeForUri(e)
-		return api.refresh(repoNode)
+		log.debug('bus.save: ' + e.relativePath)
+		void api.refreshUri(e.uri)
 	})
-	watcher.onDidCreate((e) => {
-		if (e.scheme !== 'file') { return }
-		log.info('onDidCreate: ' + e.fsPath)
-		return api.refreshUri(e)
-	})
-	watcher.onDidDelete(async (e) => {
-		if (e.scheme !== 'file') { return }
-		const ignore = await git.checkIgnore(e.fsPath)
-		if (ignore) {
+	bus.onDidDeletePrimary(async (e) => {
+		if (await git.checkIgnore(e.uri.fsPath)) {
 			return
 		}
-		const repoNode = nodeMaps.getWorktreeForUri(e)
-		log.info('onDidDelete: ' + e.fsPath)
-		return api.refresh(repoNode)
+		const repoNode = nodeMaps.getWorktreeForUri(e.uri)
+		log.debug('bus.delete: ' + e.relativePath)
+		void api.refresh(repoNode)
 	})
 	log.info('extension activation complete')
 	return mbcExportedApi

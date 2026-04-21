@@ -1,10 +1,26 @@
 import util from 'node:util'
 import child_process from 'node:child_process'
+import * as crypto from 'node:crypto'
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
 import { DiffEngine, DiffHunk } from './diffEngine'
+import type { HunkAnchor } from './configTypes'
 
 const exec = util.promisify(child_process.exec)
+
+/** Compute the 12-char body hash used by {@link HunkAnchor}. */
+export function hunkBodyHash(hunk: DiffHunk): string {
+	return crypto.createHash('sha1').update(hunk.patch).digest('hex').slice(0, 12)
+}
+
+/** Derive a fresh anchor from a live hunk. */
+export function anchorFor(hunk: DiffHunk): HunkAnchor {
+	return {
+		startLine: hunk.startLine,
+		endLine: hunk.endLine,
+		bodyHash: hunkBodyHash(hunk),
+	}
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -55,6 +71,7 @@ export class HunkRouter {
 		relativePath: string,
 		worktreeDirs: Map<string, string>,
 		assignments: HunkAssignment,
+		anchors?: Map<number, HunkAnchor>,
 	): Promise<boolean> {
 		if (assignments.size === 0) {
 			return true
@@ -66,8 +83,14 @@ export class HunkRouter {
 			return true
 		}
 
+		// Reconcile stored assignments against the live hunks via their anchors
+		// (T8).  Assignments with no anchor fall back to direct-index matching;
+		// anchored assignments locate their hunk by bodyHash (exact) or
+		// overlapping line range (best-effort fuzzy match).
+		const reconciled = this._reconcileAssignments(hunks, assignments, anchors)
+
 		// Reject overlapping assignments before touching any worktree
-		const overlaps = this.detectOverlaps(hunks, assignments)
+		const overlaps = this.detectOverlaps(hunks, reconciled)
 		if (overlaps.length > 0) {
 			const pairs = overlaps.map((o) => `hunks ${o.hunkA} & ${o.hunkB}`).join(', ')
 			log.error(`HunkRouter.routeFile: overlapping assignments detected — ${pairs}`)
@@ -80,7 +103,7 @@ export class HunkRouter {
 
 		// Group hunk indices by branch
 		const byBranch = new Map<string, DiffHunk[]>()
-		for (const [hunkIndex, branchName] of assignments) {
+		for (const [hunkIndex, branchName] of reconciled) {
 			const hunk = hunks[hunkIndex]
 			if (!hunk) {
 				log.error(`HunkRouter.routeFile: hunk index ${hunkIndex} out of range`)
@@ -144,6 +167,67 @@ export class HunkRouter {
 		}
 
 		return overlaps
+	}
+
+	/**
+	 * Reconcile a set of persisted hunk assignments against the live hunk list.
+	 *
+	 * Strategy per assignment:
+	 *   - No anchor stored → use the numeric index as-is (legacy pre-T8
+	 *     configs).
+	 *   - Anchor with matching `bodyHash` → re-target to the hunk carrying
+	 *     that hash, regardless of its current numeric index.
+	 *   - Anchor with no body-hash match → try a best-effort fuzzy match by
+	 *     line-range overlap.  A single unambiguous overlapper wins; multiple
+	 *     candidates are treated as ambiguous and the assignment is dropped
+	 *     with a log warning.
+	 *
+	 * Returns a new Map keyed by the resolved (live) hunk index.
+	 */
+	private _reconcileAssignments(
+		hunks: DiffHunk[],
+		assignments: HunkAssignment,
+		anchors: Map<number, HunkAnchor> | undefined,
+	): HunkAssignment {
+		if (!anchors || anchors.size === 0) {
+			return assignments
+		}
+
+		const hashIndex = new Map<string, DiffHunk>()
+		for (const h of hunks) {
+			hashIndex.set(hunkBodyHash(h), h)
+		}
+
+		const resolved = new Map<number, string>()
+		for (const [oldIndex, branch] of assignments) {
+			const anchor = anchors.get(oldIndex)
+			if (!anchor) {
+				// Legacy assignment — carry forward verbatim.
+				resolved.set(oldIndex, branch)
+				continue
+			}
+			// Exact bodyHash match — the hunk is unchanged, just renumbered.
+			const byHash = hashIndex.get(anchor.bodyHash)
+			if (byHash) {
+				resolved.set(byHash.index, branch)
+				continue
+			}
+			// Fuzzy: line-range overlap.  A hunk is a candidate if its
+			// new-file range intersects the anchor range.
+			const candidates = hunks.filter((h) =>
+				this._rangesOverlap(anchor.startLine, anchor.endLine, h.startLine, h.endLine),
+			)
+			if (candidates.length === 1) {
+				resolved.set(candidates[0].index, branch)
+				continue
+			}
+			log.warn(
+				`HunkRouter: dropping stale assignment for hunk index ${String(oldIndex)} (${branch}) — ` +
+				`${candidates.length === 0 ? 'no matching hunk' : `${String(candidates.length)} ambiguous candidates`} ` +
+				`at range ${String(anchor.startLine)}-${String(anchor.endLine)}.`,
+			)
+		}
+		return resolved
 	}
 
 	// ── Private helpers ────────────────────────────────────────────────────────

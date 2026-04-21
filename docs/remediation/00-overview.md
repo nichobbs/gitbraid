@@ -143,7 +143,14 @@ Annotated during execution. Checkpoint SHAs refer to the
 | T24 — single `.gitignore` writer | b14bf4c | Duplicate in `extension.ts` removed; single writer preserves CRLF/LF. |
 | T54 — `IGitRunner` seam | ce0a575 | Interface + `ProcessGitRunner` + `FakeGitRunner` + unit tests. |
 | T61 — CI workflow + ESLint config | ce0a575 | `.github/workflows/ci.yml` runs lint + build + test + vsce package on Linux / macOS / Windows. Minimal `.eslintrc.json` so the lint script finally works. |
-| T18 (partial) — spawn migration | (current) | `DiffEngine` and `StackResolver` now invoke git exclusively through `IGitRunner` (spawn, shell:false). Injection payloads traverse as argv without a shell ever existing. `RebaseSuggestionService`, `BranchStackService`, `MbcApi`, `BranchScmProviderManager` still on the exec path — subsequent commits. |
+| T18 — spawn migration | 9bb9a96 / 92aee1c | Complete. `DiffEngine`, `StackResolver`, `RebaseSuggestionService`, `BranchStackService._worktreeIsDirty`, `MbcApi`, and `BranchScmProviderManager` all use `IGitRunner` (spawn, shell:false). Injection payloads traverse as argv. |
+| T21 — config optimistic-concurrency | 92aee1c | `_writeToDisk` detects concurrent writes via mtime, reloads, merges via `mergeConfigs`, retries up to 3 times, then throws. |
+| T12 — stack content provider | a2b4322 | New `src/stackContentProvider.ts` + `gitbraid.openResolvedAtTop` + `gitbraid.showStackDiff` commands. |
+| T13 — bidirectional sync | a2b4322 | Opt-in `gitbraid.bidirectionalSync` setting; per-file generation counter breaks ping-pong loops. |
+| T17 — drag-and-drop | a2b4322 | `BranchStackTreeProvider` is a `TreeDragAndDropController`. File → branch reassigns; file → floating unassigns; branch → branch reorders; Explorer drops accepted. |
+| T57 — debounce fake-timer tests | a2b4322 | New `test/workspaceSync.debounce.test.ts` covers `syncDebounceMs` and the defer-during-sync path. |
+| T8 — stable hunk identifiers | (current) | `HunkAnchor` persisted alongside `HunkAssignment`. `HunkRouter.routeFile` reconciles by `bodyHash` (exact) or line-range overlap (fuzzy) before applying. Schema version bumped to 2 with backwards-compatible migration. |
+| T10 — shared FileChangeBus | (current) | `src/fileChangeBus.ts` collapses the duplicate `**/*` watchers in `extension.ts` into one broadcaster emitting `onDidSavePrimary` / `onDidDeletePrimary` / `onDidChangeWorktree` / `onDidAnyFileChange`. |
 | T2 — gitExec stderr popup | 6cb9fcc | stderr logged at debug on success, error only on non-zero exit. |
 | T3 — discardChanges data-loss | 6cb9fcc | Tracked files restored via `git checkout HEAD --`, untracked via `clean -f`. |
 | T5 — activationEvents malformed | 6cb9fcc | Replaced by `workspaceContains:.git` / `.worktrees/local-config.json`; no-workspace case early-returns. |
@@ -176,16 +183,17 @@ Annotated during execution. Checkpoint SHAs refer to the
 
 ### Still to land
 
-- Core remaining P1: T8 (hunk identifier stability), T10 (shared
-  FileChangeBus), T11 full (tree-view reconciliation), T12 (StackResolver
-  wired to a content provider), T13 (bidirectional sync), T16 (walkthrough
-  PNGs), T17 (drag-and-drop on stack tree).
-- Security: T18 (full spawn migration — IGitRunner is the substrate,
-  callers still need migrating), T21 (optimistic-concurrency merge on
-  config writes — currently warns, doesn't retry).
-- Testing: T55 (per-suite tmp workspaces), T56 (integration suite),
-  T57 (fake timers for debounce / interval tests), coverage-floor
-  enforcement in CI.
+- T11 (full tree-view reconciliation — retire the legacy worktree
+  view or drive it from the same data model).
+- T16 (walkthrough PNGs — asset capture).
+- T55 (per-suite tmp workspaces for integration tests).
+- T56 (integration suite backed by the `IGitRunner` against a real
+  tmp repo).
+- Migrate downstream consumers (`BranchScmProviderManager`,
+  `BranchStackTreeProvider`, `BranchFileDecorationProvider`) off
+  their own event subscriptions onto the new `FileChangeBus`.
+- Coverage-floor enforcement in CI (threshold configured but not
+  yet enforced).
 - Remainder of P2/P3 per `10-sequencing.md`.
 
 ## Acceptance

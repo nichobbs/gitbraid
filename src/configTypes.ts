@@ -5,7 +5,7 @@
  * committed to the repository — it is personal working state.
  */
 
-export const CONFIG_SCHEMA_VERSION = 1
+export const CONFIG_SCHEMA_VERSION = 2
 
 /** A single entry in the ordered branch stack. */
 export interface BranchStackEntry {
@@ -39,6 +39,31 @@ export type AssignmentMap = Record<string, string>
  */
 export type HunkAssignmentMap = Record<string, Record<string, string>>
 
+/**
+ * Stable positional anchors for hunk assignments.
+ *
+ * The bare integer index kept in {@link HunkAssignmentMap} is fragile: any
+ * edit that splits, merges, or renumbers hunks shifts the indices and the
+ * persisted assignment silently starts pointing at different lines.
+ *
+ * On every `setHunkAssignment` we also record the hunk's line range and a
+ * short SHA of its body so the router can reconcile the assignment against
+ * the live diff at route time.  See remediation T8.
+ *
+ * Outer key: relative path.  Inner key: same hunk-index string used in
+ * `HunkAssignmentMap` so the two maps stay in lockstep.
+ */
+export type HunkAnchorMap = Record<string, Record<string, HunkAnchor>>
+
+export interface HunkAnchor {
+	/** 1-based start line in the new (current) file. */
+	startLine: number
+	/** 1-based inclusive end line; -1 or `startLine - 1` for pure deletions. */
+	endLine: number
+	/** SHA1 of the hunk header + body (first 12 chars) captured at set time. */
+	bodyHash: string
+}
+
 /** Root structure of `.worktrees/local-config.json`. */
 export interface BranchConfig {
 	version: number
@@ -46,6 +71,8 @@ export interface BranchConfig {
 	assignments: AssignmentMap
 	/** Hunk-level assignments — present only when the user has assigned individual hunks. */
 	hunkAssignments?: HunkAssignmentMap
+	/** Stable positional anchors accompanying `hunkAssignments` — T8. */
+	hunkAnchors?: HunkAnchorMap
 }
 
 // ─── Runtime status types ────────────────────────────────────────────────────
@@ -91,6 +118,7 @@ export function emptyConfig(): BranchConfig {
 		stack: [],
 		assignments: {},
 		hunkAssignments: {},
+		hunkAnchors: {},
 	}
 }
 
@@ -141,6 +169,13 @@ export function migrateConfig(config: BranchConfig): BranchConfig {
 	// Ensure hunkAssignments object exists
 	if (!config.hunkAssignments) {
 		config.hunkAssignments = {}
+	}
+	// v1 → v2: introduce hunkAnchors.  Pre-existing hunk assignments carry
+	// no anchor yet; they'll be treated as stale by the reconciler until the
+	// user re-assigns them.  Safe default — routing simply warns rather than
+	// applying them to the wrong lines.
+	if (!config.hunkAnchors) {
+		config.hunkAnchors = {}
 	}
 	config.version = CONFIG_SCHEMA_VERSION
 	return config

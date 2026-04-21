@@ -7,6 +7,7 @@ import {
 	AssignmentChangeEvent,
 	BranchConfig,
 	BranchStackEntry,
+	HunkAnchor,
 	StackChangeEvent,
 	emptyConfig,
 	isValidConfig,
@@ -157,8 +158,21 @@ export class ConfigService implements vscode.Disposable {
 
 	// ─── Hunk assignment mutations ────────────────────────────────────────────
 
-	/** Assign a specific hunk index in a file to a branch. */
-	async setHunkAssignment(relativePath: string, hunkIndex: number, branch: string): Promise<void> {
+	/**
+	 * Assign a specific hunk index in a file to a branch.
+	 *
+	 * The optional {@link HunkAnchor} captures the hunk's line range and body
+	 * hash so the router can reconcile the assignment against the live diff
+	 * at route time — even if subsequent edits have renumbered the hunks.
+	 * Callers that can't compute an anchor (e.g. hand-rolled tests) may
+	 * omit it; the router will treat the assignment as unanchored.
+	 */
+	async setHunkAssignment(
+		relativePath: string,
+		hunkIndex: number,
+		branch: string,
+		anchor?: HunkAnchor,
+	): Promise<void> {
 		const key = normalisePath(relativePath)
 		if (!this._config.stack.some((e) => e.name === branch)) {
 			throw new ConfigError(`Branch "${branch}" is not in the stack`)
@@ -170,8 +184,25 @@ export class ConfigService implements vscode.Disposable {
 			this._config.hunkAssignments[key] = {}
 		}
 		this._config.hunkAssignments[key][String(hunkIndex)] = branch
+
+		if (anchor) {
+			if (!this._config.hunkAnchors) {
+				this._config.hunkAnchors = {}
+			}
+			if (!this._config.hunkAnchors[key]) {
+				this._config.hunkAnchors[key] = {}
+			}
+			this._config.hunkAnchors[key][String(hunkIndex)] = anchor
+		}
+
 		await this._writeToDisk()
 		this._onDidChangeAssignment.fire({ relativePath: key, branch, previousBranch: undefined })
+	}
+
+	/** Retrieve the anchor for a specific hunk assignment, if one was stored. */
+	getHunkAnchor(relativePath: string, hunkIndex: number): HunkAnchor | undefined {
+		const key = normalisePath(relativePath)
+		return this._config.hunkAnchors?.[key]?.[String(hunkIndex)]
 	}
 
 	/** Remove the assignment for a specific hunk index in a file. */
@@ -185,6 +216,15 @@ export class ConfigService implements vscode.Disposable {
 		if (Object.keys(fileHunks).length === 0 && this._config.hunkAssignments) {
 			delete this._config.hunkAssignments[key]
 		}
+
+		const fileAnchors = this._config.hunkAnchors?.[key]
+		if (fileAnchors) {
+			delete fileAnchors[String(hunkIndex)]
+			if (Object.keys(fileAnchors).length === 0 && this._config.hunkAnchors) {
+				delete this._config.hunkAnchors[key]
+			}
+		}
+
 		await this._writeToDisk()
 		this._onDidChangeAssignment.fire({ relativePath: key, branch: undefined, previousBranch: undefined })
 	}
@@ -192,8 +232,16 @@ export class ConfigService implements vscode.Disposable {
 	/** Remove all hunk assignments for a file. */
 	async clearHunkAssignments(relativePath: string): Promise<void> {
 		const key = normalisePath(relativePath)
+		let changed = false
 		if (this._config.hunkAssignments?.[key]) {
 			delete this._config.hunkAssignments[key]
+			changed = true
+		}
+		if (this._config.hunkAnchors?.[key]) {
+			delete this._config.hunkAnchors[key]
+			changed = true
+		}
+		if (changed) {
 			await this._writeToDisk()
 			this._onDidChangeAssignment.fire({ relativePath: key, branch: undefined, previousBranch: undefined })
 		}
