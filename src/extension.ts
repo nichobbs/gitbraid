@@ -10,6 +10,9 @@ import { WorkspaceSync } from './workspaceSync'
 import { BranchFileDecorationProvider } from './fileDecorationProvider'
 import { BranchScmProviderManager } from './branchScmProvider'
 import { BranchStackTreeProvider, FloatingStatusBarItem } from './branchStackTreeProvider'
+import { DiffEngine } from './diffEngine'
+import { HunkRouter } from './hunkRouter'
+import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
 
 export const api = new MultiBranchCheckoutAPI()
 
@@ -56,7 +59,22 @@ export async function activate(context: vscode.ExtensionContext) {
 	const statusBar = new FloatingStatusBarItem(workspaceSync, configService)
 	context.subscriptions.push(statusBar)
 
-	// ── Phase 2 commands ───────────────────────────────────────────────────────
+	// ─── Phase 3: Chunk-Level Assignment ──────────────────────────────────────
+	const diffEngine = new DiffEngine()
+	const hunkRouter = new HunkRouter(diffEngine)
+	const hunkCodeLens = new HunkCodeLensProvider(diffEngine, configService)
+	const overlayDiagnostics = new OverlayDiagnostics(diffEngine, configService)
+
+	context.subscriptions.push(
+		hunkCodeLens,
+		overlayDiagnostics,
+		vscode.languages.registerCodeLensProvider(
+			{ scheme: 'file', pattern: '**' },
+			hunkCodeLens,
+		),
+	)
+
+	// ── Phase 2 & 3 commands ──────────────────────────────────────────────────
 	commands.push(
 		vscode.commands.registerCommand('multi-branch-checkout.stackView.refresh', () => stackTreeProvider.refresh()),
 
@@ -73,6 +91,59 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('multi-branch-checkout.scm.refreshAll', () => {
 			void scmManager.refreshAll()
 		}),
+
+		vscode.commands.registerCommand(
+			'multi-branch-checkout.assignHunk',
+			async (uri: vscode.Uri, hunkIndex: number) => {
+				const rel = vscode.workspace.asRelativePath(uri, false)
+				const stack = configService.getStack()
+				if (stack.length === 0) {
+					await vscode.window.showWarningMessage('No branches in the stack. Add a branch first.')
+					return
+				}
+				const picked = await vscode.window.showQuickPick(
+					stack.map((e) => ({ label: e.name, description: e.color })),
+					{ placeHolder: `Assign hunk ${String(hunkIndex)} to branch` },
+				)
+				if (!picked) {
+					return
+				}
+				await configService.setHunkAssignment(rel, hunkIndex, picked.label)
+				await vscode.window.showInformationMessage(`Hunk ${String(hunkIndex)} → ${picked.label}`)
+				await overlayDiagnostics.refreshForUri(uri)
+			},
+		),
+
+		vscode.commands.registerCommand(
+			'multi-branch-checkout.routeHunks',
+			async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('No file active to route hunks for.')
+					return
+				}
+				const rel = vscode.workspace.asRelativePath(target, false)
+				const assignments = configService.getHunkAssignments(rel)
+				if (!assignments || assignments.size === 0) {
+					await vscode.window.showInformationMessage('No hunk assignments found for this file.')
+					return
+				}
+				const worktreeDirs = new Map<string, string>()
+				for (const entry of configService.getStack()) {
+					worktreeDirs.set(entry.name, branchStack.getWorktreePath(entry.name).fsPath)
+				}
+				const ok = await hunkRouter.routeFile(
+					workspaceRoot.fsPath,
+					rel,
+					worktreeDirs,
+					assignments,
+				)
+				if (ok) {
+					await configService.clearHunkAssignments(rel)
+					await vscode.window.showInformationMessage(`Routed hunks for ${rel} successfully.`)
+				}
+			},
+		),
 	)
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
