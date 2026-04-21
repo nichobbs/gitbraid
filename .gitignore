@@ -11,5 +11,5 @@ build/
 *.vsix
 test_projects/proj1/src/
 
-## added by vscode extension 'kherring.multi-branch-checkout'
+## added by vscode extension 'nichobbs.gitbraid'
 .worktrees/
