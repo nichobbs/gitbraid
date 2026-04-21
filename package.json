@@ -285,6 +285,17 @@
 					"group": "navigation"
 				}
 			],
+			"explorer/context": [
+				{
+					"command": "gitbraid.assignFile",
+					"group": "gitbraid@1"
+				},
+				{
+					"command": "gitbraid.unassignFile",
+					"when": "!explorerResourceIsFolder",
+					"group": "gitbraid@2"
+				}
+			],
 			"view/item/context": [
 				{
 					"command": "gitbraid.compareTo",
