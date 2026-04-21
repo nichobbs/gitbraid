@@ -167,6 +167,23 @@ export class MbcApi implements GitBraidExportedAPI {
 		log.info(`MbcApi.stageBranch: staged in "${branch}"`)
 	}
 
+	// ── API parity with internal services ─────────────────────────────────────
+
+	/** Reorder branches in the stack by providing the desired name sequence. */
+	async reorderStack(orderedNames: string[]): Promise<void> {
+		await this._branchStack.reorderStack(orderedNames)
+	}
+
+	/** Retrieve the hunk assignments for a file (hunkIndex → branchName). */
+	getHunkAssignments(relativePath: string): Map<number, string> | undefined {
+		return this._config.getHunkAssignments(relativePath)
+	}
+
+	/** Remove a single hunk assignment. */
+	async removeHunkAssignment(relativePath: string, hunkIndex: number): Promise<void> {
+		await this._config.removeHunkAssignment(relativePath, hunkIndex)
+	}
+
 	// ── Events ────────────────────────────────────────────────────────────────
 
 	get onDidChangeAssignment(): vscode.Event<AssignmentChangeEvent> {
@@ -175,5 +192,13 @@ export class MbcApi implements GitBraidExportedAPI {
 
 	get onDidChangeStack(): vscode.Event<StackChangeEvent> {
 		return this._config.onDidChangeStack
+	}
+
+	get onDidSyncFile(): vscode.Event<{ relativePath: string, branch: string }> {
+		return this._sync.onDidSyncFile
+	}
+
+	get onDidFloatFile(): vscode.Event<{ relativePath: string }> {
+		return this._sync.onDidFloatFile
 	}
 }

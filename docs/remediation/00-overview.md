@@ -125,6 +125,61 @@ and `docs/reviews/security.md` with the named-set additions folded in:
    a `RESOLVED in <commit>` header so future contributors don't re-open
    them.
 
+## Status dashboard
+
+Annotated during execution. Checkpoint SHAs refer to the
+`claude/code-review-remediation-ro7uo` branch.
+
+### Landed
+
+| Task | Checkpoint | Notes |
+| --- | --- | --- |
+| T1 — DiffEngine quote-escape no-op | 6cb9fcc / 8f68e91 | Metachar reject; full spawn migration still on plan. |
+| T2 — gitExec stderr popup | 6cb9fcc | stderr logged at debug on success, error only on non-zero exit. |
+| T3 — discardChanges data-loss | 6cb9fcc | Tracked files restored via `git checkout HEAD --`, untracked via `clean -f`. |
+| T5 — activationEvents malformed | 6cb9fcc | Replaced by `workspaceContains:.git` / `.worktrees/local-config.json`; no-workspace case early-returns. |
+| T6 — revList/branch undefined | 6cb9fcc | Methods return real strings/numbers. |
+| T7 — Publisher/id normalisation | 6cb9fcc | Canonical spelling `nichobbs` applied across package.json, README, LICENSE, tests, gitignore stamp. |
+| T11 (partial) — dead code removal | 8f68e91 | Commented `patchToWorktree` block and three unused error types deleted. |
+| T14 — defer saves during sync | pre-existing | Already implemented; verified. |
+| T15 (pending) — LM tool declarations | — | Still TODO: requires adding `contributes.languageModelTools` entries. |
+| T27 — toUri Windows paths | 6cb9fcc | Regex now accepts both `C:\foo` and `C:/foo`. |
+| T28 — log.notification double-fire | 6cb9fcc | Single showInformationMessage call; disabled path short-circuits. |
+| T29 — Logger.getInstance singleton | 6cb9fcc | Idempotent; resetForTest added. |
+| T30 — getCallerSourceLine cost | 6cb9fcc | Gated behind Debug log level. |
+| T31 (partial) — typed errors | 8f68e91 | `MbcApi.commitBranch` throws `GitError`; unused types removed; `GitBraidError` union exported. |
+| T32 — Promise.allSettled | 78b7ebf | `BranchScmProviderManager._refreshAll` switched. |
+| T33 — rebase dialog await | e172305 | Flat `const choice = await …` pattern. |
+| T37 — addStackBranch QuickPick polish | 78b7ebf | Groups + top "new branch" item + no default-to-main on Escape. |
+| T39 — ignored user settings | 78b7ebf | `syncDebounceMs`, `prDecorationsEnabled`, `showFloatingWarningOnCommit`, `maxSyncFileSizeKb` all wired. |
+| T41 — FloatingStatusBarItem hiding | 8f68e91 | Hides when stack empty or count zero. |
+| T42 — CodeLens containment + unassign | e172305 | Path split-segment check; new `gitbraid.unassignHunk` command + lens. |
+| T52 — file-size guard on sync | 78b7ebf | New `gitbraid.maxSyncFileSizeKb` setting. |
+| T63 — overlap detection wired | pre-existing | Already wired in hunkRouter.routeFile; confirmed. |
+| T64 — zero-line hunk endLine | 6cb9fcc | Now returns `startLine − 1` so overlap detection is correct. |
+| T65 — remote branch listing | 6cb9fcc | Keeps non-`origin/` remote prefixes. |
+| T72 (partial) — API surface symmetry | e172305 | Added reorderStack, getHunkAssignments, removeHunkAssignment, onDidSyncFile, onDidFloatFile. |
+| T73 — default branch detection | 78b7ebf | `detectDefaultBranch()` replaces hard-coded `main`. |
+| T74 — branch-already-checked-out | 78b7ebf | Surfaced before `git worktree add` runs. |
+| T76–T78 (partial) — manifest | e172305 | Publisher, capabilities, extensionKind, activation events, categories. |
+| Redaction for git command logs | 6cb9fcc | `redactCredentials`/`redactGitError` scrub user:token@ URLs + PATs. |
+| Config cross-window concurrency warn | e172305 | mtime observed at read time; write checks for external modification. |
+
+### Still to land
+
+- Core remaining P0/P1: T8 (hunk identifier stability), T9 (injective dir
+  names), T10 (shared FileChangeBus), T11 full (tree-view reconciliation),
+  T12 (StackResolver wired to a content provider), T13 (bidirectional sync),
+  T15 (LM tools declared in manifest), T16 (walkthrough PNGs), T17
+  (drag-and-drop on stack tree).
+- Security: T18 (full spawn migration), T19 (`git check-ref-format`),
+  T20 (path-containment helper), T21 (optimistic-concurrency merge),
+  T23 (workspace-trust runtime gating — capability declared, runtime
+  gating still TODO), T24 (single `.gitignore` writer).
+- Testing: T54 (`IGitRunner`), T55 (per-suite tmp workspaces),
+  T56 (integration suite), T57 (fake timers), T61 (CI + coverage floor).
+- Remainder of P2/P3 per `10-sequencing.md`.
+
 ## Acceptance
 
 This plan is "done" when:
