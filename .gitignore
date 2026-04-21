@@ -1,0 +1,14 @@
+.vscode-test/
+node_modules/
+artifacts/
+coverage/
+dist/
+build/
+*.log
+*.tsbuildinfo
+*.env
+*.env.local
+*.vsix
+
+## added by vscode extension 'kherring.multi-branch-checkout'
+.worktrees/

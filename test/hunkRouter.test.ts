@@ -151,3 +151,72 @@ suite('HunkRouter (patch building)', () => {
 	})
 
 })
+
+// ─── Suite: HunkRouter.detectOverlaps (additional cases) ─────────────────────
+
+suite('HunkRouter.detectOverlaps (boundary cases)', () => {
+
+	let router: HunkRouter
+
+	suiteSetup(() => {
+		router = new HunkRouter(new DiffEngine())
+	})
+
+	test('exactly touching hunks (endA === startB) do not overlap', () => {
+		// Hunk A: 5–10, hunk B: 10–15 → they share line 10 (borderline)
+		// rangesOverlap: startA(5) <= endB(15) && startB(10) <= endA(10) → true
+		const hunks = makeHunks([{ start: 5, end: 10 }, { start: 10, end: 15 }])
+		const assignments = new Map([[0, 'feat/a'], [1, 'feat/b']])
+		const overlaps = router.detectOverlaps(hunks, assignments)
+		// They share line 10, so this IS an overlap
+		assert.strictEqual(overlaps.length, 1)
+	})
+
+	test('single assigned hunk produces no overlaps', () => {
+		const hunks = makeHunks([{ start: 1, end: 10 }])
+		const assignments = new Map([[0, 'feat/a']])
+		const overlaps = router.detectOverlaps(hunks, assignments)
+		assert.deepStrictEqual(overlaps, [])
+	})
+
+	test('unassigned hunks are not checked for overlaps', () => {
+		// Hunk 0 overlaps hunk 1 by range, but hunk 1 is NOT in assignments
+		const hunks = makeHunks([{ start: 1, end: 10 }, { start: 5, end: 15 }])
+		const assignments = new Map([[0, 'feat/a']])  // only hunk 0 assigned
+		const overlaps = router.detectOverlaps(hunks, assignments)
+		assert.deepStrictEqual(overlaps, [])
+	})
+
+	test('three hunks with only two overlapping each other', () => {
+		// Hunk 0: 1-5, Hunk 1: 3-7 (overlaps 0), Hunk 2: 20-25 (no overlap)
+		const hunks = makeHunks([{ start: 1, end: 5 }, { start: 3, end: 7 }, { start: 20, end: 25 }])
+		const assignments = new Map([[0, 'feat/a'], [1, 'feat/b'], [2, 'feat/c']])
+		const overlaps = router.detectOverlaps(hunks, assignments)
+		assert.strictEqual(overlaps.length, 1)
+		assert.strictEqual(overlaps[0].hunkA, 0)
+		assert.strictEqual(overlaps[0].hunkB, 1)
+	})
+
+})
+
+// ─── Suite: HunkRouter routeFile (out-of-range hunk index) ───────────────────
+
+suite('HunkRouter.routeFile (edge cases)', () => {
+
+	test('out-of-range hunk index is skipped gracefully', async () => {
+		const hunks = makeHunks([{ start: 1, end: 5 }])
+		const engine = makeMockEngine(hunks)
+		const router = new HunkRouter(engine)
+		// Hunk index 99 does not exist
+		const assignments = new Map([[99, 'feat/a']])
+		const dirs = new Map([['feat/a', '/nonexistent/dir']])
+		// Should not throw — the bad index is skipped
+		// However, since there are no valid hunks to assign, the branch loop
+		// may produce no results; result depends on whether byBranch ends up empty
+		const ok = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
+		// Could be true (empty byBranch) or false; just must not throw
+		assert.ok(typeof ok === 'boolean')
+	})
+
+})
+

@@ -85,7 +85,7 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 			)
 			return new vscode.CodeLens(range, {
 				title,
-				command: 'multi-branch-checkout.assignHunk',
+				command: 'gitbraid.assignHunk',
 				arguments: [document.uri, hunk.index],
 				tooltip: `Lines ${String(hunk.startLine)}–${String(hunk.endLine)}: ${assignedBranch ?? 'unassigned'}`,
 			})
@@ -135,7 +135,7 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 export class OverlayDiagnostics implements vscode.Disposable {
 
 	private readonly _collection =
-		vscode.languages.createDiagnosticCollection('multi-branch-checkout')
+		vscode.languages.createDiagnosticCollection('gitbraid')
 
 	private readonly _disposables: vscode.Disposable[] = []
 
@@ -187,7 +187,7 @@ export class OverlayDiagnostics implements vscode.Disposable {
 				`Hunk ${String(o.hunkA)} and hunk ${String(o.hunkB)} are assigned to different branches but overlap on line ${String(line + 1)}.`,
 				vscode.DiagnosticSeverity.Warning,
 			)
-			diag.source = 'multi-branch-checkout'
+			diag.source = 'gitbraid'
 			return diag
 		})
 

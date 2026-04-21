@@ -74,7 +74,7 @@ export class FloatingFileNode extends vscode.TreeItem {
 // ─── Tree data provider ───────────────────────────────────────────────────────
 
 /**
- * Drives the "Branch Stack" tree view (`multi-branch-checkout.stackView`).
+ * Drives the "Branch Stack" tree view (`gitbraid.stackView`).
  *
  * Tree structure:
  * ```
@@ -183,7 +183,7 @@ export class FloatingStatusBarItem implements vscode.Disposable {
 			vscode.StatusBarAlignment.Left,
 			100,
 		)
-		this._item.command = 'multi-branch-checkout.focusStackView'
+		this._item.command = 'gitbraid.focusStackView'
 		this._item.name = 'MBC Floating Files'
 
 		this._disposables.push(

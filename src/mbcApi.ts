@@ -6,7 +6,7 @@ import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
 import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry, BranchStatus, StackStatus, AssignmentChangeEvent, StackChangeEvent } from './configTypes'
-import type { MultiBranchCheckoutExportedAPI, BranchOptions, CommitOptions } from './@types/MultiBranchCheckoutAPI'
+import type { GitBraidExportedAPI, BranchOptions, CommitOptions } from './@types/GitBraidAPI'
 
 const execAsync = node_util.promisify(node_child_process.exec)
 
@@ -36,12 +36,12 @@ async function _gitStatus(worktreeDir: string): Promise<WorktreeFileStatus[]> {
 // ─── MbcApi ───────────────────────────────────────────────────────────────────
 
 /**
- * Implements the full exported `MultiBranchCheckoutExportedAPI`.
+ * Implements the full exported `GitBraidExportedAPI`.
  *
  * This object is returned by `activate()` and can be obtained by other
  * extensions via `vscode.extensions.getExtension(...).exports`.
  */
-export class MbcApi implements MultiBranchCheckoutExportedAPI {
+export class MbcApi implements GitBraidExportedAPI {
 
 	constructor(
 		private readonly _config: ConfigService,

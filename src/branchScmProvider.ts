@@ -74,7 +74,7 @@ class BranchScmEntry implements vscode.Disposable {
 		)
 		this._sc.inputBox.placeholder = `Commit to ${_entry.name} (message)`
 		this._sc.acceptInputCommand = {
-			command: 'multi-branch-checkout.scm.commitBranch',
+			command: 'gitbraid.scm.commitBranch',
 			title: 'Commit',
 			arguments: [_entry.name],
 		}

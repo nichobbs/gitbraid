@@ -254,4 +254,136 @@ suite('ConfigService', () => {
 		assert.strictEqual(stack[1].name, 'feature/docs')
 		assert.strictEqual(stack[1].order, 2)
 	})
+
+	test('reorderStack: fires onDidChangeStack with reorder type', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#fff', base: 'main' })
+		await svc.addBranch({ name: 'feature/b', color: '#fff', base: 'feature/a' })
+		const events: Array<{ type: string; branch: string }> = []
+		svc.onDidChangeStack((e) => events.push({ type: e.type, branch: e.branch }))
+		await svc.reorderStack(['feature/b', 'feature/a'])
+		assert.strictEqual(events.length, 1)
+		assert.strictEqual(events[0].type, 'reorder')
+	})
+
+	// ── Hunk assignments ──────────────────────────────────────────────────────
+
+	test('getHunkAssignments: returns undefined when no hunk assignments exist', async () => {
+		await svc.load(wsRoot())
+		const result = svc.getHunkAssignments('src/foo.ts')
+		assert.strictEqual(result, undefined)
+	})
+
+	test('setHunkAssignment: stores assignment and can be retrieved', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		await svc.setHunkAssignment('src/foo.ts', 0, 'feature/docs')
+		const result = svc.getHunkAssignments('src/foo.ts')
+		assert.ok(result instanceof Map)
+		assert.strictEqual(result.get(0), 'feature/docs')
+	})
+
+	test('setHunkAssignment: stores multiple hunks for the same file', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		await svc.addBranch({ name: 'feature/impl', color: '#aaa', base: 'feature/docs' })
+		await svc.setHunkAssignment('src/foo.ts', 0, 'feature/docs')
+		await svc.setHunkAssignment('src/foo.ts', 1, 'feature/impl')
+		const result = svc.getHunkAssignments('src/foo.ts')
+		assert.ok(result instanceof Map)
+		assert.strictEqual(result.get(0), 'feature/docs')
+		assert.strictEqual(result.get(1), 'feature/impl')
+	})
+
+	test('setHunkAssignment: throws ConfigError for unknown branch', async () => {
+		await svc.load(wsRoot())
+		await assert.rejects(
+			() => svc.setHunkAssignment('src/foo.ts', 0, 'nonexistent'),
+			(e: Error) => e.constructor.name === 'ConfigError',
+		)
+	})
+
+	test('setHunkAssignment: fires onDidChangeAssignment event', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		const events: string[] = []
+		svc.onDidChangeAssignment((e) => events.push(e.relativePath))
+		await svc.setHunkAssignment('src/bar.ts', 2, 'feature/docs')
+		assert.strictEqual(events.length, 1)
+		assert.strictEqual(events[0], 'src/bar.ts')
+	})
+
+	test('removeHunkAssignment: removes a specific hunk assignment', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		await svc.setHunkAssignment('src/foo.ts', 0, 'feature/docs')
+		await svc.setHunkAssignment('src/foo.ts', 1, 'feature/docs')
+		await svc.removeHunkAssignment('src/foo.ts', 0)
+		const result = svc.getHunkAssignments('src/foo.ts')
+		assert.ok(result instanceof Map)
+		assert.strictEqual(result.has(0), false)
+		assert.strictEqual(result.get(1), 'feature/docs')
+	})
+
+	test('removeHunkAssignment: removes file entry when last hunk removed', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		await svc.setHunkAssignment('src/foo.ts', 0, 'feature/docs')
+		await svc.removeHunkAssignment('src/foo.ts', 0)
+		const result = svc.getHunkAssignments('src/foo.ts')
+		assert.strictEqual(result, undefined)
+	})
+
+	test('removeHunkAssignment: no-op for file with no hunk assignments', async () => {
+		await svc.load(wsRoot())
+		// Should not throw
+		await svc.removeHunkAssignment('src/nonexistent.ts', 0)
+	})
+
+	test('clearHunkAssignments: removes all hunks for a file', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		await svc.setHunkAssignment('src/foo.ts', 0, 'feature/docs')
+		await svc.setHunkAssignment('src/foo.ts', 1, 'feature/docs')
+		await svc.clearHunkAssignments('src/foo.ts')
+		const result = svc.getHunkAssignments('src/foo.ts')
+		assert.strictEqual(result, undefined)
+	})
+
+	test('clearHunkAssignments: no-op when no hunk assignments', async () => {
+		await svc.load(wsRoot())
+		// Should not throw
+		await svc.clearHunkAssignments('src/nothing.ts')
+	})
+
+	test('getHunkAssignedFiles: returns paths of files with hunk assignments', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		await svc.setHunkAssignment('src/a.ts', 0, 'feature/docs')
+		await svc.setHunkAssignment('src/b.ts', 1, 'feature/docs')
+		const files = svc.getHunkAssignedFiles()
+		assert.ok(files.includes('src/a.ts'))
+		assert.ok(files.includes('src/b.ts'))
+	})
+
+	test('getHunkAssignedFiles: returns empty array when no hunk assignments', async () => {
+		await svc.load(wsRoot())
+		const files = svc.getHunkAssignedFiles()
+		assert.deepStrictEqual(files, [])
+	})
+
+	test('hunk assignments persist across reload', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
+		await svc.setHunkAssignment('src/foo.ts', 0, 'feature/docs')
+
+		// Reload in fresh instance
+		ConfigService.resetInstance()
+		const svc2 = ConfigService.getInstance()
+		await svc2.load(wsRoot())
+		const result = svc2.getHunkAssignments('src/foo.ts')
+		assert.ok(result instanceof Map)
+		assert.strictEqual(result.get(0), 'feature/docs')
+		svc2.dispose()
+	})
 })

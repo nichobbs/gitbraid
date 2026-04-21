@@ -93,7 +93,7 @@ export class HunkRouter {
 			if (!success) {
 				allSucceeded = false
 				await vscode.window.showErrorMessage(
-					`multi-branch-checkout: failed to apply ${branchHunks.length} hunk(s) to "${branchName}". ` +
+					`gitbraid: failed to apply ${branchHunks.length} hunk(s) to "${branchName}". ` +
 					'Check the Output panel for details.',
 				)
 			}

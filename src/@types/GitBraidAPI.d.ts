@@ -1,6 +1,6 @@
-// MultiBranchCheckoutAPI.d.ts
+// GitBraidAPI.d.ts
 //
-// The exported surface of the multi-branch-checkout extension.
+// The exported surface of the gitbraid extension.
 // Other extensions and AI tools interact with the extension through this API.
 
 import * as vscode from 'vscode'
@@ -22,7 +22,7 @@ export interface CommitOptions {
 
 // ─── Full extension API ───────────────────────────────────────────────────────
 
-export interface MultiBranchCheckoutExportedAPI {
+export interface GitBraidExportedAPI {
 	// ── Stack management ──────────────────────────────────────────────────────
 
 	/** Returns the current stack entries sorted by order (base first). */

@@ -33,7 +33,7 @@
 		"color": "#007ACC",
 		"theme": "dark"
 	},
-	"icon": "resources/icon.svg",
+	"icon": "resources/icon.png",
 	"engines": {
 		"vscode": "^1.94.0"
 	},
@@ -51,32 +51,32 @@
 	"contributes": {
 		"walkthroughs": [
 			{
-				"id": "multi-branch-checkout.getStarted",
+				"id": "gitbraid.getStarted",
 				"title": "Get Started with Multi-Branch Checkout",
 				"description": "Learn how to use branch stacking to manage parallel work.",
 				"steps": [
 					{
 						"id": "addBranch",
 						"title": "Add a branch to the stack",
-						"description": "Build a stack of related branches. Run the Add Stack Branch command to create a worktree-backed branch on top of an existing one.\n\n[Add Stack Branch](command:multi-branch-checkout.addStackBranch)",
+						"description": "Build a stack of related branches. Run the Add Stack Branch command to create a worktree-backed branch on top of an existing one.\n\n[Add Stack Branch](command:gitbraid.addStackBranch)",
 						"media": { "image": "resources/walkthrough-add-branch.png", "altText": "Stack view showing two branches" }
 					},
 					{
 						"id": "assignFile",
 						"title": "Assign a file to a branch",
-						"description": "Right-click any file in the Explorer and choose **Assign to branch**, or run the command below.\n\n[Assign File](command:multi-branch-checkout.assignFile)",
+						"description": "Right-click any file in the Explorer and choose **Assign to branch**, or run the command below.\n\n[Assign File](command:gitbraid.assignFile)",
 						"media": { "image": "resources/walkthrough-assign-file.png", "altText": "File assigned to branch" }
 					},
 					{
 						"id": "makeCommit",
 						"title": "Commit to a branch",
-						"description": "Each branch in the stack has its own SCM entry. Type a message there and press the commit button, or run the command below.\n\n[Commit Branch](command:multi-branch-checkout.scm.commitBranch)",
+						"description": "Each branch in the stack has its own SCM entry. Type a message there and press the commit button, or run the command below.\n\n[Commit Branch](command:gitbraid.scm.commitBranch)",
 						"media": { "image": "resources/walkthrough-commit.png", "altText": "SCM panel showing per-branch commit" }
 					},
 					{
 						"id": "addLayer",
 						"title": "Add another layer",
-						"description": "Continue stacking branches for independent sets of changes. Use Rebase Branch to keep each layer up-to-date with its parent.\n\n[Rebase Branch](command:multi-branch-checkout.rebaseBranch)",
+						"description": "Continue stacking branches for independent sets of changes. Use Rebase Branch to keep each layer up-to-date with its parent.\n\n[Rebase Branch](command:gitbraid.rebaseBranch)",
 						"media": { "image": "resources/walkthrough-rebase.png", "altText": "Stack after rebase" }
 					}
 				]
@@ -85,252 +85,252 @@
 		"views": {
 			"scm": [
 				{
-					"id": "multi-branch-checkout.worktreeView",
-					"name": "Multi Branch Checkout (Worktrees)"
+					"id": "gitbraid.worktreeView",
+					"name": "GitBraid (Worktrees)"
 				},
 				{
-					"id": "multi-branch-checkout.stackView",
+					"id": "gitbraid.stackView",
 					"name": "Branch Stack"
 				}
 			]
 		},
 		"commands": [
 			{
-				"command": "multi-branch-checkout.refresh",
+				"command": "gitbraid.refresh",
 				"title": "Refresh",
 				"icon": "$(refresh)"
 			},
 			{
-				"command": "multi-branch-checkout.createWorktree",
+				"command": "gitbraid.createWorktree",
 				"title": "Create Branch / Worktree",
 				"icon": "$(git-branch-create)"
 			},
 			{
-				"command": "multi-branch-checkout.deleteWorktree",
+				"command": "gitbraid.deleteWorktree",
 				"title": "Delete Branch / Worktree",
 				"icon": "$(trash)",
 				"enablement": "viewItem =~ /locked=false/"
 			},
 			{
-				"command": "multi-branch-checkout.launchWindowForWorktree",
+				"command": "gitbraid.launchWindowForWorktree",
 				"title": "Open worktree in new window",
 				"icon": "$(multiple-windows)"
 			},
 			{
-				"command": "multi-branch-checkout.lockWorktree",
+				"command": "gitbraid.lockWorktree",
 				"title": "Lock worktree",
 				"icon": "$(lock)"
 			},
 			{
-				"command": "multi-branch-checkout.unlockWorktree",
+				"command": "gitbraid.unlockWorktree",
 				"title": "Unlock worktree",
 				"icon": "$(unlock)"
 			},
 			{
-				"command": "multi-branch-checkout.swapWorktrees",
+				"command": "gitbraid.swapWorktrees",
 				"title": "Swap worktree",
 				"shortTitle": "Swap worktree",
 				"icon": "$(arrow-swap)"
 			},
 			{
-				"command": "multi-branch-checkout.stageNode",
+				"command": "gitbraid.stageNode",
 				"title": "Stage changes",
 				"icon": "$(plus)"
 			},
 			{
-				"command": "multi-branch-checkout.unstageNode",
+				"command": "gitbraid.unstageNode",
 				"title": "Unstage changes",
 				"icon": "$(remove)"
 			},
 			{
-				"command": "multi-branch-checkout.discardChanges",
+				"command": "gitbraid.discardChanges",
 				"title": "Discard changes",
 				"shortTitle": "Discard changes",
 				"icon": "$(discard)"
 			},
 			{
-				"command": "multi-branch-checkout.compareFileWithMergeBase",
+				"command": "gitbraid.compareFileWithMergeBase",
 				"title": "Compare to worktree merge-base",
 				"icon": "$(git-compare)"
 			},
 			{
-				"command": "multi-branch-checkout.compareFileWithPrimary",
+				"command": "gitbraid.compareFileWithPrimary",
 				"title": "Compare to primary worktree",
 				"icon": "$(git-compare)"
 			},
 			{
-				"command": "multi-branch-checkout.openFile",
+				"command": "gitbraid.openFile",
 				"title": "Multie Branch Checkout: Open file",
 				"icon": "$(go-to-file)"
 			},
 			{
-				"command": "multi-branch-checkout.patchToWorktree",
+				"command": "gitbraid.patchToWorktree",
 				"title": "Patch to worktree",
 				"shortTitle": "Patch to worktree",
 				"icon": "$(insert)"
 			},
 			{
-				"command": "multi-branch-checkout.copyToWorktree",
+				"command": "gitbraid.copyToWorktree",
 				"title": "Copy to worktree",
 				"category": "external",
 				"icon": "$(copy)"
 			},
 			{
-				"command": "multi-branch-checkout.moveToWorktree",
+				"command": "gitbraid.moveToWorktree",
 				"title": "Move to worktree",
 				"category": "external",
 				"icon": "$(redo)"
 			},
 			{
-				"command": "multi-branch-checkout.compareTo",
+				"command": "gitbraid.compareTo",
 				"title": "Compare with",
 				"category": "other",
 				"icon": "$(debug-continue)"
 			},
 			{
-				"command": "multi-branch-checkout.stackView.refresh",
+				"command": "gitbraid.stackView.refresh",
 				"title": "Refresh Branch Stack",
 				"icon": "$(refresh)"
 			},
 			{
-				"command": "multi-branch-checkout.focusStackView",
+				"command": "gitbraid.focusStackView",
 				"title": "Focus Branch Stack View",
 				"icon": "$(list-tree)"
 			},
 			{
-				"command": "multi-branch-checkout.scm.commitBranch",
+				"command": "gitbraid.scm.commitBranch",
 				"title": "Commit Branch",
 				"icon": "$(check)"
 			},
 			{
-				"command": "multi-branch-checkout.scm.refreshAll",
+				"command": "gitbraid.scm.refreshAll",
 				"title": "Refresh All SCM Providers",
 				"icon": "$(refresh)"
 			},
 			{
-				"command": "multi-branch-checkout.assignFile",
+				"command": "gitbraid.assignFile",
 				"title": "Assign File to Branch",
 				"icon": "$(tag)"
 			},
 			{
-				"command": "multi-branch-checkout.unassignFile",
+				"command": "gitbraid.unassignFile",
 				"title": "Unassign File from Branch",
 				"icon": "$(tag-remove)"
 			},
 			{
-				"command": "multi-branch-checkout.addStackBranch",
+				"command": "gitbraid.addStackBranch",
 				"title": "Add Branch to Stack",
 				"icon": "$(git-branch-create)"
 			},
 			{
-				"command": "multi-branch-checkout.removeStackBranch",
+				"command": "gitbraid.removeStackBranch",
 				"title": "Remove Branch from Stack",
 				"icon": "$(git-branch-delete)"
 			},
 			{
-				"command": "multi-branch-checkout.routeHunks",
+				"command": "gitbraid.routeHunks",
 				"title": "Route Hunks to Assigned Branches",
 				"icon": "$(diff)"
 			},
 			{
-				"command": "multi-branch-checkout.assignHunk",
+				"command": "gitbraid.assignHunk",
 				"title": "Assign Hunk to Branch",
 				"icon": "$(diff-single)"
 			},
 			{
-				"command": "multi-branch-checkout.rebaseBranch",
+				"command": "gitbraid.rebaseBranch",
 				"title": "Rebase Branch onto Parent",
 				"icon": "$(git-merge)"
 			}
 		],
 		"viewsWelcome": [
 			{
-				"view": "multi-branch-checkout.worktreeView",
-				"contents": "This is welcome content! \n[Create worktree](command:multi-branch-checkout.createWorktree)",
+				"view": "gitbraid.worktreeView",
+				"contents": "This is welcome content! \n[Create worktree](command:gitbraid.createWorktree)",
 				"when": "true"
 			}
 		],
 		"menus": {
 			"view/title": [
 				{
-					"command": "multi-branch-checkout.refresh",
-					"when": "view == multi-branch-checkout.worktreeView",
+					"command": "gitbraid.refresh",
+					"when": "view == gitbraid.worktreeView",
 					"group": "navigation"
 				},
 				{
-					"command": "multi-branch-checkout.createWorktree",
-					"when": "view == multi-branch-checkout.worktreeView",
+					"command": "gitbraid.createWorktree",
+					"when": "view == gitbraid.worktreeView",
 					"group": "navigation"
 				}
 			],
 			"view/item/context": [
 				{
-					"command": "multi-branch-checkout.compareTo",
-					"when": "view == multi-branch-checkout.worktreeView && viewItem =~ /^WorktreeFile/"
+					"command": "gitbraid.compareTo",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeFile/"
 				},
 				{
-					"command": "multi-branch-checkout.swapWorktrees",
-					"when": "view == multi-branch-checkout.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /isPrumary=true/ && viewItem =~ /pathExists=true/",
+					"command": "gitbraid.swapWorktrees",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /isPrumary=true/ && viewItem =~ /pathExists=true/",
 					"group": "inline"
 				},
 				{
-					"command": "multi-branch-checkout.launchWindowForWorktree",
-					"when": "view == multi-branch-checkout.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/ && viewItem =~ /pathExists=true/",
+					"command": "gitbraid.launchWindowForWorktree",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/ && viewItem =~ /pathExists=true/",
 					"group": "inline"
 				},
 				{
-					"command": "multi-branch-checkout.deleteWorktree",
-					"when": "view == multi-branch-checkout.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/",
+					"command": "gitbraid.deleteWorktree",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/",
 					"group": "inline"
 				},
 				{
-					"command": "multi-branch-checkout.lockWorktree",
-					"when": "view == multi-branch-checkout.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/ && viewItem =~ /locked=false/",
+					"command": "gitbraid.lockWorktree",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/ && viewItem =~ /locked=false/",
 					"group": "inline@1"
 				},
 				{
-					"command": "multi-branch-checkout.unlockWorktree",
-					"when": "view == multi-branch-checkout.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/ && viewItem =~ /locked=true/",
+					"command": "gitbraid.unlockWorktree",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=false/ && viewItem =~ /locked=true/",
 					"group": "inline@1"
 				},
 				{
-					"command": "multi-branch-checkout.stageNode",
-					"when": "view == multi-branch-checkout.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked || viewItem == WorktreeFileGroup#Changes || viewItem == WorktreeFileGroup#Untracked)",
+					"command": "gitbraid.stageNode",
+					"when": "view == gitbraid.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked || viewItem == WorktreeFileGroup#Changes || viewItem == WorktreeFileGroup#Untracked)",
 					"group": "inline"
 				},
 				{
-					"command": "multi-branch-checkout.unstageNode",
-					"when": "view == multi-branch-checkout.worktreeView && (viewItem == WorktreeFileNode#Staged || viewItem == WorktreeFileGroup#Staged)",
+					"command": "gitbraid.unstageNode",
+					"when": "view == gitbraid.worktreeView && (viewItem == WorktreeFileNode#Staged || viewItem == WorktreeFileGroup#Staged)",
 					"group": "inline"
 				},
 				{
-					"command": "multi-branch-checkout.openFile",
-					"when": "view == multi-branch-checkout.worktreeView && viewItem =~ /^WorktreeFileNode#/",
+					"command": "gitbraid.openFile",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeFileNode#/",
 					"group": "inline@5"
 				},
 				{
-					"command": "multi-branch-checkout.discardChanges",
-					"when": "view == multi-branch-checkout.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked)",
+					"command": "gitbraid.discardChanges",
+					"when": "view == gitbraid.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked)",
 					"group": "inline@6"
 				},
 				{
-					"command": "multi-branch-checkout.compareFileWithMergeBase",
-					"when": "false && view == multi-branch-checkout.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked || viewItem == WorktreeFileNode#Staged || viewItem == WorktreeFileNode#Committed)",
+					"command": "gitbraid.compareFileWithMergeBase",
+					"when": "false && view == gitbraid.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked || viewItem == WorktreeFileNode#Staged || viewItem == WorktreeFileNode#Committed)",
 					"group": "inline"
 				},
 				{
-					"command": "multi-branch-checkout.copyToWorktree",
-					"when": "view == multi-branch-checkout.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked || viewItem == WorktreeFileNode#Staged || viewItem == WorktreeFileNode#Committed)",
+					"command": "gitbraid.copyToWorktree",
+					"when": "view == gitbraid.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked || viewItem == WorktreeFileNode#Staged || viewItem == WorktreeFileNode#Committed)",
 					"group": "inline@8"
 				},
 				{
-					"command": "multi-branch-checkout.patchToWorktree",
+					"command": "gitbraid.patchToWorktree",
 					"when": "false",
 					"group": "inline@8"
 				},
 				{
-					"command": "multi-branch-checkout.moveToWorktree",
-					"when": "view == multi-branch-checkout.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked)",
+					"command": "gitbraid.moveToWorktree",
+					"when": "view == gitbraid.worktreeView && (viewItem == WorktreeFileNode#Changes || viewItem == WorktreeFileNode#Untracked)",
 					"group": "inline@8"
 				}
 			]
@@ -338,23 +338,23 @@
 		"configuration": {
 			"title": "Multi-Branch Checkout",
 			"properties": {
-				"multi-branch-checkout.syncDebounceMs": {
+				"gitbraid.syncDebounceMs": {
 					"type": "number",
 					"default": 200,
 					"description": "Milliseconds to debounce workspace-sync file-change events.",
 					"minimum": 0
 				},
-				"multi-branch-checkout.showFloatingWarningOnCommit": {
+				"gitbraid.showFloatingWarningOnCommit": {
 					"type": "boolean",
 					"default": true,
 					"description": "Warn when committing a branch that has floating (unassigned) files."
 				},
-				"multi-branch-checkout.prDecorationsEnabled": {
+				"gitbraid.prDecorationsEnabled": {
 					"type": "boolean",
 					"default": true,
 					"description": "Show branch-assignment color decorations in the file explorer."
 				},
-				"multi-branch-checkout.defaultBranchColor": {
+				"gitbraid.defaultBranchColor": {
 					"type": "string",
 					"default": "#4ec9b0",
 					"description": "Default hex color for newly added stack branches.",

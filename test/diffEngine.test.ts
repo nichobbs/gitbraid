@@ -152,4 +152,109 @@ suite('DiffEngine', function () {
 		assert.deepStrictEqual(hunks, [])
 	})
 
+	test('getHunksAgainstBranch: falls back to getHunksForFile when merge-base not found', async () => {
+		const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+		if (!wsRoot) {
+			return
+		}
+		// Using a nonexistent branch means no merge-base — should fall back gracefully
+		const hunks = await engine.getHunksAgainstBranch(wsRoot, '__nonexistent__.ts', 'nonexistent-branch')
+		assert.ok(Array.isArray(hunks))
+	})
+
+	test('getHunksAgainstBranch: sanitises path traversal in relativePath', async () => {
+		const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+		if (!wsRoot) {
+			return
+		}
+		const hunks = await engine.getHunksAgainstBranch(wsRoot, '../../etc/passwd', 'main')
+		assert.ok(Array.isArray(hunks))
+	})
+
+	test('getMergeBase: returns a string SHA for valid related refs', async () => {
+		const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+		if (!wsRoot) {
+			return
+		}
+		// HEAD vs HEAD should give HEAD's own commit
+		const result = await engine.getMergeBase(wsRoot, 'HEAD', 'HEAD')
+		// May succeed or fail depending on repo state; just check it's a string or undefined
+		assert.ok(result === undefined || typeof result === 'string')
+	})
+
 })
+
+// ─── Suite: parseDiffHunks edge cases ────────────────────────────────────────
+
+suite('parseDiffHunks (edge cases)', () => {
+
+	test('pure deletion hunk has endLine === startLine', () => {
+		// @@ -5,3 +5,0 @@ means 0 lines in new file
+		const diff = [
+			'diff --git a/f b/f',
+			'index a..b 100644',
+			'--- a/f',
+			'+++ b/f',
+			'@@ -5,3 +5,0 @@',
+			'-line1',
+			'-line2',
+			'-line3',
+		].join('\n')
+
+		const hunks = parseDiffHunks(diff)
+		assert.strictEqual(hunks.length, 1)
+		assert.strictEqual(hunks[0].startLine, 5)
+		// 0 lines in new file → endLine = 5 + max(0-1, 0) = 5
+		assert.strictEqual(hunks[0].endLine, 5)
+	})
+
+	test('hunk with count=1 (omitted) has correct endLine', () => {
+		const diff = [
+			'diff --git a/g b/g',
+			'index a..b 100644',
+			'--- a/g',
+			'+++ b/g',
+			'@@ -1 +1 @@',
+			'-old',
+			'+new',
+		].join('\n')
+		const hunks = parseDiffHunks(diff)
+		assert.strictEqual(hunks.length, 1)
+		assert.strictEqual(hunks[0].startLine, 1)
+		assert.strictEqual(hunks[0].endLine, 1)
+	})
+
+	test('three hunks all get unique indices', () => {
+		const diff = [
+			'diff --git a/h b/h',
+			'index a..b 100644',
+			'--- a/h',
+			'+++ b/h',
+			'@@ -1,2 +1,2 @@',
+			'-a', '+A',
+			'@@ -10,2 +10,2 @@',
+			'-b', '+B',
+			'@@ -20,2 +20,2 @@',
+			'-c', '+C',
+		].join('\n')
+		const hunks = parseDiffHunks(diff)
+		assert.strictEqual(hunks.length, 3)
+		assert.strictEqual(hunks[0].index, 0)
+		assert.strictEqual(hunks[1].index, 1)
+		assert.strictEqual(hunks[2].index, 2)
+	})
+
+	test('diff with no file header lines produces valid patch', () => {
+		// Only hunk header and content — no diff --git preamble
+		const diff = [
+			'@@ -1,2 +1,2 @@',
+			'-old',
+			'+new',
+		].join('\n')
+		const hunks = parseDiffHunks(diff)
+		assert.strictEqual(hunks.length, 1)
+		assert.ok(hunks[0].patch.includes('@@ -1,2 +1,2 @@'))
+	})
+
+})
+

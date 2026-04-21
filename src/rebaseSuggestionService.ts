@@ -179,7 +179,7 @@ async function _countRevsBehind(
 	const safe = (s: string) => s.replaceAll('"', String.raw`\"`)
 	try {
 		const { stdout } = await execAsync(
-			`git rev-list --count "${safe(childBranch)}.."${safe(parentBranch)}"`,
+			`git rev-list --count "${safe(childBranch)}..${safe(parentBranch)}"`,
 			{ cwd },
 		)
 		const n = Number.parseInt(stdout.trim(), 10)

@@ -2,7 +2,7 @@ import * as vscode from 'vscode'
 import { git } from './gitFunctions'
 import { log } from './channelLogger'
 import { fileExists } from './utils'
-import { MultiBranchCheckoutAPI } from './commands'
+import { GitBraidAPI } from './commands'
 import { nodeMaps, WorktreeFile, WorktreeNode, WorktreeRoot } from './worktreeNodes'
 import { ConfigService } from './configService'
 import { BranchStackService } from './branchStackService'
@@ -18,7 +18,7 @@ import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
-export const api = new MultiBranchCheckoutAPI()
+export const api = new GitBraidAPI()
 
 export async function activate(context: vscode.ExtensionContext) {
 	const commands: vscode.Disposable[] = []
@@ -27,7 +27,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		throw new Error('No workspace folder found')
 	}
 
-	log.info('activating multi-branch-checkout (version=' + context.extension.packageJSON.version + ')')
+	log.info('activating gitbraid (version=' + context.extension.packageJSON.version + ')')
 	api.tempDir = context.storageUri!
 	await api.worktreeView.initTreeview()
 
@@ -53,7 +53,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(scmManager)
 
 	const stackTreeProvider = new BranchStackTreeProvider(configService, workspaceSync)
-	const stackView = vscode.window.createTreeView('multi-branch-checkout.stackView', {
+	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
 		showCollapseAll: true,
 	})
@@ -80,24 +80,24 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// ── Phase 2 & 3 commands ──────────────────────────────────────────────────
 	commands.push(
-		vscode.commands.registerCommand('multi-branch-checkout.stackView.refresh', () => stackTreeProvider.refresh()),
+		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => stackTreeProvider.refresh()),
 
-		vscode.commands.registerCommand('multi-branch-checkout.focusStackView', () => {
+		vscode.commands.registerCommand('gitbraid.focusStackView', () => {
 			stackView.reveal(undefined as never, { focus: true }).then(undefined, (e: unknown) => {
 				log.error('focusStackView: ' + e)
 			})
 		}),
 
-		vscode.commands.registerCommand('multi-branch-checkout.scm.commitBranch', (branchName: string) => {
+		vscode.commands.registerCommand('gitbraid.scm.commitBranch', (branchName: string) => {
 			void scmManager.commitBranch(branchName)
 		}),
 
-		vscode.commands.registerCommand('multi-branch-checkout.scm.refreshAll', () => {
+		vscode.commands.registerCommand('gitbraid.scm.refreshAll', () => {
 			void scmManager.refreshAll()
 		}),
 
 		vscode.commands.registerCommand(
-			'multi-branch-checkout.assignHunk',
+			'gitbraid.assignHunk',
 			async (uri: vscode.Uri, hunkIndex: number) => {
 				const rel = vscode.workspace.asRelativePath(uri, false)
 				const stack = configService.getStack()
@@ -119,7 +119,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		),
 
 		vscode.commands.registerCommand(
-			'multi-branch-checkout.routeHunks',
+			'gitbraid.routeHunks',
 			async (uri?: vscode.Uri) => {
 				const target = uri ?? vscode.window.activeTextEditor?.document.uri
 				if (!target) {
@@ -158,7 +158,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
-		vscode.commands.registerCommand('multi-branch-checkout.assignFile', async (uri?: vscode.Uri) => {
+		vscode.commands.registerCommand('gitbraid.assignFile', async (uri?: vscode.Uri) => {
 			const target = uri ?? vscode.window.activeTextEditor?.document.uri
 			if (!target) {
 				void vscode.window.showWarningMessage('No file selected to assign.')
@@ -181,7 +181,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage(`Assigned ${rel} → ${picked.label}`)
 		}),
 
-		vscode.commands.registerCommand('multi-branch-checkout.unassignFile', async (uri?: vscode.Uri) => {
+		vscode.commands.registerCommand('gitbraid.unassignFile', async (uri?: vscode.Uri) => {
 			const target = uri ?? vscode.window.activeTextEditor?.document.uri
 			if (!target) {
 				void vscode.window.showWarningMessage('No file selected to unassign.')
@@ -192,7 +192,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage(`Unassigned ${rel}`)
 		}),
 
-		vscode.commands.registerCommand('multi-branch-checkout.addStackBranch', async () => {
+		vscode.commands.registerCommand('gitbraid.addStackBranch', async () => {
 			const name = await vscode.window.showInputBox({ prompt: 'Branch name', placeHolder: 'feature/my-feature' })
 			if (!name) {
 				return
@@ -204,7 +204,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
 		}),
 
-		vscode.commands.registerCommand('multi-branch-checkout.removeStackBranch', async () => {
+		vscode.commands.registerCommand('gitbraid.removeStackBranch', async () => {
 			const stack = configService.getStack()
 			if (stack.length === 0) {
 				void vscode.window.showWarningMessage('Stack is empty.')
@@ -221,7 +221,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
 		}),
 
-		vscode.commands.registerCommand('multi-branch-checkout.rebaseBranch', async (branchName?: string) => {
+		vscode.commands.registerCommand('gitbraid.rebaseBranch', async (branchName?: string) => {
 			const stack = configService.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showWarningMessage('Stack is empty.')
@@ -252,35 +252,35 @@ export async function activate(context: vscode.ExtensionContext) {
 	// }))
 
 	// ********** WorktreeView Commands ********** //
-	commands.push(vscode.commands.registerCommand('multi-branch-checkout.refreshView', () => api.refresh()))
+	commands.push(vscode.commands.registerCommand('gitbraid.refreshView', () => api.refresh()))
 
 	// ********** WorktreeRoot Commands ********** //
 	commands.push(
-		vscode.commands.registerCommand('multi-branch-checkout.refresh', (node?: WorktreeNode) => api.refresh(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.createWorktree', () => api.createWorktree(vscode.workspace.workspaceFolders![0])),
-		vscode.commands.registerCommand('multi-branch-checkout.deleteWorktree', (node: WorktreeRoot) => api.deleteWorktree(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.lockWorktree', (node: WorktreeRoot) => api.lockWorktree(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.swapWorktrees', (node: WorktreeRoot) => api.swapWorktrees(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.unlockWorktree', (node: WorktreeRoot) => api.unlockWorktree(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.launchWindowForWorktree', (node: WorktreeRoot) => api.launchWindowForWorktree(node))
+		vscode.commands.registerCommand('gitbraid.refresh', (node?: WorktreeNode) => api.refresh(node)),
+		vscode.commands.registerCommand('gitbraid.createWorktree', () => api.createWorktree(vscode.workspace.workspaceFolders![0])),
+		vscode.commands.registerCommand('gitbraid.deleteWorktree', (node: WorktreeRoot) => api.deleteWorktree(node)),
+		vscode.commands.registerCommand('gitbraid.lockWorktree', (node: WorktreeRoot) => api.lockWorktree(node)),
+		vscode.commands.registerCommand('gitbraid.swapWorktrees', (node: WorktreeRoot) => api.swapWorktrees(node)),
+		vscode.commands.registerCommand('gitbraid.unlockWorktree', (node: WorktreeRoot) => api.unlockWorktree(node)),
+		vscode.commands.registerCommand('gitbraid.launchWindowForWorktree', (node: WorktreeRoot) => api.launchWindowForWorktree(node))
 	)
 
 	// ********** WorktreeFile Commands ********** //
 	commands.push(
-		vscode.commands.registerCommand('multi-branch-checkout.selectFileNode', (id: string) => api.selectWorktreeFile(id)),
-		vscode.commands.registerCommand('multi-branch-checkout.copyToWorktree', (node: WorktreeFile) => api.copyToWorktree(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.moveToWorktree', (node: WorktreeFile) => api.moveToWorktree(node)),
-		// vscode.commands.registerCommand('multi-branch-checkout.patchToWorktree', (node: WorktreeFile) => api.patchToWorktree(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.stageNode', (node: WorktreeNode) => api.stage(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.unstageNode', (node: WorktreeNode) => api.unstage(node)),
-		vscode.commands.registerCommand('multi-branch-checkout.discardChanges', (node: WorktreeFile) => api.discardChanges(node)),
-		// vscode.commands.registerCommand('multi-branch-checkout.compareFileWithMergeBase', (node: WorktreeFile) => api.compare(node)),
+		vscode.commands.registerCommand('gitbraid.selectFileNode', (id: string) => api.selectWorktreeFile(id)),
+		vscode.commands.registerCommand('gitbraid.copyToWorktree', (node: WorktreeFile) => api.copyToWorktree(node)),
+		vscode.commands.registerCommand('gitbraid.moveToWorktree', (node: WorktreeFile) => api.moveToWorktree(node)),
+		// vscode.commands.registerCommand('gitbraid.patchToWorktree', (node: WorktreeFile) => api.patchToWorktree(node)),
+		vscode.commands.registerCommand('gitbraid.stageNode', (node: WorktreeNode) => api.stage(node)),
+		vscode.commands.registerCommand('gitbraid.unstageNode', (node: WorktreeNode) => api.unstage(node)),
+		vscode.commands.registerCommand('gitbraid.discardChanges', (node: WorktreeFile) => api.discardChanges(node)),
+		// vscode.commands.registerCommand('gitbraid.compareFileWithMergeBase', (node: WorktreeFile) => api.compare(node)),
 	)
 
 	// ********** NON-API commands ********** //
 	commands.push(
-		vscode.commands.registerCommand('multi-branch-checkout.openFile', (node: WorktreeFile) => {
-			log.info('multi-branch-checkout.openFile')
+		vscode.commands.registerCommand('gitbraid.openFile', (node: WorktreeFile) => {
+			log.info('gitbraid.openFile')
 			return api.openFile(node)
 		}),
 	)
@@ -294,7 +294,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	log.info('subscribe')
 	context.subscriptions.push(api.worktreeView)
 	log.info('register worktreeView')
-	vscode.window.registerTreeDataProvider('multi-branch-checkout.worktreeView', api.worktreeView)
+	vscode.window.registerTreeDataProvider('gitbraid.worktreeView', api.worktreeView)
 
 	log.info('register filewatcher')
 	const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.workspace.workspaceFolders[0], '**/*'), false, true, false)
@@ -389,5 +389,5 @@ async function ignoreWorktreesDir () {
 			return
 		}
 	}
-	await vscode.workspace.fs.writeFile(uri, Uint8Array.from(Buffer.from(content + '\n## added by vscode extension \'kherring.multi-branch-checkout\'\n.worktrees/\n')))
+	await vscode.workspace.fs.writeFile(uri, Uint8Array.from(Buffer.from(content + '\n## added by vscode extension \'nihobbs.gitbraid\'\n.worktrees/\n')))
 }

@@ -167,4 +167,130 @@ suite('BranchStackTreeProvider', () => {
 		assert.strictEqual(node.description, 'src/floating.ts')
 		assert.strictEqual(node.contextValue, 'floatingFile')
 	})
+
+	test('FloatingFileNode: file at root level uses name as label', () => {
+		const node = new FloatingFileNode('README.md')
+		assert.strictEqual(node.label, 'README.md')
+		assert.strictEqual(node.description, 'README.md')
+	})
+
+	// ── getParent ─────────────────────────────────────────────────────────────
+
+	test('getParent: FileNode returns parent BranchNode', async () => {
+		await svc.addBranch({ name: 'feature/docs', color: '#4CAF50', base: 'main' })
+		await svc.setAssignment('src/foo.ts', 'feature/docs')
+		const docsEntry = svc.getBranch('feature/docs')!
+		const fileNode = new FileNode('src/foo.ts', 'feature/docs')
+		const parent = tree.getParent(fileNode)
+		assert.ok(parent instanceof BranchNode)
+		assert.strictEqual((parent as BranchNode).entry.name, 'feature/docs')
+		assert.strictEqual((parent as BranchNode).entry.name, docsEntry.name)
+	})
+
+	test('getParent: FileNode for unknown branch returns undefined', async () => {
+		const fileNode = new FileNode('src/foo.ts', 'nonexistent-branch')
+		const parent = tree.getParent(fileNode)
+		assert.strictEqual(parent, undefined)
+	})
+
+	test('getParent: FloatingFileNode returns FloatingGroupNode', () => {
+		const floatNode = new FloatingFileNode('src/unassigned.ts')
+		const parent = tree.getParent(floatNode)
+		assert.ok(parent instanceof FloatingGroupNode)
+	})
+
+	test('getParent: BranchNode returns undefined (root level)', async () => {
+		await svc.addBranch({ name: 'feature/docs', color: '#4CAF50', base: 'main' })
+		const entry = svc.getBranch('feature/docs')!
+		const branchNode = new BranchNode(entry)
+		const parent = tree.getParent(branchNode)
+		assert.strictEqual(parent, undefined)
+	})
+
+	// ── BranchNode properties ─────────────────────────────────────────────────
+
+	test('BranchNode has correct label, context, and description', async () => {
+		await svc.addBranch({ name: 'feature/impl', color: '#2196F3', base: 'feature/docs' })
+		const entry = svc.getBranch('feature/impl')!
+		const node = new BranchNode(entry)
+		assert.strictEqual(node.label, 'feature/impl')
+		assert.strictEqual(node.contextValue, 'branch')
+		assert.strictEqual(node.description, 'feature/docs')
+		assert.ok(node.tooltip?.toString().includes('feature/impl'))
+		assert.ok(node.tooltip?.toString().includes('feature/docs'))
+	})
+
+	// ── FileNode properties ───────────────────────────────────────────────────
+
+	test('FileNode has correct label, context, and tooltip', () => {
+		const node = new FileNode('src/components/Button.tsx', 'feature/ui')
+		assert.strictEqual(node.label, 'Button.tsx')
+		assert.strictEqual(node.description, 'src/components/Button.tsx')
+		assert.strictEqual(node.contextValue, 'assignedFile')
+		assert.ok(node.tooltip?.toString().includes('feature/ui'))
+	})
+
+	// ── FloatingGroupNode properties ──────────────────────────────────────────
+
+	test('FloatingGroupNode: count=0 description is undefined', () => {
+		const node = new FloatingGroupNode(0)
+		assert.strictEqual(node.description, undefined)
+	})
+
+	test('FloatingGroupNode: count>0 shows file count', () => {
+		const node = new FloatingGroupNode(3)
+		assert.ok(node.description?.toString().includes('3'))
+	})
+
+	// ── refresh ───────────────────────────────────────────────────────────────
+
+	test('refresh with specific node fires with that node', async () => {
+		await svc.addBranch({ name: 'feature/docs', color: '#4CAF50', base: 'main' })
+		const entry = svc.getBranch('feature/docs')!
+		const node = new BranchNode(entry)
+
+		const changePromise = new Promise<StackTreeNode | undefined>((resolve) => {
+			const disposable = tree.onDidChangeTreeData((e) => {
+				disposable.dispose()
+				resolve(e)
+			})
+		})
+
+		tree.refresh(node)
+		const fired = await changePromise
+		assert.ok(fired instanceof BranchNode)
+	})
+
+	test('refresh without argument fires with undefined', async () => {
+		const changePromise = new Promise<StackTreeNode | undefined>((resolve) => {
+			const disposable = tree.onDidChangeTreeData((e) => {
+				disposable.dispose()
+				resolve(e)
+			})
+		})
+		tree.refresh()
+		const fired = await changePromise
+		assert.strictEqual(fired, undefined)
+	})
+
+	// ── getTreeItem ───────────────────────────────────────────────────────────
+
+	test('getTreeItem returns the element itself', async () => {
+		await svc.addBranch({ name: 'feature/docs', color: '#4CAF50', base: 'main' })
+		const entry = svc.getBranch('feature/docs')!
+		const node = new BranchNode(entry)
+		const treeItem = tree.getTreeItem(node)
+		assert.strictEqual(treeItem, node)
+	})
+
+	// ── sync.onDidFloatFile triggers refresh ──────────────────────────────────
+
+	test('tree refreshes on float file event', async () => {
+		const changePromise = waitForEvent(tree.onDidChangeTreeData)
+		// Directly inject floating state through WorkspaceSync internals
+		// by writing an unassigned file (triggering the float event via file watcher)
+		sync['_floatingDirty'].add('src/test-float.ts')
+		sync['_onDidFloatFile'].fire({ relativePath: 'src/test-float.ts' })
+		await changePromise
+	})
 })

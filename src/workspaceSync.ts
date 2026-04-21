@@ -107,8 +107,8 @@ export class WorkspaceSync implements vscode.Disposable {
 	}
 
 	/** Returns a snapshot of all currently floating dirty paths. */
-	getFloatingDirty(): ReadonlySet<string> {
-		return this._floatingDirty
+	getFloatingDirty(): ReadonlyArray<string> {
+		return [...this._floatingDirty]
 	}
 
 	// ─── Private event handlers ───────────────────────────────────────────────
@@ -122,7 +122,7 @@ export class WorkspaceSync implements vscode.Disposable {
 			return
 		}
 		const rel = this._relativePath(uri)
-		if (!rel || rel.startsWith('.worktrees/')) {
+		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/')) {
 			return
 		}
 
@@ -143,7 +143,7 @@ export class WorkspaceSync implements vscode.Disposable {
 			return
 		}
 		const rel = this._relativePath(uri)
-		if (!rel || rel.startsWith('.worktrees/')) {
+		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/')) {
 			return
 		}
 		const branch = this._config.getAssignment(rel)
