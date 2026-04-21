@@ -13,6 +13,10 @@ import { BranchStackTreeProvider, FloatingStatusBarItem } from './branchStackTre
 import { DiffEngine } from './diffEngine'
 import { HunkRouter } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
+import { StackResolver } from './stackResolver'
+import { RebaseSuggestionService } from './rebaseSuggestionService'
+import { MbcApi } from './mbcApi'
+import { registerLmTools } from './lmTools'
 
 export const api = new MultiBranchCheckoutAPI()
 
@@ -146,6 +150,12 @@ export async function activate(context: vscode.ExtensionContext) {
 		),
 	)
 
+	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
+	const _stackResolver = new StackResolver(configService, branchStack)
+	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
+	rebaseSvc.init(workspaceRoot)
+	context.subscriptions.push(rebaseSvc)
+
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
 		vscode.commands.registerCommand('multi-branch-checkout.assignFile', async (uri?: vscode.Uri) => {
@@ -210,7 +220,27 @@ export async function activate(context: vscode.ExtensionContext) {
 			await branchStack.removeBranchFromStack(picked)
 			void vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
 		}),
+
+		vscode.commands.registerCommand('multi-branch-checkout.rebaseBranch', async (branchName?: string) => {
+			const stack = configService.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showWarningMessage('Stack is empty.')
+				return
+			}
+			const name = branchName ?? (await vscode.window.showQuickPick(
+				stack.map((e) => e.name),
+				{ placeHolder: 'Rebase branch onto its parent' },
+			))
+			if (!name) {
+				return
+			}
+			await rebaseSvc.rebaseBranch(name)
+		}),
 	)
+
+	// ─── Phase 5: Exported API & LM tools ─────────────────────────────────────
+	const mbcExportedApi = new MbcApi(configService, branchStack, workspaceSync, workspaceRoot)
+	context.subscriptions.push(...registerLmTools(mbcExportedApi))
 
 	// ********** WorktreeView Refresh Events ********** //
 	// context.subscriptions.push(api.worktreeView.onDidChangeTreeData((e) => {
@@ -305,7 +335,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		return api.refresh(repoNode)
 	})
 	log.info('extension activation complete')
-	return api
+	return mbcExportedApi
 
 }
 
