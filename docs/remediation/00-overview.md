@@ -181,20 +181,28 @@ Annotated during execution. Checkpoint SHAs refer to the
 | Redaction for git command logs | 6cb9fcc | `redactCredentials`/`redactGitError` scrub user:token@ URLs + PATs. |
 | Config cross-window concurrency warn | e172305 | mtime observed at read time; write checks for external modification. |
 
+### Landed (P2)
+
+| Task | Notes |
+| --- | --- |
+| T4, T46, T48, T49, T51 | dirty-check for `--force`, concurrency-capped `initStack`, async+debounced config writes, cleaner `getAllNodes`, bounded `_floatingDirty`. |
+| T45, T47, T53 | CodeLens debounce + LRU, per-branch SCM TTL cache, `getHunksForFile` LRU. |
+| T38, T43, T44, T31 | expanded decoration palette, `package.nls.json` scaffold, shared `showError` / `withErrorHandler`, typed errors in `utils.ts`. |
+| T80–T86, T62 | engines bumped to ^1.95, `private:false`, SCM Providers category, trimmed devDeps, activity-bar container, default keybindings. |
+| T55, T56 | `test/helpers/tmpRepo.ts` + `test/integration/` scaffold with a first real-git sanity suite. |
+| T59, T60 | `errorSurfacer.test.ts`, `configMigration.test.ts` with a v1 fixture. |
+| Coverage gate | `.github/workflows/ci.yml` runs `scripts/check-coverage.mjs` against the lcov report (non-blocking baseline for now). |
+
 ### Still to land
 
 - T11 (full tree-view reconciliation — retire the legacy worktree
   view or drive it from the same data model).
 - T16 (walkthrough PNGs — asset capture).
-- T55 (per-suite tmp workspaces for integration tests).
-- T56 (integration suite backed by the `IGitRunner` against a real
-  tmp repo).
 - Migrate downstream consumers (`BranchScmProviderManager`,
   `BranchStackTreeProvider`, `BranchFileDecorationProvider`) off
   their own event subscriptions onto the new `FileChangeBus`.
-- Coverage-floor enforcement in CI (threshold configured but not
-  yet enforced).
-- Remainder of P2/P3 per `10-sequencing.md`.
+- Harden coverage-floor thresholds once a baseline lcov is in hand.
+- P3 roadmap items per `10-sequencing.md`.
 
 ## Acceptance
 

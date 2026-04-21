@@ -1,0 +1,19 @@
+{
+    "version": 1,
+    "stack": [
+        {
+            "name": "feature/a",
+            "base": "main",
+            "color": "#4CAF50",
+            "order": 1
+        }
+    ],
+    "assignments": {
+        "src/foo.ts": "feature/a"
+    },
+    "hunkAssignments": {
+        "src/foo.ts": {
+            "0": "feature/a"
+        }
+    }
+}
