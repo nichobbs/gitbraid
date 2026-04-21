@@ -1,10 +1,7 @@
-import util from 'node:util'
-import child_process from 'node:child_process'
 import path from 'node:path'
 import { log } from './channelLogger'
 import { requireInside } from './pathGuard'
-
-const exec = util.promisify(child_process.exec)
+import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -117,8 +114,17 @@ export function parseDiffHunks(unifiedDiff: string): DiffHunk[] {
  *
  * All methods accept an absolute path for `wsRoot` (the workspace root or a
  * worktree root) so they can be called without needing a live `vscode.Uri`.
+ *
+ * Git is invoked via the injected {@link IGitRunner} (spawn with
+ * `shell: false` by default), so path and ref arguments never touch a shell.
  */
 export class DiffEngine {
+
+	/**
+	 * @param runner  Optional git runner for test injection.  Defaults to the
+	 *                module-level singleton returned by `getDefaultGitRunner`.
+	 */
+	constructor(private readonly runner: IGitRunner = getDefaultGitRunner()) {}
 
 	// ── Public API ─────────────────────────────────────────────────────────────
 
@@ -131,19 +137,17 @@ export class DiffEngine {
 	 */
 	async getHunksForFile(wsRoot: string, relativePath: string): Promise<DiffHunk[]> {
 		log.info(`DiffEngine.getHunksForFile: ${relativePath} in ${wsRoot}`)
-		// Reject path-traversal up front so we never pass an escape to git.
 		requireInside(wsRoot, relativePath)
-		const safeRelative = this._sanitisePath(relativePath)
-		try {
-			const { stdout } = await exec(
-				`git diff HEAD -- "${safeRelative}"`,
-				{ cwd: wsRoot },
-			)
-			return parseDiffHunks(stdout)
-		} catch (err) {
-			log.error(`DiffEngine.getHunksForFile error: ${String(err)}`)
+		const safe = this._normalisePath(relativePath)
+		const { stdout, exitCode, stderr } = await this.runner.run(
+			['diff', 'HEAD', '--', safe],
+			{ cwd: wsRoot },
+		)
+		if (exitCode !== 0) {
+			log.error(`DiffEngine.getHunksForFile: git diff exited ${String(exitCode)}: ${stderr}`)
 			return []
 		}
+		return parseDiffHunks(stdout)
 	}
 
 	/**
@@ -166,17 +170,16 @@ export class DiffEngine {
 		if (!mergeBase) {
 			return this.getHunksForFile(wsRoot, relativePath)
 		}
-		const safeRelative = this._sanitisePath(relativePath)
-		try {
-			const { stdout } = await exec(
-				`git diff "${mergeBase}" -- "${safeRelative}"`,
-				{ cwd: wsRoot },
-			)
-			return parseDiffHunks(stdout)
-		} catch (err) {
-			log.error(`DiffEngine.getHunksAgainstBranch error: ${String(err)}`)
+		const safe = this._normalisePath(relativePath)
+		const { stdout, exitCode, stderr } = await this.runner.run(
+			['diff', mergeBase, '--', safe],
+			{ cwd: wsRoot },
+		)
+		if (exitCode !== 0) {
+			log.error(`DiffEngine.getHunksAgainstBranch: git diff exited ${String(exitCode)}: ${stderr}`)
 			return []
 		}
+		return parseDiffHunks(stdout)
 	}
 
 	/**
@@ -184,37 +187,26 @@ export class DiffEngine {
 	 */
 	async getMergeBase(wsRoot: string, ref1: string, ref2: string): Promise<string | undefined> {
 		log.info(`DiffEngine.getMergeBase: ${ref1} ${ref2} in ${wsRoot}`)
-		try {
-			const { stdout } = await exec(`git merge-base "${ref1}" "${ref2}"`, { cwd: wsRoot })
-			const sha = stdout.trim()
-			return sha || undefined
-		} catch {
-			log.error(`DiffEngine.getMergeBase: no common ancestor for ${ref1} and ${ref2}`)
+		const { stdout, exitCode } = await this.runner.run(
+			['merge-base', ref1, ref2],
+			{ cwd: wsRoot },
+		)
+		if (exitCode !== 0) {
+			log.debug(`DiffEngine.getMergeBase: no common ancestor for ${ref1} and ${ref2}`)
 			return undefined
 		}
+		return stdout.trim() || undefined
 	}
 
 	// ── Private helpers ────────────────────────────────────────────────────────
 
 	/**
-	 * Sanitise a relative path so it cannot escape the repository root via
-	 * path traversal, and fail loudly on any shell metacharacter.
-	 *
-	 * The previous implementation used `replaceAll('"', String.raw\`"\`)` which
-	 * was a no-op (the template evaluates to a plain `"`) and left the command
-	 * line open to injection when a path contained double quotes, backticks,
-	 * `$`, etc.  The proper fix is to pass paths as separate argv entries via
-	 * `spawn` (tracked in remediation plan T18).  Until that lands we reject
-	 * paths that contain any character that cannot appear inside the
-	 * double-quoted shell argument.
+	 * Normalise slashes and strip leading `../` segments.  Shell-metacharacter
+	 * rejection is now redundant (args are passed through `spawn` as argv so
+	 * the shell never sees them), but we keep the `pathGuard.requireInside`
+	 * call at the public entry points to block filesystem escapes.
 	 */
-	private _sanitisePath(relativePath: string): string {
-		const normalised = path.normalize(relativePath).replace(/^(\.\.\/|\.\.\\)+/, '')
-		// Disallow any shell metacharacter, newline, or leading dash.
-		// Defence in depth — the spawn migration (T18) removes the shell entirely.
-		if (/["`$\\\n|;&<>()]/.test(normalised) || normalised.startsWith('-')) {
-			throw new Error(`Refusing to operate on path with unsafe characters: ${relativePath}`)
-		}
-		return normalised
+	private _normalisePath(relativePath: string): string {
+		return path.normalize(relativePath).replace(/^(\.\.\/|\.\.\\)+/, '')
 	}
 }

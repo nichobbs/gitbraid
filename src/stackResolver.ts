@@ -1,12 +1,9 @@
 import * as vscode from 'vscode'
-import * as node_util from 'node:util'
-import * as node_child_process from 'node:child_process'
 import * as node_path from 'node:path'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
-
-const execAsync = node_util.promisify(node_child_process.exec)
+import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 
 /**
  * Resolves file content through the cumulative branch stack.
@@ -18,6 +15,9 @@ const execAsync = node_util.promisify(node_child_process.exec)
  *   2. Plus any uncommitted (dirty) changes in that branch's worktree
  *
  * For a floating file (no assignment), the workspace file itself is the content.
+ *
+ * Git is invoked via the injected {@link IGitRunner} (spawn with
+ * `shell: false` by default).
  */
 export class StackResolver implements vscode.Disposable {
 
@@ -26,6 +26,7 @@ export class StackResolver implements vscode.Disposable {
 	constructor(
 		private readonly _config: ConfigService,
 		private readonly _branchStack: BranchStackService,
+		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {}
 
 	dispose(): void {
@@ -90,7 +91,7 @@ export class StackResolver implements vscode.Disposable {
 
 	/**
 	 * Returns the cumulative stack diff for a file — every layer's changes
-	 * combined — using `git diff <base>..<topBranch> -- <file>`.
+	 * combined — using `git diff <base>...<topBranch> -- <file>`.
 	 *
 	 * Useful for previewing what the final merged diff would look like.
 	 */
@@ -105,20 +106,19 @@ export class StackResolver implements vscode.Disposable {
 		const top = stack.at(-1)
 		const bottom = stack[0]
 
-		const safeFile = _sanitise(relativePath)
-		const safeTop = _sanitise(top.name)
-		const safeBase = _sanitise(bottom.base)
+		const safeFile = _normalisePath(relativePath)
+		const safeTop = top.name
+		const safeBase = bottom.base
 
-		try {
-			const { stdout } = await execAsync(
-				`git diff "${safeBase}"..."${safeTop}" -- "${safeFile}"`,
-				{ cwd: workspaceRoot },
-			)
-			return stdout.trim() || undefined
-		} catch (e) {
-			log.warn(`StackResolver.getStackDiff: ${safeBase}...${safeTop} ${safeFile}: ${e instanceof Error ? e.message : String(e)}`)
+		const { stdout, exitCode, stderr } = await this._runner.run(
+			['diff', `${safeBase}...${safeTop}`, '--', safeFile],
+			{ cwd: workspaceRoot },
+		)
+		if (exitCode !== 0) {
+			log.warn(`StackResolver.getStackDiff: ${safeBase}...${safeTop} ${safeFile}: exit=${String(exitCode)} ${stderr}`)
 			return undefined
 		}
+		return stdout.trim() || undefined
 	}
 
 	/**
@@ -137,37 +137,34 @@ export class StackResolver implements vscode.Disposable {
 		branch: string,
 		relativePath: string,
 	): Promise<Uint8Array | undefined> {
-		const safeBranch = _sanitise(branch)
-		const safeFile = _sanitise(relativePath)
-		try {
-			const { stdout } = await execAsync(
-				`git show "${safeBranch}:${safeFile}"`,
-				{ cwd: wsRoot, encoding: 'buffer' },
-			)
-			return new Uint8Array(stdout)
-		} catch (e: unknown) {
-			const msg = e instanceof Error ? e.message : JSON.stringify(e)
-			if (!msg.includes('does not exist') && !msg.includes('Path') && !msg.includes('does not exist in')) {
-				log.warn(`StackResolver: git show failed for ${branch}:${relativePath} — ${msg}`)
+		// `git show <ref>:<path>` still takes its argument as a single token,
+		// but spawn-with-argv means the shell never interprets it.  We still
+		// normalise slashes and strip leading `../` to keep the mapping
+		// unambiguous across OSes.
+		//
+		// NOTE on binary content: `IGitRunner` currently decodes stdout as
+		// UTF-8, which loses binary bytes.  The previous exec-based
+		// implementation used `encoding: 'buffer'`; re-adding a Buffer mode to
+		// the runner is tracked alongside the rest of the T18 migration.
+		// Text files (the overwhelming majority of stack content) round-trip
+		// fine through UTF-8.
+		const safe = _normalisePath(relativePath)
+		const { stdout, exitCode, stderr } = await this._runner.run(
+			['show', `${branch}:${safe}`],
+			{ cwd: wsRoot },
+		)
+		if (exitCode !== 0) {
+			if (!stderr.includes('does not exist') && !stderr.includes('Path')) {
+				log.warn(`StackResolver: git show failed for ${branch}:${relativePath} — ${stderr}`)
 			}
 			return undefined
 		}
+		return new TextEncoder().encode(stdout)
 	}
 }
 
-/**
- * Strip path traversal and reject shell metacharacters.  Combined with
- * `pathGuard.requireInside` at the call sites that accept a workspace-
- * relative path, this prevents both shell-level injection and filesystem
- * escapes.  The full fix (spawn-with-argv) lands with remediation plan T18.
- */
-function _sanitise(input: string): string {
-	const stripped = input
+function _normalisePath(input: string): string {
+	return input
 		.split(node_path.sep).join('/')
-		.replaceAll('../', '')
-		.replaceAll('./', '')
-	if (/["`$\\\n|;&<>()]/.test(stripped) || stripped.startsWith('-')) {
-		throw new Error(`Refusing to operate on input with unsafe characters: ${input}`)
-	}
-	return stripped
+		.replace(/^(\.\.\/|\.\.\\)+/, '')
 }

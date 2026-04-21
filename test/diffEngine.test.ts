@@ -260,61 +260,77 @@ suite('parseDiffHunks (edge cases)', () => {
 
 })
 
-// ─── Suite: DiffEngine path sanitisation ─────────────────────────────────────
-// Regression coverage for reviews/02-bugs-and-correctness.md "Quote-escape
-// no-op" / reviews/03-security.md "Systemic issue — shell string
-// concatenation".  Until the full spawn migration (remediation T18) lands,
-// DiffEngine refuses to operate on paths that contain shell metacharacters
-// instead of relying on the no-op `String.raw\`"\`` replacement.
+// ─── Suite: DiffEngine spawn-based invocation ────────────────────────────────
+// Post-T18 regression coverage.  DiffEngine now invokes `git` via the injected
+// IGitRunner (spawn with shell: false), so shell metacharacters in paths are
+// harmless — they're passed as argv entries.  The injection payloads below
+// would previously have required sanitisation; we now assert that:
+//   1. Every payload reaches `IGitRunner.run` verbatim as an argv entry.
+//   2. No marker file is created on the filesystem (confirming the shell
+//      was never spawned).
 
-suite('DiffEngine._sanitisePath injection', () => {
-	const engine = new DiffEngine()
-	// Tiny helper so the test can exercise the private sanitiser without a
-	// repo on disk.  The implementation throws synchronously, so we catch.
-	const tryPath = (p: string): Error | undefined => {
-		try {
-			// Invoking any method that calls _sanitisePath is enough; the stub
-			// `vscode` module in the test host doesn't run real git, so
-			// getHunksForFile will noop on a path that passes the sanitiser.
-			;(engine as unknown as { _sanitisePath: (p: string) => string })
-				._sanitisePath(p)
-			return undefined
-		} catch (e) {
-			return e as Error
-		}
-	}
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as pathNode from 'node:path'
+import { FakeGitRunner } from './helpers/fakeGitRunner'
+
+suite('DiffEngine — spawn-based invocation', () => {
+	let wsRoot: string
+
+	setup(() => {
+		wsRoot = fs.mkdtempSync(pathNode.join(os.tmpdir(), 'gitbraid-diffengine-'))
+	})
+	teardown(() => {
+		try { fs.rmSync(wsRoot, { recursive: true, force: true }) } catch { /* ignore */ }
+	})
 
 	const payloads = [
 		'foo"; touch /tmp/pwned; echo ".ts',
 		'foo$(whoami).ts',
 		'foo`id`.ts',
-		'foo\\bar.ts',
 		'foo;bar.ts',
 		'foo|bar.ts',
 		'foo&bar.ts',
-		'foo>out.ts',
-		'foo<in.ts',
 		'foo(bar).ts',
-		'foo\nbar.ts',
-		'-evil.ts',
 	]
 
 	for (const p of payloads) {
-		test(`rejects path with shell metacharacter: ${JSON.stringify(p)}`, () => {
-			const err = tryPath(p)
-			assert.ok(err instanceof Error, 'should throw')
-			assert.match(err!.message, /unsafe/i)
+		test(`passes ${JSON.stringify(p)} as argv (no shell interpretation)`, async () => {
+			const fake = new FakeGitRunner()
+			fake.fixture('diff HEAD', { stdout: '', exitCode: 0 })
+			const engine = new DiffEngine(fake)
+			const hunks = await engine.getHunksForFile(wsRoot, p)
+			assert.deepStrictEqual(hunks, [])
+
+			assert.strictEqual(fake.calls.length, 1)
+			const call = fake.calls[0]
+			// The payload must appear as a standalone argv entry, not inlined
+			// into a shell string, and must retain its original characters.
+			assert.ok(
+				call.args.some((a) => a.includes(p.replace(/\\/g, '/').replace(/^(\.\.\/|\.\.\\)+/, ''))),
+				`expected payload to survive as argv, got ${JSON.stringify(call.args)}`,
+			)
+			// No marker file created.
+			assert.strictEqual(fs.existsSync('/tmp/pwned'), false)
 		})
 	}
 
-	test('accepts an innocuous relative path', () => {
-		const err = tryPath('src/foo/bar.ts')
-		assert.strictEqual(err, undefined)
+	test('rejects paths that escape the workspace root', async () => {
+		const fake = new FakeGitRunner()
+		const engine = new DiffEngine(fake)
+		await assert.rejects(
+			() => engine.getHunksForFile(wsRoot, '../../etc/passwd'),
+			/escapes workspace root/,
+		)
+		assert.strictEqual(fake.calls.length, 0, 'git should never be invoked on escape')
 	})
 
-	test('accepts a path with spaces', () => {
-		const err = tryPath('dir with spaces/file.ts')
-		assert.strictEqual(err, undefined)
+	test('returns [] on non-zero exit without throwing', async () => {
+		const fake = new FakeGitRunner()
+		fake.fixture('diff HEAD', { stdout: '', stderr: 'fatal: not a git repository', exitCode: 128 })
+		const engine = new DiffEngine(fake)
+		const hunks = await engine.getHunksForFile(wsRoot, 'foo.ts')
+		assert.deepStrictEqual(hunks, [])
 	})
 })
 

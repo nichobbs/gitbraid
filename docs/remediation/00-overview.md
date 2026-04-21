@@ -141,8 +141,9 @@ Annotated during execution. Checkpoint SHAs refer to the
 | T20 — path-containment helper | b14bf4c | New `src/pathGuard.ts` + test suite; wired into DiffEngine. |
 | T23 — workspace trust gating | b14bf4c | `activate()` defers until `onDidGrantWorkspaceTrust` in untrusted workspaces. |
 | T24 — single `.gitignore` writer | b14bf4c | Duplicate in `extension.ts` removed; single writer preserves CRLF/LF. |
-| T54 — `IGitRunner` seam | (current) | Interface + `ProcessGitRunner` + `FakeGitRunner` + unit tests. No callers migrated yet — substrate only. |
-| T61 — CI workflow + ESLint config | (current) | `.github/workflows/ci.yml` runs lint + build + test + vsce package on Linux / macOS / Windows. Minimal `.eslintrc.json` so the lint script finally works. |
+| T54 — `IGitRunner` seam | ce0a575 | Interface + `ProcessGitRunner` + `FakeGitRunner` + unit tests. |
+| T61 — CI workflow + ESLint config | ce0a575 | `.github/workflows/ci.yml` runs lint + build + test + vsce package on Linux / macOS / Windows. Minimal `.eslintrc.json` so the lint script finally works. |
+| T18 (partial) — spawn migration | (current) | `DiffEngine` and `StackResolver` now invoke git exclusively through `IGitRunner` (spawn, shell:false). Injection payloads traverse as argv without a shell ever existing. `RebaseSuggestionService`, `BranchStackService`, `MbcApi`, `BranchScmProviderManager` still on the exec path — subsequent commits. |
 | T2 — gitExec stderr popup | 6cb9fcc | stderr logged at debug on success, error only on non-zero exit. |
 | T3 — discardChanges data-loss | 6cb9fcc | Tracked files restored via `git checkout HEAD --`, untracked via `clean -f`. |
 | T5 — activationEvents malformed | 6cb9fcc | Replaced by `workspaceContains:.git` / `.worktrees/local-config.json`; no-workspace case early-returns. |
