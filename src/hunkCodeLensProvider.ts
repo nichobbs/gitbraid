@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import * as path from 'path'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { DiffEngine, DiffHunk } from './diffEngine'
@@ -55,12 +56,15 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		if (document.uri.scheme !== 'file') {
 			return []
 		}
-		if (document.uri.fsPath.includes('.worktrees')) {
-			return []
-		}
-
 		const wsFolder = vscode.workspace.getWorkspaceFolder(document.uri)
 		if (!wsFolder) {
+			return []
+		}
+		// Containment check (not a substring match) — see reviews/05-ui-and-ux.md
+		// "Hunk CodeLens UX": previously `fsPath.includes('.worktrees')` also
+		// matched folders like `not.worktrees-backups/`.
+		const rel = path.relative(wsFolder.uri.fsPath, document.uri.fsPath)
+		if (!rel || rel.split(path.sep).includes('.worktrees')) {
 			return []
 		}
 
@@ -72,24 +76,42 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		const relativePath = vscode.workspace.asRelativePath(document.uri, false)
 		const hunkAssignments = this._config.getHunkAssignments(relativePath)
 
-		return hunks.map((hunk) => {
+		const lenses: vscode.CodeLens[] = []
+		for (const hunk of hunks) {
 			const assignedBranch = hunkAssignments?.get(hunk.index)
-			const title = assignedBranch
-				? `$(git-branch) Hunk → ${assignedBranch}`
-				: '$(git-commit) Assign hunk to branch…'
 			const range = new vscode.Range(
 				Math.max(hunk.startLine - 1, 0),
 				0,
 				Math.max(hunk.startLine - 1, 0),
 				0,
 			)
-			return new vscode.CodeLens(range, {
-				title,
-				command: 'gitbraid.assignHunk',
-				arguments: [document.uri, hunk.index],
-				tooltip: `Lines ${String(hunk.startLine)}–${String(hunk.endLine)}: ${assignedBranch ?? 'unassigned'}`,
-			})
-		})
+			const tooltip = `Lines ${String(hunk.startLine)}–${String(hunk.endLine)}: ${assignedBranch ?? 'unassigned'}`
+
+			if (assignedBranch) {
+				// Two lenses: reassign (opens the picker) + unassign (one-click).
+				// See reviews/05-ui-and-ux.md "Hunk CodeLens UX".
+				lenses.push(new vscode.CodeLens(range, {
+					title: `$(git-branch) Hunk → ${assignedBranch}`,
+					command: 'gitbraid.assignHunk',
+					arguments: [document.uri, hunk.index],
+					tooltip,
+				}))
+				lenses.push(new vscode.CodeLens(range, {
+					title: '$(trash) Unassign',
+					command: 'gitbraid.unassignHunk',
+					arguments: [document.uri, hunk.index],
+					tooltip: 'Remove the hunk assignment',
+				}))
+			} else {
+				lenses.push(new vscode.CodeLens(range, {
+					title: '$(git-commit) Assign hunk to branch…',
+					command: 'gitbraid.assignHunk',
+					arguments: [document.uri, hunk.index],
+					tooltip,
+				}))
+			}
+		}
+		return lenses
 	}
 
 	resolveCodeLens(codeLens: vscode.CodeLens, _token: vscode.CancellationToken): vscode.CodeLens {

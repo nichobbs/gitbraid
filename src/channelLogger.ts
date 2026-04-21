@@ -48,6 +48,11 @@ class Logger {
 		this.logOutputChannel.clear()
 	}
 
+	/** Reveal the output channel so the user can see recent messages. */
+	show (preserveFocus = true): void {
+		this.logOutputChannel.show(preserveFocus)
+	}
+
 	setLogLevel (e: LogLevel) {
 		const message = 'LogLevel changed from ' + this.logLevel + ' to ' + e
 		log.info(message)

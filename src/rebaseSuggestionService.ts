@@ -93,6 +93,17 @@ export class RebaseSuggestionService implements vscode.Disposable {
 	}
 
 	private async _checkAll(): Promise<void> {
+		try {
+			await this._checkAllInner()
+		} catch (e) {
+			// Never let interval-triggered work become an unhandled rejection
+			// on the extension host (reviews/02-bugs-and-correctness.md
+			// "Rebase service has no timer cancellation on error").
+			log.error('RebaseSuggestionService._checkAll failed: ' + (e instanceof Error ? e.message : String(e)))
+		}
+	}
+
+	private async _checkAllInner(): Promise<void> {
 		if (!this._workspaceRoot) {
 			return
 		}
@@ -126,12 +137,13 @@ export class RebaseSuggestionService implements vscode.Disposable {
 
 			const plural = behind === 1 ? 'commit' : 'commits'
 			const msg = `"${entry.name}" is ${String(behind)} ${plural} behind "${entry.base}". Rebase now?`
-			await vscode.window.showInformationMessage(msg, 'Rebase now', 'Dismiss').then(async (choice) => {
-				if (choice !== 'Rebase now') {
-					return
-				}
+			// Previously `await showInformationMessage(...).then(async ...)` —
+			// the outer await only resolved when the user clicked, not when
+			// _rebaseBranch completed.  Flattened for correct sequencing.
+			const choice = await vscode.window.showInformationMessage(msg, 'Rebase now', 'Dismiss')
+			if (choice === 'Rebase now') {
 				await this._rebaseBranch(entry.name)
-			})
+			}
 		}
 	}
 

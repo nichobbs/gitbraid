@@ -138,6 +138,15 @@ export async function activate(context: vscode.ExtensionContext) {
 		),
 
 		vscode.commands.registerCommand(
+			'gitbraid.unassignHunk',
+			cmd(async (uri: vscode.Uri, hunkIndex: number) => {
+				const rel = vscode.workspace.asRelativePath(uri, false)
+				await configService.removeHunkAssignment(rel, hunkIndex)
+				await overlayDiagnostics.refreshForUri(uri)
+			}),
+		),
+
+		vscode.commands.registerCommand(
 			'gitbraid.routeHunks',
 			cmd(async (uri?: vscode.Uri) => {
 				const target = uri ?? vscode.window.activeTextEditor?.document.uri

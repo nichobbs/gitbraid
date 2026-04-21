@@ -173,7 +173,19 @@ export class WorkspaceSync implements vscode.Disposable {
 			return
 		}
 		this._floatingDirty.delete(normalisePath(relativePath))
-		await this._syncFile(relativePath, uri, branch)
+		try {
+			await this._syncFile(relativePath, uri, branch)
+		} catch (e) {
+			// Previously SyncError was thrown straight into the debounce
+			// timer's `void` callback and lost; the user saw no feedback when
+			// a sync silently failed.
+			const msg = e instanceof Error ? e.message : String(e)
+			log.error(`WorkspaceSync: sync of ${relativePath} failed: ${msg}`)
+			const pick = await vscode.window.showErrorMessage(`GitBraid: sync failed — ${msg}`, 'Open Output')
+			if (pick === 'Open Output') {
+				log.show()
+			}
+		}
 	}
 
 	private async _syncFile(relativePath: string, uri: vscode.Uri, branch: string): Promise<void> {

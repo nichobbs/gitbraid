@@ -31,6 +31,11 @@ export class ConfigService implements vscode.Disposable {
 
 	private _config: BranchConfig = emptyConfig()
 	private _configPath: string | undefined
+	/**
+	 * Modification time (ms epoch) observed at the last successful read.
+	 * Used to detect concurrent writes from another VS Code window.
+	 */
+	private _lastSeenMtimeMs: number | undefined
 
 	private readonly _onDidChangeAssignment = new vscode.EventEmitter<AssignmentChangeEvent>()
 	private readonly _onDidChangeStack = new vscode.EventEmitter<StackChangeEvent>()
@@ -241,6 +246,11 @@ export class ConfigService implements vscode.Disposable {
 		}
 		try {
 			const raw = fs.readFileSync(this._configPath, 'utf-8')
+			try {
+				this._lastSeenMtimeMs = fs.statSync(this._configPath).mtimeMs
+			} catch {
+				this._lastSeenMtimeMs = undefined
+			}
 			const parsed: unknown = JSON.parse(raw)
 			if (!isValidConfig(parsed)) {
 				log.warn('ConfigService: config file has unexpected structure, using empty config')
@@ -251,6 +261,7 @@ export class ConfigService implements vscode.Disposable {
 			if (isNodeError(e) && e.code === 'ENOENT') {
 				// Missing file is fine — user hasn't set up a stack yet
 				log.info('ConfigService: no config file found, starting with empty config')
+				this._lastSeenMtimeMs = undefined
 				return emptyConfig()
 			}
 			if (e instanceof SyntaxError) {
@@ -264,6 +275,10 @@ export class ConfigService implements vscode.Disposable {
 	/**
 	 * Write the current in-memory config to disk atomically.
 	 * On the first write, ensures `.worktrees/` is present in `.gitignore`.
+	 *
+	 * Cross-window safety: if another process has modified the file since we
+	 * last loaded, log a warning so the user can investigate manually.  A
+	 * full merge-on-conflict is tracked in the remediation plan (T21).
 	 */
 	private async _writeToDisk(): Promise<void> {
 		if (!this._configPath) {
@@ -272,10 +287,32 @@ export class ConfigService implements vscode.Disposable {
 		const dir = path.dirname(this._configPath)
 		fs.mkdirSync(dir, { recursive: true })
 
+		// Detect concurrent modification by another VS Code window
+		if (this._lastSeenMtimeMs !== undefined) {
+			try {
+				const stat = fs.statSync(this._configPath)
+				if (stat.mtimeMs > this._lastSeenMtimeMs + 1) {
+					log.warn(
+						'ConfigService: config file changed on disk since last read ' +
+						`(observed mtime ${String(stat.mtimeMs)} > expected ${String(this._lastSeenMtimeMs)}). ` +
+						'Another window may be writing to the same stack; changes may be clobbered.',
+					)
+				}
+			} catch {
+				// File missing is fine on first write
+			}
+		}
+
 		const content = JSON.stringify(this._config, null, 2) + '\n'
 		const tmpPath = this._configPath + '.tmp'
 		fs.writeFileSync(tmpPath, content, 'utf-8')
 		fs.renameSync(tmpPath, this._configPath)
+
+		try {
+			this._lastSeenMtimeMs = fs.statSync(this._configPath).mtimeMs
+		} catch {
+			// stat failure is non-fatal
+		}
 
 		await this._ensureGitignore()
 	}

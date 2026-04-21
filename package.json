@@ -44,6 +44,19 @@
 		"workspaceContains:.git",
 		"workspaceContains:.worktrees/local-config.json"
 	],
+	"extensionKind": [
+		"workspace"
+	],
+	"capabilities": {
+		"virtualWorkspaces": {
+			"supported": false,
+			"description": "GitBraid requires local git worktrees on disk."
+		},
+		"untrustedWorkspaces": {
+			"supported": "limited",
+			"description": "GitBraid runs git commands that can trigger repository hooks."
+		}
+	},
 	"main": "./dist/extension.js",
 	"extensionDependencies": [
 		"vscode.git"
@@ -195,63 +208,80 @@
 			},
 			{
 				"command": "gitbraid.compareTo",
-				"title": "Compare with",
-				"category": "other",
+				"title": "Compare With…",
+				"category": "GitBraid",
 				"icon": "$(debug-continue)"
 			},
 			{
 				"command": "gitbraid.stackView.refresh",
 				"title": "Refresh Branch Stack",
+				"category": "GitBraid",
 				"icon": "$(refresh)"
 			},
 			{
 				"command": "gitbraid.focusStackView",
 				"title": "Focus Branch Stack View",
+				"category": "GitBraid",
 				"icon": "$(list-tree)"
 			},
 			{
 				"command": "gitbraid.scm.commitBranch",
 				"title": "Commit Branch",
+				"category": "GitBraid",
 				"icon": "$(check)"
 			},
 			{
 				"command": "gitbraid.scm.refreshAll",
 				"title": "Refresh All SCM Providers",
+				"category": "GitBraid",
 				"icon": "$(refresh)"
 			},
 			{
 				"command": "gitbraid.assignFile",
 				"title": "Assign File to Branch",
+				"category": "GitBraid",
 				"icon": "$(tag)"
 			},
 			{
 				"command": "gitbraid.unassignFile",
 				"title": "Unassign File from Branch",
+				"category": "GitBraid",
 				"icon": "$(tag-remove)"
 			},
 			{
 				"command": "gitbraid.addStackBranch",
 				"title": "Add Branch to Stack",
+				"category": "GitBraid",
 				"icon": "$(git-branch-create)"
 			},
 			{
 				"command": "gitbraid.removeStackBranch",
 				"title": "Remove Branch from Stack",
+				"category": "GitBraid",
 				"icon": "$(git-branch-delete)"
 			},
 			{
 				"command": "gitbraid.routeHunks",
 				"title": "Route Hunks to Assigned Branches",
+				"category": "GitBraid",
 				"icon": "$(diff)"
 			},
 			{
 				"command": "gitbraid.assignHunk",
 				"title": "Assign Hunk to Branch",
+				"category": "GitBraid",
 				"icon": "$(diff-single)"
+			},
+			{
+				"command": "gitbraid.unassignHunk",
+				"title": "Unassign Hunk from Branch",
+				"category": "GitBraid",
+				"icon": "$(trash)"
 			},
 			{
 				"command": "gitbraid.rebaseBranch",
 				"title": "Rebase Branch onto Parent",
+				"category": "GitBraid",
 				"icon": "$(git-merge)"
 			}
 		],
