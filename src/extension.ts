@@ -7,6 +7,9 @@ import { nodeMaps, WorktreeFile, WorktreeNode, WorktreeRoot } from './worktreeNo
 import { ConfigService } from './configService'
 import { BranchStackService } from './branchStackService'
 import { WorkspaceSync } from './workspaceSync'
+import { BranchFileDecorationProvider } from './fileDecorationProvider'
+import { BranchScmProviderManager } from './branchScmProvider'
+import { BranchStackTreeProvider, FloatingStatusBarItem } from './branchStackTreeProvider'
 
 export const api = new MultiBranchCheckoutAPI()
 
@@ -33,6 +36,44 @@ export async function activate(context: vscode.ExtensionContext) {
 	workspaceSync.init(workspaceRoot)
 
 	context.subscriptions.push(configService, branchStack, workspaceSync)
+
+	// ─── Phase 2: SCM Integration & UI ────────────────────────────────────────
+	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync)
+	context.subscriptions.push(decorationProvider)
+
+	const scmManager = new BranchScmProviderManager(configService, workspaceSync, workspaceRoot)
+	await scmManager.initialize()
+	context.subscriptions.push(scmManager)
+
+	const stackTreeProvider = new BranchStackTreeProvider(configService, workspaceSync)
+	const stackView = vscode.window.createTreeView('multi-branch-checkout.stackView', {
+		treeDataProvider: stackTreeProvider,
+		showCollapseAll: true,
+	})
+	stackView.title = 'Branch Stack'
+	context.subscriptions.push(stackTreeProvider, stackView)
+
+	const statusBar = new FloatingStatusBarItem(workspaceSync, configService)
+	context.subscriptions.push(statusBar)
+
+	// ── Phase 2 commands ───────────────────────────────────────────────────────
+	commands.push(
+		vscode.commands.registerCommand('multi-branch-checkout.stackView.refresh', () => stackTreeProvider.refresh()),
+
+		vscode.commands.registerCommand('multi-branch-checkout.focusStackView', () => {
+			stackView.reveal(undefined as never, { focus: true }).then(undefined, (e: unknown) => {
+				log.error('focusStackView: ' + e)
+			})
+		}),
+
+		vscode.commands.registerCommand('multi-branch-checkout.scm.commitBranch', (branchName: string) => {
+			void scmManager.commitBranch(branchName)
+		}),
+
+		vscode.commands.registerCommand('multi-branch-checkout.scm.refreshAll', () => {
+			void scmManager.refreshAll()
+		}),
+	)
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
