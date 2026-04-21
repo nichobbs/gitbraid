@@ -5,6 +5,7 @@ import { WorkspaceSync } from './workspaceSync'
 import { worktreePath } from './branchStackService'
 import { BranchStackEntry } from './configTypes'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
+import { showError } from './errorSurfacer'
 
 // ─── Git status parsing ───────────────────────────────────────────────────────
 
@@ -317,10 +318,9 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		if (exitCode === 0) {
 			entry.inputBox.value = ''
 			log.info(`[BranchScmProvider] committed to "${branchName}"`)
-			await entry.refresh()
+			await entry.refresh(true)
 		} else {
-			await vscode.window.showErrorMessage(`Commit to "${branchName}" failed: ${stderr}`)
-			log.error(`[BranchScmProvider] commit error (exit=${String(exitCode)}): ${stderr}`)
+			await showError(`Commit to "${branchName}" failed`, new Error(stderr || `git commit exited ${String(exitCode)}`))
 		}
 	}
 

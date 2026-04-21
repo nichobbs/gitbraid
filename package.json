@@ -65,8 +65,8 @@
 		"walkthroughs": [
 			{
 				"id": "gitbraid.getStarted",
-				"title": "Get Started with GitBraid",
-				"description": "Learn how to use branch stacking to manage parallel work.",
+				"title": "%gitbraid.walkthrough.title%",
+				"description": "%gitbraid.walkthrough.description%",
 				"steps": [
 					{
 						"id": "addBranch",
@@ -441,7 +441,7 @@
 			]
 		},
 		"configuration": {
-			"title": "GitBraid",
+			"title": "%gitbraid.configuration.title%",
 			"properties": {
 				"gitbraid.syncDebounceMs": {
 					"type": "number",

@@ -1,0 +1,24 @@
+{
+    "gitbraid.walkthrough.title": "Get Started with GitBraid",
+    "gitbraid.walkthrough.description": "Learn how to use branch stacking to manage parallel work.",
+    "gitbraid.walkthrough.addBranch.title": "Add a branch to the stack",
+    "gitbraid.walkthrough.assignFile.title": "Assign a file to a branch",
+    "gitbraid.walkthrough.commit.title": "Commit to a branch",
+    "gitbraid.walkthrough.rebase.title": "Add another layer",
+    "gitbraid.configuration.title": "GitBraid",
+
+    "gitbraid.notification.routedHunks": "Routed hunks for {0} successfully.",
+    "gitbraid.notification.branchAdded": "Branch \"{0}\" added to stack",
+    "gitbraid.notification.branchRemoved": "Branch \"{0}\" removed from stack",
+    "gitbraid.notification.rebased": "\"{0}\" rebased onto \"{1}\" successfully.",
+
+    "gitbraid.warning.emptyStack": "Stack is empty.",
+    "gitbraid.warning.noFloatingFiles": "No branches in the stack. Add a branch first.",
+    "gitbraid.warning.noActiveFile": "No file active to route hunks for.",
+    "gitbraid.warning.openFile": "Open a file first to see its resolved stack view.",
+    "gitbraid.warning.commitMessage": "Enter a commit message before committing.",
+
+    "gitbraid.floating.warning": "{0} file(s) are floating (unassigned) and will NOT be committed:\n{1}",
+    "gitbraid.floating.commitAnyway": "Commit anyway",
+    "gitbraid.floating.status": "GitBraid: {0} floating file(s) not assigned to a branch"
+}

@@ -4,6 +4,7 @@ import { log } from './channelLogger'
 import { SyncError } from './errors'
 import { ConfigService } from './configService'
 import { worktreePath } from './branchStackService'
+import { showError } from './errorSurfacer'
 
 const DEFAULT_DEBOUNCE_MS = 200
 /** Hard cap on `_floatingDirty` so a long-running session can't leak memory. */
@@ -232,13 +233,9 @@ export class WorkspaceSync implements vscode.Disposable {
 		} catch (e) {
 			// Previously SyncError was thrown straight into the debounce
 			// timer's `void` callback and lost; the user saw no feedback when
-			// a sync silently failed.
-			const msg = e instanceof Error ? e.message : String(e)
-			log.error(`WorkspaceSync: sync of ${relativePath} failed: ${msg}`)
-			const pick = await vscode.window.showErrorMessage(`GitBraid: sync failed — ${msg}`, 'Open Output')
-			if (pick === 'Open Output') {
-				log.show()
-			}
+			// a sync silently failed.  Route through the shared surfacer so
+			// the notification pattern matches the rest of the extension.
+			await showError(`GitBraid: sync of ${relativePath} failed`, e)
 		}
 	}
 

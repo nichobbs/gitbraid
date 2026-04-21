@@ -21,18 +21,14 @@ import { registerLmTools } from './lmTools'
 
 export const api = new GitBraidAPI()
 
+import { withErrorHandler, showError } from './errorSurfacer'
+export { showError }
+
 /**
  * Wraps an async command handler so that any rejection is caught, logged, and
- * shown to the user as an error notification instead of being silently swallowed.
+ * surfaced via {@link showError} (notification + "Open Output" action).
  */
-function cmd<T extends unknown[]>(fn: (...args: T) => Promise<void>) {
-	return (...args: T) =>
-		fn(...args).catch((e: unknown) => {
-			const msg = e instanceof Error ? e.message : String(e)
-			log.error('command error: ' + msg)
-			void vscode.window.showErrorMessage('GitBraid: ' + msg)
-		})
-}
+const cmd = withErrorHandler
 
 export async function activate(context: vscode.ExtensionContext) {
 	const commands: vscode.Disposable[] = []
