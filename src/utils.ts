@@ -42,8 +42,8 @@ export function dirExists (uri: vscode.Uri) {
 }
 
 export function toUri (path: string) {
-	if (path.startsWith('/') || RegExp(/^[a-zA-Z]:\\/).exec(path)) {
-		// absolute path
+	if (path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path)) {
+		// absolute path (POSIX /... or Windows C:\... or C:/...)
 		return vscode.Uri.file(path)
 	}
 

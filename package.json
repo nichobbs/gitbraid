@@ -4,19 +4,19 @@
 	"description": "Braid multiple branches together — assign files and hunks to branches, commit per-branch, and manage a stacked branch hierarchy from a single workspace",
 	"version": "0.1.0",
 	"preview": true,
-	"publisher": "nihobbs",
+	"publisher": "nichobbs",
 	"private": true,
 	"license": "MIT",
 	"author": {
-		"name": "nihobbs"
+		"name": "nichobbs"
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/nihobbs/gitbraid"
+		"url": "https://github.com/nichobbs/gitbraid"
 	},
-	"homepage": "https://github.com/nihobbs/gitbraid",
+	"homepage": "https://github.com/nichobbs/gitbraid",
 	"bugs": {
-		"url": "https://github.com/nihobbs/gitbraid/issues"
+		"url": "https://github.com/nichobbs/gitbraid/issues"
 	},
 	"keywords": [
 		"git",
@@ -41,8 +41,8 @@
 		"Other"
 	],
 	"activationEvents": [
-		"onStartupFinished",
-		"workspaceContains:filePattern:.git/HEAD"
+		"workspaceContains:.git",
+		"workspaceContains:.worktrees/local-config.json"
 	],
 	"main": "./dist/extension.js",
 	"extensionDependencies": [
@@ -52,7 +52,7 @@
 		"walkthroughs": [
 			{
 				"id": "gitbraid.getStarted",
-				"title": "Get Started with Multi-Branch Checkout",
+				"title": "Get Started with GitBraid",
 				"description": "Learn how to use branch stacking to manage parallel work.",
 				"steps": [
 					{
@@ -172,7 +172,7 @@
 			},
 			{
 				"command": "gitbraid.openFile",
-				"title": "Multie Branch Checkout: Open file",
+				"title": "GitBraid: Open File",
 				"icon": "$(go-to-file)"
 			},
 			{
@@ -258,7 +258,12 @@
 		"viewsWelcome": [
 			{
 				"view": "gitbraid.worktreeView",
-				"contents": "This is welcome content! \n[Create worktree](command:gitbraid.createWorktree)",
+				"contents": "No worktrees yet.\n[Create Branch / Worktree](command:gitbraid.createWorktree)\n[Open Walkthrough](command:workbench.action.openWalkthrough?%22gitbraid.gitbraid%23gitbraid.getStarted%22)",
+				"when": "true"
+			},
+			{
+				"view": "gitbraid.stackView",
+				"contents": "No branches in your stack yet.\n[Add Branch to Stack](command:gitbraid.addStackBranch)\n[Open Walkthrough](command:workbench.action.openWalkthrough?%22gitbraid.gitbraid%23gitbraid.getStarted%22)",
 				"when": "true"
 			}
 		],
@@ -303,7 +308,7 @@
 				},
 				{
 					"command": "gitbraid.swapWorktrees",
-					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /isPrumary=true/ && viewItem =~ /pathExists=true/",
+					"when": "view == gitbraid.worktreeView && viewItem =~ /^WorktreeRoot/ && viewItem =~ /primary=true/ && viewItem =~ /pathExists=true/",
 					"group": "inline"
 				},
 				{
@@ -394,7 +399,7 @@
 			]
 		},
 		"configuration": {
-			"title": "Multi-Branch Checkout",
+			"title": "GitBraid",
 			"properties": {
 				"gitbraid.syncDebounceMs": {
 					"type": "number",

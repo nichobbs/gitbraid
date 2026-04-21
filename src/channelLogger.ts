@@ -33,9 +33,15 @@ class Logger {
 	}
 
 	public static getInstance () {
-		Logger.instance = new Logger()
-		Logger.instance.clearOutputChannel()
+		if (!Logger.instance) {
+			Logger.instance = new Logger()
+		}
 		return Logger.instance
+	}
+
+	public static resetForTest () {
+		Logger.instance?.clearOutputChannel()
+		Logger.instance = undefined as unknown as Logger
 	}
 
 	clearOutputChannel () {
@@ -86,12 +92,13 @@ class Logger {
 
 	notification (message: string, notificationType: NotificationType = NotificationType.Info) {
 		const logMessage = 'NOTIFICATION: ' + message + ' (type=' + notificationType + ', enabled=' + this.notificationsEnabled + ')'
+		if (!this.notificationsEnabled) {
+			this.info(logMessage + ' [suppressed]')
+			return
+		}
 		switch (notificationType) {
 			case NotificationType.Info:
 				log.info(logMessage)
-				if (this.notificationsEnabled) {
-					void window.showInformationMessage(message)
-				}
 				void window.showInformationMessage(message)
 				break
 			case NotificationType.Warn:
@@ -131,9 +138,13 @@ class Logger {
 		if (message == undefined) {
 			return
 		}
-		const messageWithSourceLine = '[' + this.getCallerSourceLine() + '] ' + message
-		if (messageWithSourceLine) {
-			message = messageWithSourceLine
+		// Only compute the caller line for debug/trace — the stack-capture is ~20µs/call
+		// and dominates high-volume log paths like tree refresh.
+		if (this.logLevel <= LogLevel.Debug) {
+			const messageWithSourceLine = '[' + this.getCallerSourceLine() + '] ' + message
+			if (messageWithSourceLine) {
+				message = messageWithSourceLine
+			}
 		}
 		switch (messageLevel) {
 			case LogLevel.Trace:
@@ -218,7 +229,7 @@ class Logger {
 
 
 	private decorateMessage (messageLevel: LogLevel, message: string, includeStack = false) {
-		if (includeStack) {
+		if (includeStack || this.logLevel > LogLevel.Debug) {
 			return '[' + this.getLevelText(messageLevel) + '] ' + message
 		}
 		return '[' + this.getLevelText(messageLevel) + '] [' + this.getCallerSourceLine() + '] '  + message

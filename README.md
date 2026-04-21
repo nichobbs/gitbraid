@@ -36,7 +36,7 @@ the commits it should.
 Other extensions can consume the GitBraid API:
 
 ```typescript
-const ext = vscode.extensions.getExtension('nihobbs.gitbraid')
+const ext = vscode.extensions.getExtension('nichobbs.gitbraid')
 const api = await ext?.activate()
 const stack = api?.getStack()         // BranchStackEntry[]
 await api?.assignFile('src/foo.ts', 'feature/docs')

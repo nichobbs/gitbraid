@@ -36,8 +36,13 @@ function cmd<T extends unknown[]>(fn: (...args: T) => Promise<void>) {
 export async function activate(context: vscode.ExtensionContext) {
 	const commands: vscode.Disposable[] = []
 
-	if (vscode.workspace.workspaceFolders === undefined) {
-		throw new Error('No workspace folder found')
+	if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+		// VS Code activates the extension whenever a .git dir is present in the
+		// window; that can fire before any folder is added. Quietly skip —
+		// activation events will re-fire once a folder opens. Previously this
+		// threw a raw Error which VS Code surfaced as a red notification.
+		log.info('gitbraid activation skipped: no workspace folder')
+		return
 	}
 
 	log.info('activating gitbraid (version=' + context.extension.packageJSON.version + ')')
@@ -503,5 +508,5 @@ async function ignoreWorktreesDir () {
 			return
 		}
 	}
-	await vscode.workspace.fs.writeFile(uri, Uint8Array.from(Buffer.from(content + '\n## added by vscode extension \'nihobbs.gitbraid\'\n.worktrees/\n')))
+	await vscode.workspace.fs.writeFile(uri, Uint8Array.from(Buffer.from(content + '\n## gitbraid: manage .worktrees/ (do not remove this line)\n.worktrees/\n')))
 }

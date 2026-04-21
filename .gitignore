@@ -4,6 +4,7 @@ artifacts/
 coverage/
 dist/
 build/
+out/
 *.log
 *.tsbuildinfo
 *.env
@@ -11,5 +12,5 @@ build/
 *.vsix
 test_projects/proj1/src/
 
-## added by vscode extension 'nichobbs.gitbraid'
+## gitbraid: manage .worktrees/ (do not remove this line)
 .worktrees/

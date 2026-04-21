@@ -64,7 +64,10 @@ export function parseDiffHunks(unifiedDiff: string): DiffHunk[] {
 			return
 		}
 		const newCount = currentNewLineCount
-		const endLine = currentStart + Math.max(newCount - 1, 0)
+		// A pure deletion has newCount === 0; represent it as an empty range
+		// (endLine < startLine) so overlap detection doesn't falsely claim the
+		// hunk collides with the next line.
+		const endLine = newCount === 0 ? currentStart - 1 : currentStart + newCount - 1
 		hunks.push({
 			index: hunks.length,
 			startLine: currentStart,
@@ -191,13 +194,23 @@ export class DiffEngine {
 
 	/**
 	 * Sanitise a relative path so it cannot escape the repository root via
-	 * path traversal.  The sanitised value is safe to interpolate into a git
-	 * command after being surrounded with double quotes.
+	 * path traversal, and fail loudly on any shell metacharacter.
+	 *
+	 * The previous implementation used `replaceAll('"', String.raw\`"\`)` which
+	 * was a no-op (the template evaluates to a plain `"`) and left the command
+	 * line open to injection when a path contained double quotes, backticks,
+	 * `$`, etc.  The proper fix is to pass paths as separate argv entries via
+	 * `spawn` (tracked in remediation plan T18).  Until that lands we reject
+	 * paths that contain any character that cannot appear inside the
+	 * double-quoted shell argument.
 	 */
 	private _sanitisePath(relativePath: string): string {
-		// Normalise and strip any leading '../' segments
 		const normalised = path.normalize(relativePath).replace(/^(\.\.\/|\.\.\\)+/, '')
-		// Escape double-quotes that appear inside the path itself
-		return normalised.replaceAll('"', String.raw`"`)
+		// Disallow any shell metacharacter, newline, or leading dash.
+		// Defence in depth — the spawn migration (T18) removes the shell entirely.
+		if (/["`$\\\n|;&<>()]/.test(normalised) || normalised.startsWith('-')) {
+			throw new Error(`Refusing to operate on path with unsafe characters: ${relativePath}`)
+		}
+		return normalised
 	}
 }
