@@ -39,6 +39,16 @@ export class WorkspaceSync implements vscode.Disposable {
 	/** Pending debounce timer handles keyed by workspace-relative path. */
 	private readonly _pending = new Map<string, ReturnType<typeof setTimeout>>()
 
+	/**
+	 * Per-file generation counter used by the bidirectional-sync loop breaker.
+	 * Every primary-originated write bumps the counter; worktree-change events
+	 * whose recorded generation matches the current value are ignored
+	 * (they are the echo of our own write).  See T13.
+	 */
+	private readonly _generations = new Map<string, number>()
+	/** Pending debounce timer handles for reverse-sync operations. */
+	private readonly _reversePending = new Map<string, ReturnType<typeof setTimeout>>()
+
 	private readonly _onDidSyncFile = new vscode.EventEmitter<{ relativePath: string; branch: string }>()
 	readonly onDidSyncFile: vscode.Event<{ relativePath: string; branch: string }> = this._onDidSyncFile.event
 
@@ -64,11 +74,15 @@ export class WorkspaceSync implements vscode.Disposable {
 	}
 
 	dispose(): void {
-		// Cancel all pending debounces
+		// Cancel all pending debounces (forward + reverse)
 		for (const timer of this._pending.values()) {
 			clearTimeout(timer)
 		}
 		this._pending.clear()
+		for (const timer of this._reversePending.values()) {
+			clearTimeout(timer)
+		}
+		this._reversePending.clear()
 		this._onDidSyncFile.dispose()
 		this._onDidFloatFile.dispose()
 		for (const d of this._disposables) {
@@ -80,12 +94,23 @@ export class WorkspaceSync implements vscode.Disposable {
 
 	/**
 	 * Begin watching the workspace. Call once at extension activation.
+	 *
+	 * Two watchers are set up:
+	 *   1. Primary workspace → copies saves to the owning branch's worktree.
+	 *   2. `.worktrees/*\/**` → copies externally-made worktree edits back
+	 *      into the primary workspace (T13 bidirectional sync).  Gated on
+	 *      the `gitbraid.bidirectionalSync` setting (default off in 0.1).
+	 *
+	 * A per-file generation counter is used to break any ping-pong between
+	 * the two directions: every primary-originated write bumps the counter,
+	 * worktree-originated events that would re-sync the same generation are
+	 * ignored.
 	 */
 	init(workspaceRoot: vscode.Uri): void {
 		this._workspaceRoot = workspaceRoot
 
-		// Watch all files in workspace (excluding .worktrees itself)
-		const watcher = vscode.workspace.createFileSystemWatcher(
+		// Primary-workspace watcher
+		const primary = vscode.workspace.createFileSystemWatcher(
 			new vscode.RelativePattern(workspaceRoot, '**/*'),
 			false, // create
 			false, // change
@@ -93,17 +118,31 @@ export class WorkspaceSync implements vscode.Disposable {
 		)
 
 		this._disposables.push(
-			watcher,
-			watcher.onDidChange((uri) => this._onChanged(uri)),
-			watcher.onDidCreate((uri) => this._onChanged(uri)),
-			watcher.onDidDelete((uri) => this._onDeleted(uri)),
+			primary,
+			primary.onDidChange((uri) => this._onChanged(uri)),
+			primary.onDidCreate((uri) => this._onChanged(uri)),
+			primary.onDidDelete((uri) => this._onDeleted(uri)),
 			this._config.onDidChangeAssignment(async (ev) => {
 				if (ev.branch && ev.relativePath) {
 					const uri = vscode.Uri.joinPath(workspaceRoot, ev.relativePath)
 					await this._syncFile(ev.relativePath, uri, ev.branch)
 				}
-			})
+			}),
 		)
+
+		// Worktree watcher (bidirectional sync) — opt-in.
+		if (vscode.workspace.getConfiguration('gitbraid').get<boolean>('bidirectionalSync', false)) {
+			const worktreeWatcher = vscode.workspace.createFileSystemWatcher(
+				new vscode.RelativePattern(workspaceRoot, '.worktrees/*/**'),
+				false, false, false,
+			)
+			this._disposables.push(
+				worktreeWatcher,
+				worktreeWatcher.onDidChange((uri) => this._onWorktreeChanged(uri)),
+				worktreeWatcher.onDidCreate((uri) => this._onWorktreeChanged(uri)),
+			)
+			log.info('WorkspaceSync: bidirectional sync enabled')
+		}
 
 		log.info('WorkspaceSync: watching ' + workspaceRoot.fsPath)
 	}
@@ -231,14 +270,115 @@ export class WorkspaceSync implements vscode.Disposable {
 		this._syncing = true
 		try {
 			await vscode.workspace.fs.writeFile(destUri, content)
+			// Bump the generation AFTER the worktree write so the upcoming
+			// worktree-watcher event for this path is recognised as our own
+			// echo and suppressed by `_onWorktreeChanged`.
+			const genKey = normalisePath(relativePath)
+			this._generations.set(genKey, (this._generations.get(genKey) ?? 0) + 1)
 			log.info(`WorkspaceSync: synced ${relativePath} → ${branch}`)
-			this._onDidSyncFile.fire({ relativePath: normalisePath(relativePath), branch })
+			this._onDidSyncFile.fire({ relativePath: genKey, branch })
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : JSON.stringify(e)
 			throw new SyncError(`Failed to sync "${relativePath}" to branch "${branch}": ${msg}`)
 		} finally {
 			this._syncing = false
 		}
+	}
+
+	/**
+	 * Bidirectional sync (T13): copy externally-made worktree edits back into
+	 * the primary workspace when they actually differ from the workspace file.
+	 * The generation counter prevents this path from looping with `_syncFile`.
+	 */
+	private _onWorktreeChanged(uri: vscode.Uri): void {
+		if (!this._workspaceRoot) return
+		if (this._syncing) return
+
+		const rel = this._relativeInWorktree(uri)
+		if (!rel) return
+		const { branch, relativePath } = rel
+
+		// Decrement the stored generation if this is an echo of our own write;
+		// multiple worktree events can fire per write so we tolerate that too.
+		const genKey = normalisePath(relativePath)
+		const gen = this._generations.get(genKey)
+		if (gen !== undefined && gen > 0) {
+			this._generations.set(genKey, gen - 1)
+			return
+		}
+
+		// Debounce reverse-sync per file so a rebase that touches many files
+		// doesn't spike.
+		const existing = this._reversePending.get(genKey)
+		if (existing) clearTimeout(existing)
+		const timer = setTimeout(() => {
+			this._reversePending.delete(genKey)
+			void this._reverseSync(branch, relativePath)
+		}, getDebounceMs())
+		this._reversePending.set(genKey, timer)
+	}
+
+	private async _reverseSync(branch: string, relativePath: string): Promise<void> {
+		if (!this._workspaceRoot) return
+		// Only pull back if this file is assigned to this branch — otherwise
+		// the primary workspace shouldn't be overwritten by arbitrary worktree
+		// edits (they might belong to another branch's layer).
+		const owner = this._config.getAssignment(relativePath)
+		if (owner !== branch) return
+
+		const srcUri = vscode.Uri.joinPath(
+			worktreePath(this._workspaceRoot, branch),
+			relativePath,
+		)
+		const destUri = vscode.Uri.joinPath(this._workspaceRoot, relativePath)
+
+		let content: Uint8Array
+		try {
+			content = await vscode.workspace.fs.readFile(srcUri)
+		} catch {
+			return
+		}
+
+		// Skip write when the destination file already matches — avoids
+		// triggering the primary-watcher unnecessarily.
+		try {
+			const existing = await vscode.workspace.fs.readFile(destUri)
+			if (bytesEqual(existing, content)) return
+		} catch {
+			// Destination missing is fine — we'll create it.
+		}
+
+		this._syncing = true
+		try {
+			const destDir = vscode.Uri.file(path.dirname(destUri.fsPath))
+			try { await vscode.workspace.fs.createDirectory(destDir) } catch { /* ignore */ }
+			await vscode.workspace.fs.writeFile(destUri, content)
+			log.info(`WorkspaceSync: reverse-synced ${relativePath} ← ${branch}`)
+		} catch (e) {
+			log.warn(`WorkspaceSync: reverse-sync failed for ${relativePath}: ${e instanceof Error ? e.message : String(e)}`)
+		} finally {
+			this._syncing = false
+		}
+	}
+
+	/** Decode `.worktrees/<branch-dir>/...` URIs into (branch, relativePath). */
+	private _relativeInWorktree(uri: vscode.Uri): { branch: string, relativePath: string } | undefined {
+		if (!this._workspaceRoot) return undefined
+		const rel = path.relative(this._workspaceRoot.fsPath, uri.fsPath).replaceAll(path.sep, '/')
+		const match = /^\.worktrees\/([^/]+)\/(.+)$/.exec(rel)
+		if (!match) return undefined
+		const dirName = match[1]
+		const relativePath = match[2]
+		// Find the branch owning that directory.  Done by prefix match since
+		// `branchToWorktreeDirName` maps branch → dir deterministically.
+		for (const entry of this._config.getStack()) {
+			// We can't recompute dirs here without a circular import; ask the
+			// config service for whichever branch matches this dir suffix.
+			if (dirName.startsWith(entry.name.replaceAll('/', '-'))) {
+				return { branch: entry.name, relativePath }
+			}
+		}
+		return undefined
 	}
 
 	private async _propagateDeletion(relativePath: string, branch: string): Promise<void> {
@@ -274,4 +414,13 @@ export class WorkspaceSync implements vscode.Disposable {
 
 function normalisePath(p: string): string {
 	return p.replaceAll('\\', '/')
+}
+
+/** Byte-compare two Uint8Arrays. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+	if (a.length !== b.length) return false
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false
+	}
+	return true
 }

@@ -267,6 +267,18 @@
 				"icon": "$(diff)"
 			},
 			{
+				"command": "gitbraid.openResolvedAtTop",
+				"title": "Compare to Top of Stack",
+				"category": "GitBraid",
+				"icon": "$(git-compare)"
+			},
+			{
+				"command": "gitbraid.showStackDiff",
+				"title": "Show Cumulative Stack Diff",
+				"category": "GitBraid",
+				"icon": "$(diff-multiple)"
+			},
+			{
 				"command": "gitbraid.assignHunk",
 				"title": "Assign Hunk to Branch",
 				"category": "GitBraid",
@@ -464,6 +476,11 @@
 					"default": 5,
 					"description": "Minutes between background checks for branches behind their parent. Set to 0 to disable the periodic check (the event-driven checks on stack changes still run).",
 					"minimum": 0
+				},
+				"gitbraid.bidirectionalSync": {
+					"type": "boolean",
+					"default": false,
+					"description": "Experimental: copy externally-made edits inside .worktrees/ back into the primary workspace. Leave disabled unless you actively edit worktree directories from a terminal or second window."
 				}
 			}
 		},

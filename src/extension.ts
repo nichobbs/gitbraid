@@ -13,6 +13,7 @@ import { DiffEngine } from './diffEngine'
 import { HunkRouter } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
 import { StackResolver } from './stackResolver'
+import { StackContentProvider } from './stackContentProvider'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
@@ -87,7 +88,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	const stackTreeProvider = new BranchStackTreeProvider(configService, workspaceSync)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
+		// Drag-and-drop: file nodes onto branch nodes reassigns; onto the
+		// floating group unassigns; branch-onto-branch reorders the stack.
+		// Accepts drops of text/uri-list from the Explorer too.
+		dragAndDropController: stackTreeProvider,
 		showCollapseAll: true,
+		canSelectMany: true,
 	})
 	stackView.title = 'Branch Stack'
 	context.subscriptions.push(stackTreeProvider, stackView)
@@ -161,6 +167,46 @@ export async function activate(context: vscode.ExtensionContext) {
 		),
 
 		vscode.commands.registerCommand(
+			'gitbraid.openResolvedAtTop',
+			cmd(async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('Open a file first to see its resolved stack view.')
+					return
+				}
+				const rel = vscode.workspace.asRelativePath(target, false)
+				const stackUri = StackContentProvider.uriFor(rel)
+				// Side-by-side diff against the on-disk file so the user sees
+				// exactly which hunks are layered by branches above.
+				await vscode.commands.executeCommand(
+					'vscode.diff',
+					target,
+					stackUri,
+					`${rel} (on-disk ↔ top of stack)`,
+				)
+			}),
+		),
+
+		vscode.commands.registerCommand(
+			'gitbraid.showStackDiff',
+			cmd(async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('Open a file first to see its stack diff.')
+					return
+				}
+				const rel = vscode.workspace.asRelativePath(target, false)
+				const diff = await stackResolver.getStackDiff(workspaceRoot.fsPath, rel)
+				if (!diff) {
+					await vscode.window.showInformationMessage(`No stack diff for ${rel}.`)
+					return
+				}
+				const doc = await vscode.workspace.openTextDocument({ language: 'diff', content: diff })
+				await vscode.window.showTextDocument(doc, { preview: true })
+			}),
+		),
+
+		vscode.commands.registerCommand(
 			'gitbraid.routeHunks',
 			cmd(async (uri?: vscode.Uri) => {
 				const target = uri ?? vscode.window.activeTextEditor?.document.uri
@@ -193,10 +239,18 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
-	const _stackResolver = new StackResolver(configService, branchStack)
+	const stackResolver = new StackResolver(configService, branchStack)
+	const stackContentProvider = new StackContentProvider(stackResolver, workspaceRoot)
 	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
 	rebaseSvc.init(workspaceRoot)
-	context.subscriptions.push(rebaseSvc)
+	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider)
+
+	// Refresh any open gitbraid-stack: documents when assignments change.
+	context.subscriptions.push(
+		configService.onDidChangeAssignment((e) => {
+			if (e.relativePath) stackContentProvider.refresh(e.relativePath)
+		}),
+	)
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(

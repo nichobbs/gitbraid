@@ -87,11 +87,20 @@ export class FloatingFileNode extends vscode.TreeItem {
  *     src/config.ts  ⚠
  * ```
  */
+const INTERNAL_MIME = 'application/vnd.code.tree.gitbraidStack'
+const URI_LIST_MIME = 'text/uri-list'
+
 export class BranchStackTreeProvider
-	implements vscode.TreeDataProvider<StackTreeNode>, vscode.Disposable {
+	implements vscode.TreeDataProvider<StackTreeNode>,
+		vscode.TreeDragAndDropController<StackTreeNode>,
+		vscode.Disposable {
 
 	private readonly _onDidChangeTreeData = new vscode.EventEmitter<StackTreeNode | undefined>()
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event
+
+	// TreeDragAndDropController contract
+	readonly dropMimeTypes: readonly string[] = [INTERNAL_MIME, URI_LIST_MIME]
+	readonly dragMimeTypes: readonly string[] = [INTERNAL_MIME, URI_LIST_MIME]
 
 	private readonly _disposables: vscode.Disposable[] = []
 
@@ -105,6 +114,94 @@ export class BranchStackTreeProvider
 			_sync.onDidFloatFile(() => this.refresh()),
 			_sync.onDidSyncFile(() => this.refresh()),
 		)
+	}
+
+	// ── Drag & drop ───────────────────────────────────────────────────────────
+
+	async handleDrag(
+		source: readonly StackTreeNode[],
+		dataTransfer: vscode.DataTransfer,
+	): Promise<void> {
+		// Only file nodes are draggable; branches are handled separately as reorders.
+		const payload = source
+			.map((n) => {
+				if (n.kind === 'file') return { kind: 'file', relativePath: n.relativePath }
+				if (n.kind === 'floatingFile') return { kind: 'file', relativePath: n.relativePath }
+				if (n.kind === 'branch') return { kind: 'branch', name: n.entry.name }
+				return undefined
+			})
+			.filter((x): x is { kind: string, relativePath?: string, name?: string } => x !== undefined)
+		dataTransfer.set(INTERNAL_MIME, new vscode.DataTransferItem(JSON.stringify(payload)))
+	}
+
+	async handleDrop(
+		target: StackTreeNode | undefined,
+		dataTransfer: vscode.DataTransfer,
+	): Promise<void> {
+		// 1. Internal payload — file or branch move inside the stack tree.
+		const internal = dataTransfer.get(INTERNAL_MIME)
+		if (internal) {
+			let payload: Array<{ kind: string, relativePath?: string, name?: string }>
+			try {
+				payload = JSON.parse(await internal.asString()) as typeof payload
+			} catch {
+				return
+			}
+			await this._applyInternalDrop(payload, target)
+			return
+		}
+
+		// 2. External drop — e.g. a file from the Explorer (text/uri-list).
+		const uriList = dataTransfer.get(URI_LIST_MIME)
+		if (uriList && target) {
+			const raw = await uriList.asString()
+			const uris = raw.split(/\r?\n/).filter(Boolean).map((s) => {
+				try { return vscode.Uri.parse(s) } catch { return undefined }
+			}).filter((u): u is vscode.Uri => u !== undefined)
+			const targetBranch = target.kind === 'branch' ? target.entry.name : undefined
+			if (!targetBranch) return
+			const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri
+			if (!wsRoot) return
+			for (const u of uris) {
+				const rel = vscode.workspace.asRelativePath(u, false)
+				if (rel.startsWith('.worktrees/')) continue
+				await this._config.setAssignment(rel, targetBranch)
+			}
+		}
+	}
+
+	private async _applyInternalDrop(
+		payload: Array<{ kind: string, relativePath?: string, name?: string }>,
+		target: StackTreeNode | undefined,
+	): Promise<void> {
+		// Branch-onto-branch drops → reorder the stack.
+		const branchDrags = payload.filter((p) => p.kind === 'branch' && p.name)
+		if (branchDrags.length > 0 && target?.kind === 'branch') {
+			const current = this._config.getStack().map((e) => e.name)
+			const moved = branchDrags[0].name!
+			const targetName = target.entry.name
+			const without = current.filter((n) => n !== moved)
+			const insertAt = without.indexOf(targetName)
+			if (insertAt < 0) return
+			without.splice(insertAt, 0, moved)
+			await this._config.reorderStack(without)
+			return
+		}
+
+		// File drags → reassign to the target branch, or unassign if dropped on
+		// the floating group.
+		const fileDrags = payload.filter((p) => p.kind === 'file' && p.relativePath)
+		if (fileDrags.length === 0) return
+
+		if (target?.kind === 'branch') {
+			for (const fd of fileDrags) {
+				await this._config.setAssignment(fd.relativePath!, target.entry.name)
+			}
+		} else if (target?.kind === 'floatingGroup' || target === undefined) {
+			for (const fd of fileDrags) {
+				await this._config.removeAssignment(fd.relativePath!)
+			}
+		}
 	}
 
 	refresh(node?: StackTreeNode): void {
