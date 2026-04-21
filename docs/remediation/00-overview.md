@@ -135,6 +135,14 @@ Annotated during execution. Checkpoint SHAs refer to the
 | Task | Checkpoint | Notes |
 | --- | --- | --- |
 | T1 — DiffEngine quote-escape no-op | 6cb9fcc / 8f68e91 | Metachar reject; full spawn migration still on plan. |
+| T9 — injective branchToWorktreeDirName | b14bf4c | 7-char sha1 suffix; `initStack` migrates legacy slug-only dirs and runs `git worktree repair`. |
+| T15 — LM tool manifest declarations | b14bf4c | All seven tools declared with inputSchema and toolReferenceName. |
+| T19 — `git check-ref-format` validation | b14bf4c | Two-tier: cheap regex pre-filter → spawn for edge cases git rejects. |
+| T20 — path-containment helper | b14bf4c | New `src/pathGuard.ts` + test suite; wired into DiffEngine. |
+| T23 — workspace trust gating | b14bf4c | `activate()` defers until `onDidGrantWorkspaceTrust` in untrusted workspaces. |
+| T24 — single `.gitignore` writer | b14bf4c | Duplicate in `extension.ts` removed; single writer preserves CRLF/LF. |
+| T54 — `IGitRunner` seam | (current) | Interface + `ProcessGitRunner` + `FakeGitRunner` + unit tests. No callers migrated yet — substrate only. |
+| T61 — CI workflow + ESLint config | (current) | `.github/workflows/ci.yml` runs lint + build + test + vsce package on Linux / macOS / Windows. Minimal `.eslintrc.json` so the lint script finally works. |
 | T2 — gitExec stderr popup | 6cb9fcc | stderr logged at debug on success, error only on non-zero exit. |
 | T3 — discardChanges data-loss | 6cb9fcc | Tracked files restored via `git checkout HEAD --`, untracked via `clean -f`. |
 | T5 — activationEvents malformed | 6cb9fcc | Replaced by `workspaceContains:.git` / `.worktrees/local-config.json`; no-workspace case early-returns. |
@@ -167,17 +175,16 @@ Annotated during execution. Checkpoint SHAs refer to the
 
 ### Still to land
 
-- Core remaining P0/P1: T8 (hunk identifier stability), T9 (injective dir
-  names), T10 (shared FileChangeBus), T11 full (tree-view reconciliation),
-  T12 (StackResolver wired to a content provider), T13 (bidirectional sync),
-  T15 (LM tools declared in manifest), T16 (walkthrough PNGs), T17
-  (drag-and-drop on stack tree).
-- Security: T18 (full spawn migration), T19 (`git check-ref-format`),
-  T20 (path-containment helper), T21 (optimistic-concurrency merge),
-  T23 (workspace-trust runtime gating — capability declared, runtime
-  gating still TODO), T24 (single `.gitignore` writer).
-- Testing: T54 (`IGitRunner`), T55 (per-suite tmp workspaces),
-  T56 (integration suite), T57 (fake timers), T61 (CI + coverage floor).
+- Core remaining P1: T8 (hunk identifier stability), T10 (shared
+  FileChangeBus), T11 full (tree-view reconciliation), T12 (StackResolver
+  wired to a content provider), T13 (bidirectional sync), T16 (walkthrough
+  PNGs), T17 (drag-and-drop on stack tree).
+- Security: T18 (full spawn migration — IGitRunner is the substrate,
+  callers still need migrating), T21 (optimistic-concurrency merge on
+  config writes — currently warns, doesn't retry).
+- Testing: T55 (per-suite tmp workspaces), T56 (integration suite),
+  T57 (fake timers for debounce / interval tests), coverage-floor
+  enforcement in CI.
 - Remainder of P2/P3 per `10-sequencing.md`.
 
 ## Acceptance
