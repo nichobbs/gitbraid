@@ -5,7 +5,7 @@
 	"version": "0.1.0",
 	"preview": true,
 	"publisher": "nichobbs",
-	"private": true,
+	"private": false,
 	"license": "MIT",
 	"author": {
 		"name": "nichobbs"
@@ -26,7 +26,9 @@
 		"branch stack",
 		"gitbraid",
 		"multi-branch",
-		"hunk routing"
+		"hunk routing",
+		"scm",
+		"stacked prs"
 	],
 	"badges": [],
 	"galleryBanner": {
@@ -35,9 +37,10 @@
 	},
 	"icon": "resources/icon.png",
 	"engines": {
-		"vscode": "^1.94.0"
+		"vscode": "^1.95.0"
 	},
 	"categories": [
+		"SCM Providers",
 		"Other"
 	],
 	"activationEvents": [
@@ -107,15 +110,24 @@
 				]
 			}
 		],
-		"views": {
-			"scm": [
+		"viewsContainers": {
+			"activitybar": [
 				{
-					"id": "gitbraid.worktreeView",
-					"name": "GitBraid (Worktrees)"
-				},
+					"id": "gitbraid",
+					"title": "GitBraid",
+					"icon": "resources/icon.svg"
+				}
+			]
+		},
+		"views": {
+			"gitbraid": [
 				{
 					"id": "gitbraid.stackView",
 					"name": "Branch Stack"
+				},
+				{
+					"id": "gitbraid.worktreeView",
+					"name": "Worktrees"
 				}
 			]
 		},
@@ -640,20 +652,42 @@
 					"additionalProperties": false
 				}
 			}
+		],
+		"keybindings": [
+			{
+				"command": "gitbraid.addStackBranch",
+				"key": "ctrl+alt+b",
+				"mac": "cmd+alt+b"
+			},
+			{
+				"command": "gitbraid.assignFile",
+				"key": "ctrl+alt+a",
+				"mac": "cmd+alt+a",
+				"when": "editorTextFocus || explorerViewletFocus"
+			},
+			{
+				"command": "gitbraid.routeHunks",
+				"key": "ctrl+alt+r",
+				"mac": "cmd+alt+r",
+				"when": "editorTextFocus"
+			},
+			{
+				"command": "gitbraid.openResolvedAtTop",
+				"key": "ctrl+alt+t",
+				"mac": "cmd+alt+t",
+				"when": "editorTextFocus"
+			}
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "npm run compile",
+		"vscode:prepublish": "npm run lint && npm run compile && npm test",
 		"build": "node esbuild.js",
 		"compile": "node esbuild.js",
-		"package": "npx vsce package",
-		"install-vsix": "npm run package && code --install-extension gitbraid-${npm_package_version}.vsix",
+		"package": "npx vsce package --no-dependencies",
+		"install-vsix": "npm run package && code --install-extension gitbraid-$(node -p \"require('./package.json').version\").vsix",
 		"watch": "npm run build -- --watch",
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
-		"build-tsc": "tsc -p ./",
-		"compile-tsc": "tsc -p ./",
-		"watch-tsc": "tsc -watch -p ./",
 		"refresh": "npm run compile && npm run package && npm run install-vsix"
 	},
 	"devDependencies": {
@@ -661,7 +695,7 @@
 		"@swc-node/register": "^1.10.9",
 		"@types/mocha": "^10.0.10",
 		"@types/node": "^20",
-		"@types/vscode": "^1.94.0",
+		"@types/vscode": "^1.95.0",
 		"@typescript-eslint/eslint-plugin": "^7.18.0",
 		"@typescript-eslint/parser": "^7.18.0",
 		"@vscode/test-cli": "^0.0.11",
@@ -671,10 +705,6 @@
 		"eslint": "^8.57.1",
 		"eslint-plugin-promise": "^7.2.1",
 		"mocha": "^10.8.2",
-		"mocha-multi-reporters": "^1.5.1",
-		"mocha-reporter-sonarqube": "^2.1.1",
-		"ts-node": "^10.9.2",
-		"tsconfig-paths": "^4.2.0",
 		"typescript": "^5.7.2"
 	}
 }
