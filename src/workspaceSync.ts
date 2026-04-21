@@ -5,6 +5,7 @@ import { SyncError } from './errors'
 import { ConfigService } from './configService'
 import { worktreePath } from './branchStackService'
 import { showError } from './errorSurfacer'
+import type { IFileChangeBus } from './fileChangeBus'
 
 const DEFAULT_DEBOUNCE_MS = 200
 /** Hard cap on `_floatingDirty` so a long-running session can't leak memory. */
@@ -102,33 +103,68 @@ export class WorkspaceSync implements vscode.Disposable {
 	/**
 	 * Begin watching the workspace. Call once at extension activation.
 	 *
-	 * Two watchers are set up:
-	 *   1. Primary workspace → copies saves to the owning branch's worktree.
-	 *   2. `.worktrees/*\/**` → copies externally-made worktree edits back
-	 *      into the primary workspace (T13 bidirectional sync).  Gated on
-	 *      the `gitbraid.bidirectionalSync` setting (default off in 0.1).
+	 * Subscribes to the shared {@link IFileChangeBus} for file-change events
+	 * instead of creating its own `FileSystemWatcher`.  The bus splits the
+	 * primary save/delete channel from the worktree-change channel, so the
+	 * re-entrancy guard and the bidirectional-sync path are driven from the
+	 * same underlying watcher.
 	 *
 	 * A per-file generation counter is used to break any ping-pong between
 	 * the two directions: every primary-originated write bumps the counter,
 	 * worktree-originated events that would re-sync the same generation are
 	 * ignored.
+	 *
+	 * For back-compat with existing tests the `bus` parameter is optional;
+	 * if omitted, WorkspaceSync falls back to its legacy private watchers.
 	 */
-	init(workspaceRoot: vscode.Uri): void {
+	init(workspaceRoot: vscode.Uri, bus?: IFileChangeBus): void {
 		this._workspaceRoot = workspaceRoot
 
-		// Primary-workspace watcher
-		const primary = vscode.workspace.createFileSystemWatcher(
-			new vscode.RelativePattern(workspaceRoot, '**/*'),
-			false, // create
-			false, // change
-			false  // delete
-		)
+		if (bus) {
+			// Shared-bus wiring (preferred): one watcher for the whole
+			// extension, multiple subscribers.  See `src/fileChangeBus.ts`.
+			this._disposables.push(
+				bus.onDidSavePrimary((e) => this._onChanged(e.uri)),
+				bus.onDidDeletePrimary((e) => this._onDeleted(e.uri)),
+			)
+			if (vscode.workspace.getConfiguration('gitbraid').get<boolean>('bidirectionalSync', false)) {
+				this._disposables.push(
+					bus.onDidChangeWorktree((e) => this._onWorktreeChanged(e.uri)),
+				)
+				log.info('WorkspaceSync: bidirectional sync enabled (via FileChangeBus)')
+			}
+			log.info('WorkspaceSync: subscribed to FileChangeBus for ' + workspaceRoot.fsPath)
+		} else {
+			// Fallback path — tests that construct WorkspaceSync without a
+			// bus still get a working watcher.  Not used in production.
+			const primary = vscode.workspace.createFileSystemWatcher(
+				new vscode.RelativePattern(workspaceRoot, '**/*'),
+				false, false, false,
+			)
+			this._disposables.push(
+				primary,
+				primary.onDidChange((uri) => this._onChanged(uri)),
+				primary.onDidCreate((uri) => this._onChanged(uri)),
+				primary.onDidDelete((uri) => this._onDeleted(uri)),
+			)
+			if (vscode.workspace.getConfiguration('gitbraid').get<boolean>('bidirectionalSync', false)) {
+				const wt = vscode.workspace.createFileSystemWatcher(
+					new vscode.RelativePattern(workspaceRoot, '.worktrees/*/**'),
+					false, false, false,
+				)
+				this._disposables.push(
+					wt,
+					wt.onDidChange((uri) => this._onWorktreeChanged(uri)),
+					wt.onDidCreate((uri) => this._onWorktreeChanged(uri)),
+				)
+			}
+			log.info('WorkspaceSync: watching ' + workspaceRoot.fsPath + ' (fallback; no bus)')
+		}
 
+		// Config-driven sync still comes from the service, not the bus.
+		// Route through `_onChanged` so the debounce queue applies equally to
+		// user saves and assignment-triggered syncs.
 		this._disposables.push(
-			primary,
-			primary.onDidChange((uri) => this._onChanged(uri)),
-			primary.onDidCreate((uri) => this._onChanged(uri)),
-			primary.onDidDelete((uri) => this._onDeleted(uri)),
 			this._config.onDidChangeAssignment((ev) => {
 				if (ev.branch && ev.relativePath) {
 					const uri = vscode.Uri.joinPath(workspaceRoot, ev.relativePath)
@@ -136,22 +172,6 @@ export class WorkspaceSync implements vscode.Disposable {
 				}
 			}),
 		)
-
-		// Worktree watcher (bidirectional sync) — opt-in.
-		if (vscode.workspace.getConfiguration('gitbraid').get<boolean>('bidirectionalSync', false)) {
-			const worktreeWatcher = vscode.workspace.createFileSystemWatcher(
-				new vscode.RelativePattern(workspaceRoot, '.worktrees/*/**'),
-				false, false, false,
-			)
-			this._disposables.push(
-				worktreeWatcher,
-				worktreeWatcher.onDidChange((uri) => this._onWorktreeChanged(uri)),
-				worktreeWatcher.onDidCreate((uri) => this._onWorktreeChanged(uri)),
-			)
-			log.info('WorkspaceSync: bidirectional sync enabled')
-		}
-
-		log.info('WorkspaceSync: watching ' + workspaceRoot.fsPath)
 	}
 
 	// ─── Queries ─────────────────────────────────────────────────────────────

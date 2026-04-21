@@ -16,6 +16,7 @@ import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
+import { FileChangeBus } from './fileChangeBus'
 import { withErrorHandler, showError } from './errorSurfacer'
 export { showError }
 
@@ -61,8 +62,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	const branchStack = BranchStackService.getInstance(configService)
 	await branchStack.initStack(workspaceRoot)
 
+	// Shared file-system watcher for the entire extension (T10).  Subsequent
+	// services subscribe to its domain events instead of spawning their own
+	// `**/*` watchers.
+	const bus = new FileChangeBus(workspaceRoot)
+	context.subscriptions.push(bus)
+
 	const workspaceSync = WorkspaceSync.getInstance(configService)
-	workspaceSync.init(workspaceRoot)
+	workspaceSync.init(workspaceRoot, bus)
 
 	context.subscriptions.push(configService, branchStack, workspaceSync)
 

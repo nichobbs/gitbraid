@@ -198,11 +198,31 @@ Annotated during execution. Checkpoint SHAs refer to the
 - T11 (full tree-view reconciliation — retire the legacy worktree
   view or drive it from the same data model).
 - T16 (walkthrough PNGs — asset capture).
-- Migrate downstream consumers (`BranchScmProviderManager`,
-  `BranchStackTreeProvider`, `BranchFileDecorationProvider`) off
-  their own event subscriptions onto the new `FileChangeBus`.
-- Harden coverage-floor thresholds once a baseline lcov is in hand.
 - P3 roadmap items per `10-sequencing.md`.
+
+### Bus-migration + hardening — landed
+
+- `WorkspaceSync.init(root, bus?)` accepts an optional
+  `IFileChangeBus`. When passed, it subscribes to the bus's
+  `onDidSavePrimary` / `onDidDeletePrimary` / `onDidChangeWorktree`
+  instead of creating its own `**/*` watcher. `extension.ts`
+  constructs a single bus in Phase 1 and threads it through. The
+  private fallback watcher path is kept for tests that construct
+  `WorkspaceSync` without a bus.
+- Coverage gate in `.github/workflows/ci.yml` is now blocking
+  (removed `continue-on-error`); thresholds set conservatively at
+  55/45/55 for lines/branches/functions as the 0.1 baseline.
+- `scripts/check-coverage.mjs` distinguishes missing lcov (exit 2)
+  from "below threshold" (exit 1) and honours `--allow-missing` for
+  bootstrap runs. Rejects unknown flags and out-of-range thresholds.
+- CI workflow gains `concurrency.cancel-in-progress`, explicit
+  `permissions: contents: read`, a 20-minute job timeout, and a
+  `workflow_dispatch` trigger for manual re-runs.
+- `BranchScmProviderManager` / `BranchStackTreeProvider` /
+  `BranchFileDecorationProvider` continue to subscribe to the
+  `ConfigService` / `WorkspaceSync` event surfaces — those are
+  domain events, not file-system events, so the bus is the wrong
+  abstraction for them.
 
 ## Acceptance
 
