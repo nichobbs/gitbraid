@@ -44,6 +44,28 @@ if (!gitExtension) {
 }
 const gitAPI = gitExtension.getAPI(1)
 
+/**
+ * Strip anything that looks like a credential (user:pass@ prefix, PAT,
+ * Authorization header) from a string before logging.  Defensive — we don't
+ * currently run operations against remote URLs here, but worktree add with a
+ * custom URL, or future push/pull features, could expose tokens otherwise.
+ */
+function redactCredentials (s: string): string {
+	return s
+		.replace(/(https?:\/\/)[^:@/\s]+:[^@/\s]+@/g, '$1***:***@')
+		.replace(/(Authorization:\s*)\S+/gi, '$1***')
+		.replace(/\b(ghp_|github_pat_)[A-Za-z0-9_]{20,}\b/g, '***')
+}
+
+function redactGitError (e: GitErrorResponse): GitErrorResponse {
+	return {
+		...e,
+		cmd: e.cmd ? redactCredentials(e.cmd) : e.cmd,
+		stdout: e.stdout ? redactCredentials(e.stdout) : e.stdout,
+		stderr: e.stderr ? redactCredentials(e.stderr) : e.stderr,
+	}
+}
+
 function getStateFromChar(status: string) {
 	switch (status) {
 		case 'M':
@@ -125,19 +147,20 @@ class Git {
 			.then((r: GitResponse) => {
 				r.stdout = r.stdout.trim()
 				log.info('success! (' + command + ') (stdout=' + r.stdout + ')')
-				if (r.stderr != '') {
-					log.error('      stderr=' + r.stderr)
-					void log.notificationWarn(r.stderr + '\n(command: ' + command + ')')
+				// git writes benign diagnostics to stderr on successful commands
+				// (e.g. "warning: LF will be replaced by CRLF…").  Only log these
+				// at debug level — never pop a user notification — because they
+				// fire on nearly every save on Windows.
+				if (r.stderr && r.stderr.trim() !== '') {
+					log.debug('stderr=' + r.stderr)
 				}
 				return r.stdout
 			}, (e: GitErrorResponse) => {
-				log.error('GitErrorResponse=' + JSON.stringify(e, null, 2))
+				log.error('GitErrorResponse=' + JSON.stringify(redactGitError(e), null, 2))
 				if (e.stderr && e.stderr != '') {
-					void log.notificationError(e.stderr)
+					void log.notificationError(redactCredentials(e.stderr))
 					throw new GitError(e.stderr, e.code)
 				}
-				// log.error('e=' + JSON.stringify(e, null, 2))
-				// void log.notificationError(e)
 				throw e
 			})
 	}
@@ -164,13 +187,15 @@ class Git {
 		})
 	}
 
-	branch (workspaceUri?: vscode.Uri) {
+	branch (workspaceUri?: vscode.Uri): Promise<string> {
 		if (!workspaceUri) {
 			workspaceUri = vscode.workspace.workspaceFolders![0].uri
 		}
 		log.info('git branch --show-current (cwd=' + workspaceUri.fsPath + ')')
+		// gitExec resolves to the trimmed stdout string; do not dereference `.stdout`
+		// on it (previously `(r: any) => r.stdout` which was always undefined).
 		return this.gitExec('branch --show-current', workspaceUri.fsPath)
-			.then((r: any) => { return r.stdout })
+			.then((stdout) => stdout.trim())
 	}
 
 	toGitUri (rootNode: WorktreeRoot, uri: vscode.Uri, ref: string = '') {
@@ -217,11 +242,17 @@ class Git {
 		return resp
 	}
 
-	revList (revA: string, revB: string) {
-		return this.gitExec('rev-list --left-right --count ' + revA + '..' + revB).then((r: any) => {
-			log.info('revList success: ' + JSON.stringify(r, null, 2))
-			const counts = r.stdout.trim().split('\t')
-			return { ahead: counts[0], behind: counts[1] }
+	revList (revA: string, revB: string): Promise<{ ahead: number, behind: number }> {
+		return this.gitExec('rev-list --left-right --count ' + revA + '...' + revB).then((stdout) => {
+			// gitExec already returns stdout as a trimmed string; do not dereference
+			// `.stdout` (previously `r.stdout` on a string, giving undefined).
+			// Note the `...` (three-dot) form: `--left-right --count A..B` is
+			// invalid — `--left-right` requires symmetric difference.
+			const counts = stdout.trim().split('\t')
+			return {
+				ahead: Number.parseInt(counts[0] ?? '0', 10) || 0,
+				behind: Number.parseInt(counts[1] ?? '0', 10) || 0,
+			}
 		}, (e) => {
 			log.error('revList failed: ' + e)
 			return { ahead: 0, behind: 0 }
@@ -248,13 +279,18 @@ class Git {
 				.split('\n')
 				.map(s => s.trim())
 				.filter(Boolean)
-				// strip the leading "origin/" and remove HEAD pointer
-				.map(s => s.replace(/^[^/]+\//, ''))
-				.filter(s => s !== 'HEAD')
+				// strip only a leading "origin/" — preserving other remotes' prefixes
+				// so `upstream/feature/foo` doesn't collide with `origin/feature/foo`.
+				// Earlier code used `^[^/]+\/` which ate the first segment of any
+				// branch name that contained slashes (e.g. `origin/feature/docs`
+				// became `feature/docs`, but `upstream/fork/main` became `fork/main`).
+				.map(s => s.replace(/^origin\//, ''))
+				.filter(s => s !== 'HEAD' && !s.endsWith('/HEAD'))
 				// exclude branches that are already local
 				.filter(s => !local.includes(s))
-		} catch {
-			// remote listing failing is non-fatal
+		} catch (e) {
+			// remote listing failing is non-fatal, but log it so real errors aren't lost
+			log.warn('listBranches: remote listing failed: ' + (e instanceof Error ? e.message : String(e)))
 		}
 
 		return { local, remote }
@@ -375,16 +411,22 @@ class Git {
 		return this.gitExec(args, repoUri)
 	}
 
-	// dialogResponse should only be set during test runs
+	// dialogResponse should only be set during test runs.
+	// Correctly splits the "discard" action by file state:
+	//   - Untracked files are removed via `git clean -f`.
+	//   - Tracked files (modified / staged) are restored via
+	//     `git checkout HEAD -- <path>` so their edits are actually reverted.
+	// The previous implementation ran `git clean -f` on every node, which is a
+	// no-op for modified tracked files (the file stays dirty) and deleted
+	// untracked files without enough warning.
 	async clean (nodes: WorktreeFile[] | WorktreeFile, dialogResponse?: string) {
 		if (!Array.isArray(nodes)) {
 			nodes = [nodes]
 		}
-		const paths: string[] = []
-		for (const node of nodes) {
-			paths.push(node.uri.fsPath)
+		if (nodes.length === 0) {
+			return false
 		}
-		// assume all nodes are in the same repo
+
 		const repoRoot = nodes[0].getRepoNode()
 		log.info('clean changes in ' + nodes.length + ' files')
 
@@ -398,8 +440,23 @@ class Git {
 			return false
 		}
 
-		const r = await this.gitExec('clean -f ' + paths.join(' '), repoRoot.uri)
-		return r
+		const untrackedPaths: string[] = []
+		const trackedPaths: string[] = []
+		for (const node of nodes) {
+			if (node.group === FileGroup.Untracked) {
+				untrackedPaths.push(node.uri.fsPath)
+			} else {
+				trackedPaths.push(node.uri.fsPath)
+			}
+		}
+
+		if (trackedPaths.length > 0) {
+			await this.gitExec('checkout HEAD -- ' + trackedPaths.join(' '), repoRoot.uri)
+		}
+		if (untrackedPaths.length > 0) {
+			await this.gitExec('clean -f -- ' + untrackedPaths.join(' '), repoRoot.uri)
+		}
+		return true
 	}
 
 	add (rootNode: WorktreeRoot | undefined, ...targets: (WorktreeFile | vscode.Uri | string)[]) {
@@ -500,6 +557,39 @@ class Worktree {
 
 	public prune() {
 		return this.gitExec('worktree prune')
+	}
+
+	/**
+	 * Update git's internal worktree metadata after an external rename of a
+	 * worktree directory.  Needed by BranchStackService when migrating from
+	 * the legacy slug-only directory naming to the hashed form (T9).
+	 */
+	public repair() {
+		return this.gitExec('worktree repair')
+	}
+}
+
+/**
+ * Validate a branch name using git's own rules via `git check-ref-format`.
+ * Returns `true` if git accepts the name as a branch ref, `false` otherwise.
+ * Never throws — a missing git binary is reported as `false` and logged at
+ * debug level, so callers can layer their own cheap pre-filter before this.
+ */
+export async function checkRefFormat(branchName: string): Promise<boolean> {
+	// Cheap pre-filter: obviously-bad inputs never reach the spawn.
+	if (!branchName || /[\s~^:?*[\\\x00-\x1f\x7f]/.test(branchName) || branchName.includes('..')) {
+		return false
+	}
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const child = child_process.spawn('git', ['check-ref-format', '--branch', branchName], { shell: false })
+			child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`exit=${String(code)}`))))
+			child.on('error', reject)
+		})
+		return true
+	} catch (e) {
+		log.debug('checkRefFormat rejected: ' + branchName + ' (' + (e instanceof Error ? e.message : String(e)) + ')')
+		return false
 	}
 }
 

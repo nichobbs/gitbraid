@@ -1,15 +1,13 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
-import util from 'node:util'
-import child_process from 'node:child_process'
+import * as crypto from 'node:crypto'
 import { log } from './channelLogger'
 import { BranchStackError } from './errors'
 import { BranchStackEntry } from './configTypes'
 import { ConfigService } from './configService'
-import { git } from './gitFunctions'
-
-const execAsync = util.promisify(child_process.exec)
+import { git, checkRefFormat } from './gitFunctions'
+import { getDefaultGitRunner } from './gitRunner'
 
 const WORKTREES_DIR = '.worktrees'
 
@@ -18,16 +16,91 @@ const BRANCH_NAME_RE = /^[a-zA-Z0-9_./-]+$/
 
 /**
  * Maps a git branch name to a safe directory name under `.worktrees/`.
- * e.g. "feature/docs" → "feature-docs"
+ * e.g. "feature/docs" → "feature-docs__a1b2c3d"
+ *
+ * The 7-character sha1 suffix makes the mapping injective so two branches
+ * that would otherwise slug-collide (e.g. "feature/a" and "feature-a") map
+ * to distinct directories.  See `docs/remediation/02-p1-correctness.md#T9`
+ * and `docs/reviews/bugs.md` B4.
  */
 export function branchToWorktreeDirName(branchName: string): string {
+	const slug = branchName.replaceAll('/', '-').replaceAll(/[^a-zA-Z0-9._-]/g, '_')
+	const suffix = crypto.createHash('sha1').update(branchName).digest('hex').slice(0, 7)
+	return `${slug}__${suffix}`
+}
+
+/**
+ * Matches a directory name produced by the legacy (pre-T9) slug-only
+ * implementation.  Used by `_migrateLegacyDirs` to rename existing worktrees
+ * to the new hashed format without data loss.
+ */
+function legacySlugFor(branchName: string): string {
 	return branchName.replaceAll('/', '-').replaceAll(/[^a-zA-Z0-9._-]/g, '_')
 }
 
+/**
+ * Run `task` across `items` with at most `concurrency` in flight at a time.
+ * Resolves once every task has settled.  Individual task failures are
+ * propagated via `Promise.allSettled` so a single slow/failing entry does
+ * not block the others.
+ */
+async function runWithConcurrency<T>(
+	items: readonly T[],
+	concurrency: number,
+	task: (item: T) => Promise<void>,
+): Promise<void> {
+	if (items.length === 0) return
+	const limit = Math.max(1, concurrency)
+	let cursor = 0
+	const workers: Promise<void>[] = []
+	for (let i = 0; i < Math.min(limit, items.length); i++) {
+		workers.push((async () => {
+			for (;;) {
+				const idx = cursor++
+				if (idx >= items.length) return
+				try {
+					await task(items[idx])
+				} catch (e) {
+					log.warn(`runWithConcurrency: task for item #${String(idx)} failed: ${e instanceof Error ? e.message : String(e)}`)
+				}
+			}
+		})())
+	}
+	await Promise.all(workers)
+}
+
 function validateBranchName(name: string): void {
+	// Cheap pre-filter — rejects obvious junk without spawning git.
 	if (!BRANCH_NAME_RE.test(name)) {
 		throw new BranchStackError(
 			`Invalid branch name: "${name}". Only alphanumeric characters, dots, dashes, underscores, and slashes are allowed.`
+		)
+	}
+	// Reject values git would reject even though they pass the regex:
+	// `.foo`, `foo.`, `foo..bar`, `foo.lock`, leading/trailing `/`.
+	// Full validation via `git check-ref-format` runs asynchronously at
+	// addBranch time — see validateBranchNameStrict.
+	if (
+		name.startsWith('.') || name.endsWith('.') ||
+		name.startsWith('/') || name.endsWith('/') ||
+		name.includes('..') || name.endsWith('.lock') ||
+		name === 'HEAD' || name === '@'
+	) {
+		throw new BranchStackError(`Invalid branch name: "${name}". git would reject this as a branch ref.`)
+	}
+}
+
+/**
+ * Validate a branch name against git's own rules via `git check-ref-format`.
+ * Runs `validateBranchName` first (cheap, synchronous) and then consults git.
+ * Throws `BranchStackError` with a friendly message when the name is rejected.
+ */
+async function validateBranchNameStrict(name: string): Promise<void> {
+	validateBranchName(name)
+	const ok = await checkRefFormat(name)
+	if (!ok) {
+		throw new BranchStackError(
+			`Invalid branch name: "${name}" (git check-ref-format rejected it).`
 		)
 	}
 }
@@ -94,13 +167,50 @@ export class BranchStackService implements vscode.Disposable {
 		const worktreesDirUri = vscode.Uri.joinPath(workspaceRoot, WORKTREES_DIR)
 		fs.mkdirSync(worktreesDirUri.fsPath, { recursive: true })
 
-		// Create missing worktrees
-		for (const entry of stack) {
-			await this._ensureWorktree(entry)
-		}
+		// Migrate legacy slug-only worktree directories (pre-T9) to the new
+		// hashed form so we don't accidentally treat them as orphans.
+		await this._migrateLegacyDirs(stack, worktreesDirUri.fsPath)
+
+		// Create missing worktrees.  Parallel up to CONCURRENCY because each
+		// target directory is distinct; sequential initialisation was costing
+		// ~500 ms * N on cold starts.  Capped so we don't hammer the pack file
+		// lock on low-CPU hosts.  (T46 in the remediation plan.)
+		await runWithConcurrency(stack, 3, (entry) => this._ensureWorktree(entry))
 
 		// Prune orphans
 		await this._pruneOrphans(stack)
+	}
+
+	/**
+	 * Rename any pre-T9 slug-only worktree directory to the new hashed name.
+	 * The check is cheap: if the target (hashed) directory exists we skip,
+	 * otherwise we rename and update git's internal worktree registration
+	 * via `git worktree repair`.
+	 */
+	private async _migrateLegacyDirs(stack: BranchStackEntry[], worktreesDirPath: string): Promise<void> {
+		for (const entry of stack) {
+			const legacyName = legacySlugFor(entry.name)
+			const newName = branchToWorktreeDirName(entry.name)
+			if (legacyName === newName) {
+				continue
+			}
+			const legacyPath = path.join(worktreesDirPath, legacyName)
+			const newPath = path.join(worktreesDirPath, newName)
+			if (!fs.existsSync(legacyPath) || fs.existsSync(newPath)) {
+				continue
+			}
+			try {
+				fs.renameSync(legacyPath, newPath)
+				log.info(`BranchStackService: migrated legacy worktree dir ${legacyName} → ${newName}`)
+				try {
+					await git.worktree.repair()
+				} catch (e) {
+					log.warn(`git worktree repair failed after migration: ${e instanceof Error ? e.message : String(e)}`)
+				}
+			} catch (e) {
+				log.warn(`BranchStackService: could not migrate ${legacyPath} → ${newPath}: ${e instanceof Error ? e.message : String(e)}`)
+			}
+		}
 	}
 
 	// ─── Stack mutations ──────────────────────────────────────────────────────
@@ -114,7 +224,10 @@ export class BranchStackService implements vscode.Disposable {
 	 */
 	async addBranchToStack(name: string, base: string, color = '#888888'): Promise<void> {
 		this._assertInitialised()
-		validateBranchName(name)
+		// Two-tier validation: synchronous pre-filter rejects obvious junk
+		// without spawning git; `git check-ref-format` catches the edge cases
+		// the regex misses (`foo..bar`, `foo.lock`, `HEAD`, etc.).  See T19.
+		await validateBranchNameStrict(name)
 		validateBranchName(base)
 		this._validateNoCycle(name, base)
 
@@ -160,12 +273,15 @@ export class BranchStackService implements vscode.Disposable {
 	}
 
 	private async _worktreeIsDirty(worktreeFsPath: string): Promise<boolean> {
-		try {
-			const { stdout } = await execAsync('git status --porcelain', { cwd: worktreeFsPath })
-			return stdout.trim().length > 0
-		} catch {
+		const { stdout, exitCode, stderr } = await getDefaultGitRunner().run(
+			['status', '--porcelain'],
+			{ cwd: worktreeFsPath },
+		)
+		if (exitCode !== 0) {
+			log.warn(`_worktreeIsDirty(${worktreeFsPath}): exit=${String(exitCode)}: ${stderr}`)
 			return false
 		}
+		return stdout.trim().length > 0
 	}
 
 	/**
@@ -219,6 +335,17 @@ export class BranchStackService implements vscode.Disposable {
 		const wtPath = worktreePath(this._workspaceRoot!, branchName)
 		const absPath = wtPath.fsPath
 
+		// Detect the already-checked-out case up-front rather than relying on
+		// git's "already exists" error for diagnosis.  Emits a friendly error
+		// before any worktree directory is created (T74 in the remediation plan).
+		const alreadyCheckedOut = await this._isCheckedOut(branchName)
+		if (alreadyCheckedOut) {
+			throw new BranchStackError(
+				`Branch "${branchName}" is already checked out in another worktree. ` +
+				`Remove that worktree first before adding it to the stack.`
+			)
+		}
+
 		try {
 			// Attempt to create a new branch from base and add a worktree for it
 			await git.worktree.add(`-b "${branchName}" "${absPath}" "${base}"`)
@@ -228,14 +355,7 @@ export class BranchStackService implements vscode.Disposable {
 			if (!msg.includes('already exists')) {
 				throw e
 			}
-			// Branch already exists — check it out into the new worktree
-			const checkedOut = await this._isCheckedOut(branchName)
-			if (checkedOut) {
-				throw new BranchStackError(
-					`Branch "${branchName}" is already checked out in another worktree. ` +
-					`Remove that worktree first before adding it to the stack.`
-				)
-			}
+			// Branch already exists on disk — check it out into the new worktree
 			await git.worktree.add(`"${absPath}" "${branchName}"`)
 			log.info(`BranchStackService: added existing branch "${branchName}" at ${absPath}`)
 		}
@@ -245,7 +365,8 @@ export class BranchStackService implements vscode.Disposable {
 		try {
 			const worktrees = await git.worktree.list()
 			return worktrees.some((wt) => wt.branch === 'refs/heads/' + branchName)
-		} catch {
+		} catch (e) {
+			log.warn(`_isCheckedOut(${branchName}): git worktree list failed — ${e instanceof Error ? e.message : String(e)}`)
 			return false
 		}
 	}
@@ -266,7 +387,8 @@ export class BranchStackService implements vscode.Disposable {
 		let entries: string[]
 		try {
 			entries = fs.readdirSync(worktreesDirPath)
-		} catch {
+		} catch (e) {
+			log.warn(`_pruneOrphans: failed to read ${worktreesDirPath}: ${e instanceof Error ? e.message : String(e)}`)
 			return
 		}
 
@@ -282,12 +404,20 @@ export class BranchStackService implements vscode.Disposable {
 			if (!stat?.isDirectory()) {
 				continue
 			}
+			// Explicit dirty-check before touching git worktree — never
+			// force-remove in the auto-prune path. T4: orphans with
+			// uncommitted changes are left in place; the user must clean them
+			// up via `removeBranchFromStack(name, force=true)` after seeing
+			// the modal prompt.
+			if (await this._worktreeIsDirty(orphanPath)) {
+				log.warn(`BranchStackService: skipping dirty orphan worktree at ${orphanPath} — manual cleanup required`)
+				continue
+			}
 			log.info(`BranchStackService: pruning orphan worktree at ${orphanPath}`)
 			try {
 				await git.worktree.remove('"' + orphanPath + '"', false)
-			} catch {
-				// Worktree may have uncommitted changes — log and skip, don't force
-				log.warn(`BranchStackService: could not auto-prune "${orphanPath}" (has uncommitted changes?)`)
+			} catch (e) {
+				log.warn(`BranchStackService: could not auto-prune "${orphanPath}": ${e instanceof Error ? e.message : String(e)}`)
 			}
 		}
 

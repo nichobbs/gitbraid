@@ -28,24 +28,10 @@ export class BranchStackError extends Error {
 	}
 }
 
-export class FileGroupError extends Error {
-	constructor (message: string) {
-		super(message)
-		this.name = 'FileGroupError'
-	}
-}
-
 export class GitError extends Error {
 	constructor (message: string, public readonly code: number) {
 		super(message)
 		this.name = 'GitError'
-	}
-}
-
-export class WorktreeParentError extends Error {
-	constructor (message: string) {
-		super(message)
-		this.name = 'WorktreeParentError'
 	}
 }
 
@@ -56,9 +42,15 @@ export class WorktreeNotFoundError extends Error {
 	}
 }
 
-export class UpdateTreeError extends Error {
-	constructor (message: string) {
-		super(message)
-		this.name = 'UpdateTreeError'
-	}
-}
+/**
+ * Union of every error type the GitBraid API surface may throw. Downstream
+ * consumers (including LM tools) can narrow on `instanceof` rather than
+ * parsing `e.message`.
+ */
+export type GitBraidError =
+	| NotImplementedError
+	| ConfigError
+	| SyncError
+	| BranchStackError
+	| GitError
+	| WorktreeNotFoundError

@@ -119,7 +119,7 @@ suite('rebaseSuggestionService', () => {
 // ─── MbcApi / LmTools integration check ──────────────────────────────────────
 suite('mbcApi and lmTools', () => {
 	test('mt.1 - extension exports GitBraidExportedAPI', async () => {
-		const ext = vscode.extensions.getExtension('nihobbs.gitbraid')
+		const ext = vscode.extensions.getExtension('nichobbs.gitbraid')
 		assert.ok(ext, 'extension should be present')
 		const exported = await ext!.activate()
 		assert.ok(exported, 'activate() should return the API object')
@@ -132,7 +132,7 @@ suite('mbcApi and lmTools', () => {
 	})
 
 	test('mt.2 - getStack returns an array', async () => {
-		const ext = vscode.extensions.getExtension('nihobbs.gitbraid')
+		const ext = vscode.extensions.getExtension('nichobbs.gitbraid')
 		assert.ok(ext)
 		const exported = await ext!.activate()
 		const stack = exported.getStack()
@@ -141,7 +141,7 @@ suite('mbcApi and lmTools', () => {
 	})
 
 	test('mt.3 - getFloatingFiles returns an array', async () => {
-		const ext = vscode.extensions.getExtension('nihobbs.gitbraid')
+		const ext = vscode.extensions.getExtension('nichobbs.gitbraid')
 		assert.ok(ext)
 		const exported = await ext!.activate()
 		const floating = exported.getFloatingFiles()

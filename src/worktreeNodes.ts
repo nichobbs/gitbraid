@@ -9,34 +9,31 @@ export class NodeMapper {
     tree: WorktreeRoot[] = []
 
 	getPrimaryRootNode () {
-		log.info('400 this.tree.length=' + this.tree.length)
 		const nodes = this.tree.filter((n) => { return n.isPrimary() })
-
-		log.info('401 nodes.length=' + nodes.length)
-		if (nodes.length == 0) {
-			log.info('402 nodes.length=' + nodes.length)
+		if (nodes.length === 0) {
 			throw new WorktreeNotFoundError('Primary root node not found')
 		}
 		if (nodes.length > 1) {
-			log.info('403 nodes.length=' + nodes.length)
 			throw new WorktreeNotFoundError('Multiple primary root nodes found')
 		}
-		log.info('404 nodes.length=' + nodes.length)
 		return nodes[0]
 	}
 
+	/**
+	 * Walks the tree once to collect every descendant.  Previous versions of
+	 * this method logged one line per node at `info` level — on a 10-worktree
+	 * × 1000-file workspace that meant 10 000 lines per call plus the
+	 * `new Error()` stack capture in the logger (see T49).  We now emit one
+	 * summary at `debug` so Output stays usable and the hot path is cheap.
+	 */
 	getAllNodes() {
 		const allNodes: WorktreeNode[] = []
-
 		for (const node of this.tree) {
 			allNodes.push(node)
-			log.info('node.id=' + node.id)
 			for (const child of node.children) {
 				allNodes.push(child)
-				log.info('  child.id=' + child.id)
 				for (const grandchild of child.children) {
 					allNodes.push(grandchild)
-					log.info('    grandchild.id=' + grandchild.id)
 				}
 			}
 		}
@@ -44,21 +41,12 @@ export class NodeMapper {
 		return allNodes
 	}
 
-	// This isn't super efficient, but it's only used for testing...
-    getNodes (uri: vscode.Uri, group?: FileGroup) {
-		log.info('[getNodes] uri=' + uri.fsPath + ', group=' + group)
-		const allNodes = this.getAllNodes()
-
-		log.info(' - getNodes allNodes.length=' + allNodes.length + ', uri=' + uri?.fsPath + ', group=' + group + ', allNodes.length=' + allNodes.length)
-		for (const node of allNodes) {
-			log.info('    node.id=' + node.id)
-		}
-		const nodes = allNodes.filter((n) => { return n.uri.fsPath == uri.fsPath })
-		log.info(' - nodes.length=' + nodes.length + ', group=' + group)
+	// Testing helper — returns all nodes whose `uri.fsPath` matches.
+	getNodes (uri: vscode.Uri, group?: FileGroup) {
+		log.debug('[getNodes] uri=' + uri.fsPath + ', group=' + group)
+		const nodes = this.getAllNodes().filter((n) => n.uri.fsPath === uri.fsPath)
 		if (group) {
-			const ret = nodes?.filter((n) => { return n instanceof WorktreeFile && n.group == group })
-			log.info(' - ret.length=' + ret.length)
-			return ret
+			return nodes.filter((n) => n instanceof WorktreeFile && n.group === group)
 		}
 		return nodes
 	}

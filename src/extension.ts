@@ -1,7 +1,6 @@
 import * as vscode from 'vscode'
 import { git } from './gitFunctions'
 import { log } from './channelLogger'
-import { fileExists } from './utils'
 import { GitBraidAPI } from './commands'
 import { nodeMaps, WorktreeFile, WorktreeNode, WorktreeRoot } from './worktreeNodes'
 import { ConfigService } from './configService'
@@ -11,33 +10,51 @@ import { BranchFileDecorationProvider } from './fileDecorationProvider'
 import { BranchScmProviderManager } from './branchScmProvider'
 import { BranchNode, BranchStackTreeProvider, FileNode, FloatingFileNode, FloatingStatusBarItem } from './branchStackTreeProvider'
 import { DiffEngine } from './diffEngine'
-import { HunkRouter } from './hunkRouter'
+import { HunkRouter, anchorFor } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
 import { StackResolver } from './stackResolver'
+import { StackContentProvider } from './stackContentProvider'
+import { FileChangeBus } from './fileChangeBus'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
 export const api = new GitBraidAPI()
 
+import { withErrorHandler, showError } from './errorSurfacer'
+export { showError }
+
 /**
  * Wraps an async command handler so that any rejection is caught, logged, and
- * shown to the user as an error notification instead of being silently swallowed.
+ * surfaced via {@link showError} (notification + "Open Output" action).
  */
-function cmd<T extends unknown[]>(fn: (...args: T) => Promise<void>) {
-	return (...args: T) =>
-		fn(...args).catch((e: unknown) => {
-			const msg = e instanceof Error ? e.message : String(e)
-			log.error('command error: ' + msg)
-			void vscode.window.showErrorMessage('GitBraid: ' + msg)
-		})
-}
+const cmd = withErrorHandler
 
 export async function activate(context: vscode.ExtensionContext) {
 	const commands: vscode.Disposable[] = []
 
-	if (vscode.workspace.workspaceFolders === undefined) {
-		throw new Error('No workspace folder found')
+	if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+		// VS Code activates the extension whenever a .git dir is present in the
+		// window; that can fire before any folder is added. Quietly skip —
+		// activation events will re-fire once a folder opens. Previously this
+		// threw a raw Error which VS Code surfaced as a red notification.
+		log.info('gitbraid activation skipped: no workspace folder')
+		return
+	}
+
+	// Workspace trust: GitBraid spawns git subprocesses that can trigger
+	// repository-defined hooks. In an untrusted workspace we defer real
+	// activation until the user grants trust (T23).  Capabilities block in
+	// package.json declares untrustedWorkspaces: "limited" so VS Code lets
+	// the extension load but keeps it idle.
+	if (!vscode.workspace.isTrusted) {
+		log.info('gitbraid: workspace is not trusted — waiting for trust grant before activating')
+		const disposable = vscode.workspace.onDidGrantWorkspaceTrust(() => {
+			disposable.dispose()
+			void activate(context)
+		})
+		context.subscriptions.push(disposable)
+		return
 	}
 
 	log.info('activating gitbraid (version=' + context.extension.packageJSON.version + ')')
@@ -68,7 +85,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	const stackTreeProvider = new BranchStackTreeProvider(configService, workspaceSync)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
+		// Drag-and-drop: file nodes onto branch nodes reassigns; onto the
+		// floating group unassigns; branch-onto-branch reorders the stack.
+		// Accepts drops of text/uri-list from the Explorer too.
+		dragAndDropController: stackTreeProvider,
 		showCollapseAll: true,
+		canSelectMany: true,
 	})
 	stackView.title = 'Branch Stack'
 	context.subscriptions.push(stackTreeProvider, stackView)
@@ -126,9 +148,63 @@ export async function activate(context: vscode.ExtensionContext) {
 				if (!picked) {
 					return
 				}
-				await configService.setHunkAssignment(rel, hunkIndex, picked.label)
+				// Capture a stable anchor for this hunk so later edits that
+				// renumber the hunks don't silently apply the assignment to a
+				// different line range (T8).
+				const hunks = await diffEngine.getHunksForFile(workspaceRoot.fsPath, rel)
+				const anchor = hunks[hunkIndex] ? anchorFor(hunks[hunkIndex]) : undefined
+				await configService.setHunkAssignment(rel, hunkIndex, picked.label, anchor)
 				await vscode.window.showInformationMessage(`Hunk ${String(hunkIndex)} → ${picked.label}`)
 				await overlayDiagnostics.refreshForUri(uri)
+			}),
+		),
+
+		vscode.commands.registerCommand(
+			'gitbraid.unassignHunk',
+			cmd(async (uri: vscode.Uri, hunkIndex: number) => {
+				const rel = vscode.workspace.asRelativePath(uri, false)
+				await configService.removeHunkAssignment(rel, hunkIndex)
+				await overlayDiagnostics.refreshForUri(uri)
+			}),
+		),
+
+		vscode.commands.registerCommand(
+			'gitbraid.openResolvedAtTop',
+			cmd(async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('Open a file first to see its resolved stack view.')
+					return
+				}
+				const rel = vscode.workspace.asRelativePath(target, false)
+				const stackUri = StackContentProvider.uriFor(rel)
+				// Side-by-side diff against the on-disk file so the user sees
+				// exactly which hunks are layered by branches above.
+				await vscode.commands.executeCommand(
+					'vscode.diff',
+					target,
+					stackUri,
+					`${rel} (on-disk ↔ top of stack)`,
+				)
+			}),
+		),
+
+		vscode.commands.registerCommand(
+			'gitbraid.showStackDiff',
+			cmd(async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('Open a file first to see its stack diff.')
+					return
+				}
+				const rel = vscode.workspace.asRelativePath(target, false)
+				const diff = await stackResolver.getStackDiff(workspaceRoot.fsPath, rel)
+				if (!diff) {
+					await vscode.window.showInformationMessage(`No stack diff for ${rel}.`)
+					return
+				}
+				const doc = await vscode.workspace.openTextDocument({ language: 'diff', content: diff })
+				await vscode.window.showTextDocument(doc, { preview: true })
 			}),
 		),
 
@@ -150,11 +226,20 @@ export async function activate(context: vscode.ExtensionContext) {
 				for (const entry of configService.getStack()) {
 					worktreeDirs.set(entry.name, branchStack.getWorktreePath(entry.name).fsPath)
 				}
+				// Collect stored anchors for the reconciler (T8).  Missing
+				// anchors are tolerated — those assignments fall back to the
+				// raw index.
+				const anchors = new Map<number, import('./configTypes').HunkAnchor>()
+				for (const idx of assignments.keys()) {
+					const a = configService.getHunkAnchor(rel, idx)
+					if (a) anchors.set(idx, a)
+				}
 				const ok = await hunkRouter.routeFile(
 					workspaceRoot.fsPath,
 					rel,
 					worktreeDirs,
 					assignments,
+					anchors,
 				)
 				if (ok) {
 					await configService.clearHunkAssignments(rel)
@@ -165,10 +250,18 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
-	const _stackResolver = new StackResolver(configService, branchStack)
+	const stackResolver = new StackResolver(configService, branchStack)
+	const stackContentProvider = new StackContentProvider(stackResolver, workspaceRoot)
 	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
 	rebaseSvc.init(workspaceRoot)
-	context.subscriptions.push(rebaseSvc)
+	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider)
+
+	// Refresh any open gitbraid-stack: documents when assignments change.
+	context.subscriptions.push(
+		configService.onDidChangeAssignment((e) => {
+			if (e.relativePath) stackContentProvider.refresh(e.relativePath)
+		}),
+	)
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
@@ -251,52 +344,74 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			type BranchItem = vscode.QuickPickItem & { isNew?: boolean }
 
+			// Build grouped items (new branch on top, then local separator +
+			// locals, then remote separator + remotes).
+			const buildItems = (value: string, remote: string[] = []): BranchItem[] => {
+				const items: BranchItem[] = []
+				const trimmed = value.trim()
+				if (trimmed && !availableLocal.includes(trimmed) && !remote.includes(trimmed)) {
+					items.push({
+						label: `$(plus) ${trimmed}`,
+						description: 'Create a new branch',
+						detail: trimmed,
+						isNew: true,
+					})
+				}
+				const localMatches = availableLocal.filter(b => b.includes(trimmed))
+				if (localMatches.length > 0) {
+					items.push({ label: 'Local', kind: vscode.QuickPickItemKind.Separator })
+					for (const b of localMatches) items.push({ label: b, description: 'local' })
+				}
+				const remoteMatches = remote.filter(b => !stackBranchNames.has(b))
+				if (remoteMatches.length > 0) {
+					items.push({ label: 'Remote', kind: vscode.QuickPickItemKind.Separator })
+					for (const b of remoteMatches) items.push({ label: b, description: 'remote' })
+				}
+				return items
+			}
+
 			const qp = vscode.window.createQuickPick<BranchItem>()
 			qp.placeholder = 'Branch name — pick existing or type a new name'
 			qp.matchOnDescription = false
-			qp.items = availableLocal.map(b => ({ label: b, description: 'local' }))
+			qp.items = buildItems('')
 
 			let remoteDebounce: ReturnType<typeof setTimeout> | undefined
 
-			qp.onDidChangeValue(async (value) => {
+			qp.onDidChangeValue((value) => {
 				if (remoteDebounce) {
 					clearTimeout(remoteDebounce)
 				}
-				const localMatches = availableLocal
-					.filter(b => b.includes(value))
-					.map<BranchItem>(b => ({ label: b, description: 'local' }))
-
-				const newItem: BranchItem[] = value.trim()
-					? [{ label: value.trim(), description: 'new branch', isNew: true }]
-					: []
-
-				qp.items = [...localMatches, ...newItem]
+				qp.items = buildItems(value)
 
 				if (value.trim().length >= 2) {
 					remoteDebounce = setTimeout(async () => {
 						try {
 							const { remote } = await git.listBranches(workspaceUri, value.trim())
-							const remoteItems = remote
-								.filter(b => !stackBranchNames.has(b))
-								.map<BranchItem>(b => ({ label: b, description: 'remote' }))
-							// Refresh — keep local matches + new + remote
-							qp.items = [
-								...availableLocal.filter(b => b.includes(value)).map<BranchItem>(b => ({ label: b, description: 'local' })),
-								...remoteItems,
-								...(value.trim() ? [{ label: value.trim(), description: 'new branch', isNew: true } as BranchItem] : []),
-							]
-						} catch { /* remote search failed — ignore */ }
+							qp.items = buildItems(value, remote)
+						} catch (e) {
+							log.warn(`addStackBranch: remote search failed: ${e instanceof Error ? e.message : String(e)}`)
+						}
 					}, 300)
 				}
 			})
 
 			const name = await new Promise<string | undefined>((resolve) => {
+				let resolved = false
+				const resolveOnce = (value: string | undefined) => {
+					if (resolved) return
+					resolved = true
+					resolve(value)
+					qp.dispose()
+				}
 				qp.onDidAccept(() => {
 					const selected = qp.selectedItems[0]
-					resolve((selected?.label ?? qp.value.trim()) || undefined)
-					qp.dispose()
+					if (selected?.isNew && selected.detail) {
+						resolveOnce(selected.detail)
+					} else {
+						resolveOnce((selected?.label ?? qp.value.trim()) || undefined)
+					}
 				})
-				qp.onDidHide(() => { resolve(undefined); qp.dispose() })
+				qp.onDidHide(() => { resolveOnce(undefined) })
 				qp.show()
 			})
 
@@ -308,9 +423,17 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			const stack = configService.getStack()
-			const bases = ['main', ...stack.map((e) => e.name)]
-			const base = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch (used when creating a new branch)' }) ?? 'main'
-			await branchStack.addBranchToStack(name, base)
+			// Detect the repo's default branch (main / master / trunk / develop)
+			// instead of hard-coding "main" (T73 in the remediation plan).
+			const defaultBranch = await detectDefaultBranch(workspaceUri).catch(() => 'main')
+			const bases = [defaultBranch, ...stack.map((e) => e.name).filter(n => n !== defaultBranch)]
+			const basePick = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch (used when creating a new branch)' })
+			if (!basePick) {
+				// Pressing Escape cancels the whole command rather than defaulting
+				// to main — avoids creating a branch the user didn't confirm.
+				return
+			}
+			await branchStack.addBranchToStack(name, basePick)
 			await vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
 		})),
 
@@ -403,54 +526,63 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(...commands)
 
 	await filesExcludeWorktreesDir()
-	await ignoreWorktreesDir()
+	// .gitignore stamping is owned by ConfigService._ensureGitignore (called
+	// on every write). The separate activation-time writer used to race with
+	// it and occasionally double-append; consolidated in T24.
 
 	log.info('subscribe')
 	context.subscriptions.push(api.worktreeView)
 	log.info('register worktreeView')
 	vscode.window.registerTreeDataProvider('gitbraid.worktreeView', api.worktreeView)
 
-	log.info('register filewatcher')
-	const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.workspace.workspaceFolders[0], '**/*'), false, true, false)
-	const watcherChange = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.workspace.workspaceFolders[0], '**/.git/index'), true, false, true)
-	context.subscriptions.push(watcher)
+	log.info('register filewatcher (FileChangeBus)')
+	// Collapsed watcher (T10): one FileSystemWatcher + domain events instead of
+	// three overlapping `**/*` watchers.  Downstream services keep their own
+	// watchers for now — this is only the legacy worktree-view refresh path.
+	const bus = new FileChangeBus(vscode.workspace.workspaceFolders[0].uri)
+	context.subscriptions.push(bus)
 
-	watcherChange.onDidChange(async (e) => {
-		if (e.scheme !== 'file') {
+	bus.onDidSavePrimary((e) => {
+		if (git.ignoreCache.includes(e.uri.fsPath)) {
 			return
 		}
-		const stat = await vscode.workspace.fs.stat(e).then((s) => { return s}, (e) => { return undefined })
-		if (!stat) {
-			return
-		}
-		if (stat.type == vscode.FileType.Directory) {
-			return
-		}
-		if (git.ignoreCache.includes(e.fsPath)) {
-			return
-		}
-		log.info('onDidChange: ' + e.fsPath + ' ' + stat.type)
-		const repoNode = nodeMaps.getWorktreeForUri(e)
-		return api.refresh(repoNode)
+		log.debug('bus.save: ' + e.relativePath)
+		void api.refreshUri(e.uri)
 	})
-	watcher.onDidCreate((e) => {
-		if (e.scheme !== 'file') { return }
-		log.info('onDidCreate: ' + e.fsPath)
-		return api.refreshUri(e)
-	})
-	watcher.onDidDelete(async (e) => {
-		if (e.scheme !== 'file') { return }
-		const ignore = await git.checkIgnore(e.fsPath)
-		if (ignore) {
+	bus.onDidDeletePrimary(async (e) => {
+		if (await git.checkIgnore(e.uri.fsPath)) {
 			return
 		}
-		const repoNode = nodeMaps.getWorktreeForUri(e)
-		log.info('onDidDelete: ' + e.fsPath)
-		return api.refresh(repoNode)
+		const repoNode = nodeMaps.getWorktreeForUri(e.uri)
+		log.debug('bus.delete: ' + e.relativePath)
+		void api.refresh(repoNode)
 	})
 	log.info('extension activation complete')
 	return mbcExportedApi
 
+}
+
+/**
+ * Best-effort detection of the repository's default branch.  Checks, in order:
+ * 1. `refs/remotes/origin/HEAD` symbolic-ref (the GitHub/GitLab default).
+ * 2. `git config init.defaultBranch` (user override).
+ * 3. Falls back to the already-loaded current branch.
+ * 4. Finally defaults to `main` if nothing is conclusive.
+ */
+async function detectDefaultBranch(workspaceUri: vscode.Uri): Promise<string> {
+	try {
+		const symbolic = await git.defaultBranch()
+		if (symbolic) return symbolic
+	} catch {
+		// fall through to current branch
+	}
+	try {
+		const cur = await git.branch(workspaceUri)
+		if (cur) return cur
+	} catch {
+		// fall through
+	}
+	return 'main'
 }
 
 async function filesExcludeWorktreesDir () {
@@ -487,21 +619,5 @@ async function filesExcludeWorktreesDir () {
 	log.info('Pattern \'.worktrees/\' added to files.exclude')
 }
 
-async function ignoreWorktreesDir () {
-	const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, '.gitignore')
-	if (!fileExists(uri)) {
-		log.info('.gitignore not updated because it does not exist')
-		return
-	}
-
-	const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))
-	const lines = content.replace(/\\r/g,'').split('\n')
-	for (let line of lines) {
-		line = line.trim() // NOSONAR
-		if (line === '.worktrees/') {
-			log.info('Pattern \'.worktrees/\' already in .gitignore')
-			return
-		}
-	}
-	await vscode.workspace.fs.writeFile(uri, Uint8Array.from(Buffer.from(content + '\n## added by vscode extension \'nihobbs.gitbraid\'\n.worktrees/\n')))
-}
+// ignoreWorktreesDir removed in T24: ConfigService._ensureGitignore is now
+// the sole owner of the .worktrees/ entry in .gitignore.

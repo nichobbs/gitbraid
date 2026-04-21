@@ -4,11 +4,8 @@ import {
 	ConfigError,
 	SyncError,
 	BranchStackError,
-	FileGroupError,
 	GitError,
-	WorktreeParentError,
 	WorktreeNotFoundError,
-	UpdateTreeError,
 } from '../src/errors'
 
 suite('errors', () => {
@@ -69,16 +66,6 @@ suite('errors', () => {
 		assert.strictEqual(e.message, 'stack error')
 	})
 
-	// ── FileGroupError ────────────────────────────────────────────────────────
-
-	test('FileGroupError: has correct name and message', () => {
-		const e = new FileGroupError('group error')
-		assert.ok(e instanceof Error)
-		assert.ok(e instanceof FileGroupError)
-		assert.strictEqual(e.name, 'FileGroupError')
-		assert.strictEqual(e.message, 'group error')
-	})
-
 	// ── GitError ──────────────────────────────────────────────────────────────
 
 	test('GitError: has correct name, message, and code', () => {
@@ -95,16 +82,6 @@ suite('errors', () => {
 		assert.strictEqual(e.code, 0)
 	})
 
-	// ── WorktreeParentError ───────────────────────────────────────────────────
-
-	test('WorktreeParentError: has correct name and message', () => {
-		const e = new WorktreeParentError('parent error')
-		assert.ok(e instanceof Error)
-		assert.ok(e instanceof WorktreeParentError)
-		assert.strictEqual(e.name, 'WorktreeParentError')
-		assert.strictEqual(e.message, 'parent error')
-	})
-
 	// ── WorktreeNotFoundError ─────────────────────────────────────────────────
 
 	test('WorktreeNotFoundError: has correct name and message', () => {
@@ -115,16 +92,6 @@ suite('errors', () => {
 		assert.strictEqual(e.message, 'not found')
 	})
 
-	// ── UpdateTreeError ───────────────────────────────────────────────────────
-
-	test('UpdateTreeError: has correct name and message', () => {
-		const e = new UpdateTreeError('update failed')
-		assert.ok(e instanceof Error)
-		assert.ok(e instanceof UpdateTreeError)
-		assert.strictEqual(e.name, 'UpdateTreeError')
-		assert.strictEqual(e.message, 'update failed')
-	})
-
 	// ── Error instanceof chain ────────────────────────────────────────────────
 
 	test('all custom errors are instances of Error', () => {
@@ -133,11 +100,8 @@ suite('errors', () => {
 			new ConfigError('x'),
 			new SyncError('x'),
 			new BranchStackError('x'),
-			new FileGroupError('x'),
 			new GitError('x', 1),
-			new WorktreeParentError('x'),
 			new WorktreeNotFoundError('x'),
-			new UpdateTreeError('x'),
 		]
 		for (const e of errors) {
 			assert.ok(e instanceof Error, `${e.name} should be instanceof Error`)

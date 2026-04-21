@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import * as path from 'path'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { DiffEngine, DiffHunk } from './diffEngine'
@@ -23,10 +24,24 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 	private readonly _onDidChangeCodeLenses = new vscode.EventEmitter<void>()
 	readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event
 
-	/** Cache: file fsPath → { version, hunks } — invalidated on each save. */
+	/**
+	 * Cache: file fsPath → { version, hunks } — invalidated on each save.
+	 * Bounded via LRU eviction to keep memory in check on users who cycle
+	 * through a large codebase (T45).
+	 */
 	private readonly _cache = new Map<string, { version: number; hunks: DiffHunk[] }>()
+	/** Soft cap on `_cache` entries; oldest insertion is evicted on overflow. */
+	private static readonly _cacheMax = 50
 
 	private readonly _disposables: vscode.Disposable[] = []
+
+	/**
+	 * Pending debounce handle for coalesced lens-refresh fires.  VS Code calls
+	 * `provideCodeLenses` aggressively (per keystroke version bump); spawning
+	 * a `git diff` per call was costly — we now wait until the user pauses
+	 * typing for a short window before recomputing.  (T45 in the plan.)
+	 */
+	private _fireDebounce: ReturnType<typeof setTimeout> | undefined
 
 	constructor(
 		private readonly _diffEngine: DiffEngine,
@@ -35,14 +50,28 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		// Refresh lenses when assignments change, or when a document is saved
 		this._disposables.push(
 			this._onDidChangeCodeLenses,
-			this._config.onDidChangeAssignment(() => {
-				this._onDidChangeCodeLenses.fire()
-			}),
+			this._config.onDidChangeAssignment(() => { this._scheduleFire() }),
 			vscode.workspace.onDidSaveTextDocument((doc) => {
 				this._cache.delete(doc.uri.fsPath)
-				this._onDidChangeCodeLenses.fire()
+				this._scheduleFire()
+			}),
+			vscode.workspace.onDidChangeTextDocument((e) => {
+				// Invalidate the version cache so the next provide call sees
+				// the updated document, but debounce the fire itself.
+				this._cache.delete(e.document.uri.fsPath)
+				this._scheduleFire()
 			}),
 		)
+	}
+
+	private _scheduleFire(): void {
+		if (this._fireDebounce) {
+			clearTimeout(this._fireDebounce)
+		}
+		this._fireDebounce = setTimeout(() => {
+			this._fireDebounce = undefined
+			this._onDidChangeCodeLenses.fire()
+		}, 300)
 	}
 
 	// ── CodeLensProvider ───────────────────────────────────────────────────────
@@ -55,12 +84,15 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		if (document.uri.scheme !== 'file') {
 			return []
 		}
-		if (document.uri.fsPath.includes('.worktrees')) {
-			return []
-		}
-
 		const wsFolder = vscode.workspace.getWorkspaceFolder(document.uri)
 		if (!wsFolder) {
+			return []
+		}
+		// Containment check (not a substring match) — see reviews/05-ui-and-ux.md
+		// "Hunk CodeLens UX": previously `fsPath.includes('.worktrees')` also
+		// matched folders like `not.worktrees-backups/`.
+		const rel = path.relative(wsFolder.uri.fsPath, document.uri.fsPath)
+		if (!rel || rel.split(path.sep).includes('.worktrees')) {
 			return []
 		}
 
@@ -72,24 +104,42 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		const relativePath = vscode.workspace.asRelativePath(document.uri, false)
 		const hunkAssignments = this._config.getHunkAssignments(relativePath)
 
-		return hunks.map((hunk) => {
+		const lenses: vscode.CodeLens[] = []
+		for (const hunk of hunks) {
 			const assignedBranch = hunkAssignments?.get(hunk.index)
-			const title = assignedBranch
-				? `$(git-branch) Hunk → ${assignedBranch}`
-				: '$(git-commit) Assign hunk to branch…'
 			const range = new vscode.Range(
 				Math.max(hunk.startLine - 1, 0),
 				0,
 				Math.max(hunk.startLine - 1, 0),
 				0,
 			)
-			return new vscode.CodeLens(range, {
-				title,
-				command: 'gitbraid.assignHunk',
-				arguments: [document.uri, hunk.index],
-				tooltip: `Lines ${String(hunk.startLine)}–${String(hunk.endLine)}: ${assignedBranch ?? 'unassigned'}`,
-			})
-		})
+			const tooltip = `Lines ${String(hunk.startLine)}–${String(hunk.endLine)}: ${assignedBranch ?? 'unassigned'}`
+
+			if (assignedBranch) {
+				// Two lenses: reassign (opens the picker) + unassign (one-click).
+				// See reviews/05-ui-and-ux.md "Hunk CodeLens UX".
+				lenses.push(new vscode.CodeLens(range, {
+					title: `$(git-branch) Hunk → ${assignedBranch}`,
+					command: 'gitbraid.assignHunk',
+					arguments: [document.uri, hunk.index],
+					tooltip,
+				}))
+				lenses.push(new vscode.CodeLens(range, {
+					title: '$(trash) Unassign',
+					command: 'gitbraid.unassignHunk',
+					arguments: [document.uri, hunk.index],
+					tooltip: 'Remove the hunk assignment',
+				}))
+			} else {
+				lenses.push(new vscode.CodeLens(range, {
+					title: '$(git-commit) Assign hunk to branch…',
+					command: 'gitbraid.assignHunk',
+					arguments: [document.uri, hunk.index],
+					tooltip,
+				}))
+			}
+		}
+		return lenses
 	}
 
 	resolveCodeLens(codeLens: vscode.CodeLens, _token: vscode.CancellationToken): vscode.CodeLens {
@@ -99,6 +149,10 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 	// ── Disposal ───────────────────────────────────────────────────────────────
 
 	dispose() {
+		if (this._fireDebounce) {
+			clearTimeout(this._fireDebounce)
+			this._fireDebounce = undefined
+		}
 		for (const d of this._disposables) {
 			d.dispose()
 		}
@@ -111,14 +165,22 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		document: vscode.TextDocument,
 		wsRoot: string,
 	): Promise<DiffHunk[]> {
-		const cached = this._cache.get(document.uri.fsPath)
+		const key = document.uri.fsPath
+		const cached = this._cache.get(key)
 		if (cached && cached.version === document.version) {
+			// Refresh LRU position on hit.
+			this._cache.delete(key)
+			this._cache.set(key, cached)
 			return cached.hunks
 		}
 		const relativePath = vscode.workspace.asRelativePath(document.uri, false)
 		const hunks = await this._diffEngine.getHunksForFile(wsRoot, relativePath)
-		this._cache.set(document.uri.fsPath, { version: document.version, hunks })
-		log.info(`HunkCodeLensProvider: ${hunks.length} hunks for ${relativePath}`)
+		if (this._cache.size >= HunkCodeLensProvider._cacheMax) {
+			const oldest = this._cache.keys().next().value
+			if (oldest !== undefined) this._cache.delete(oldest)
+		}
+		this._cache.set(key, { version: document.version, hunks })
+		log.debug(`HunkCodeLensProvider: ${hunks.length} hunks for ${relativePath}`)
 		return hunks
 	}
 }

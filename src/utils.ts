@@ -2,11 +2,12 @@ import * as vscode from 'vscode'
 import * as fs from 'fs'
 import { WorktreeNode } from './worktreeNodes'
 import { log } from './channelLogger'
+import { ConfigError } from './errors'
 
 export function validateUri (node: WorktreeNode, throwError = true) {
 	if (!node.uri) {
 		if (throwError) {
-			throw new Error('Uri is undefined for node.id:' + node.id)
+			throw new ConfigError('Uri is undefined for node.id:' + node.id)
 		}
 		return false
 	}
@@ -42,14 +43,14 @@ export function dirExists (uri: vscode.Uri) {
 }
 
 export function toUri (path: string) {
-	if (path.startsWith('/') || RegExp(/^[a-zA-Z]:\\/).exec(path)) {
-		// absolute path
+	if (path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path)) {
+		// absolute path (POSIX /... or Windows C:\... or C:/...)
 		return vscode.Uri.file(path)
 	}
 
     const wsFolder = vscode.workspace.workspaceFolders?.[0].uri
     if (!wsFolder) {
-        throw new Error('No workspace folder found')
+        throw new ConfigError('No workspace folder found')
     }
     return vscode.Uri.joinPath(wsFolder, path)
 }

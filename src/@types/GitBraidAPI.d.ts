@@ -95,6 +95,17 @@ export interface GitBraidExportedAPI {
 	 */
 	stageBranch(branch: string, files?: string[]): Promise<void>
 
+	// ── Symmetric read / mutate helpers ───────────────────────────────────────
+
+	/** Reorder branches in the stack by providing the desired name sequence. */
+	reorderStack(orderedNames: string[]): Promise<void>
+
+	/** Retrieve the hunk assignments for a file (hunkIndex → branchName). */
+	getHunkAssignments(relativePath: string): Map<number, string> | undefined
+
+	/** Remove a single hunk assignment. */
+	removeHunkAssignment(relativePath: string, hunkIndex: number): Promise<void>
+
 	// ── Events ────────────────────────────────────────────────────────────────
 
 	/** Fires whenever a file assignment is created, changed, or removed. */
@@ -102,4 +113,10 @@ export interface GitBraidExportedAPI {
 
 	/** Fires whenever the branch stack is modified (add / remove / reorder). */
 	onDidChangeStack: vscode.Event<StackChangeEvent>
+
+	/** Fires when a file is copied into a branch's worktree after a save. */
+	onDidSyncFile: vscode.Event<{ relativePath: string, branch: string }>
+
+	/** Fires when a save touches a file with no branch assignment. */
+	onDidFloatFile: vscode.Event<{ relativePath: string }>
 }

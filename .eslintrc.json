@@ -1,0 +1,27 @@
+{
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  },
+  "plugins": ["@typescript-eslint"],
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "out/**",
+    "node_modules/**",
+    "resources/**",
+    ".vscode-test/**",
+    "*.d.ts"
+  ],
+  "rules": {
+    "no-throw-literal": "error",
+    "semi": ["error", "never"],
+    "eqeqeq": ["warn", "smart"],
+    "no-unused-expressions": "warn"
+  }
+}

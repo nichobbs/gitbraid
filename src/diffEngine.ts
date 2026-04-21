@@ -1,9 +1,19 @@
-import util from 'node:util'
-import child_process from 'node:child_process'
 import path from 'node:path'
+import { promises as fsp } from 'node:fs'
 import { log } from './channelLogger'
+import { requireInside } from './pathGuard'
+import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 
-const exec = util.promisify(child_process.exec)
+/** LRU cap on the DiffEngine hunk cache. */
+const HUNK_CACHE_MAX = 32
+/** Minimum time (ms) a cache entry is trusted without a stat check. */
+const HUNK_CACHE_TTL_MS = 1_500
+
+interface CachedHunks {
+	hunks: DiffHunk[]
+	mtimeMs: number
+	stampedAt: number
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -64,7 +74,10 @@ export function parseDiffHunks(unifiedDiff: string): DiffHunk[] {
 			return
 		}
 		const newCount = currentNewLineCount
-		const endLine = currentStart + Math.max(newCount - 1, 0)
+		// A pure deletion has newCount === 0; represent it as an empty range
+		// (endLine < startLine) so overlap detection doesn't falsely claim the
+		// hunk collides with the next line.
+		const endLine = newCount === 0 ? currentStart - 1 : currentStart + newCount - 1
 		hunks.push({
 			index: hunks.length,
 			startLine: currentStart,
@@ -113,8 +126,20 @@ export function parseDiffHunks(unifiedDiff: string): DiffHunk[] {
  *
  * All methods accept an absolute path for `wsRoot` (the workspace root or a
  * worktree root) so they can be called without needing a live `vscode.Uri`.
+ *
+ * Git is invoked via the injected {@link IGitRunner} (spawn with
+ * `shell: false` by default), so path and ref arguments never touch a shell.
  */
 export class DiffEngine {
+
+	/** LRU cache keyed by `${wsRoot}::${relativePath}` (T53). */
+	private readonly _hunkCache = new Map<string, CachedHunks>()
+
+	/**
+	 * @param runner  Optional git runner for test injection.  Defaults to the
+	 *                module-level singleton returned by `getDefaultGitRunner`.
+	 */
+	constructor(private readonly runner: IGitRunner = getDefaultGitRunner()) {}
 
 	// ── Public API ─────────────────────────────────────────────────────────────
 
@@ -126,18 +151,60 @@ export class DiffEngine {
 	 * @param relativePath Path to the file relative to `wsRoot`.
 	 */
 	async getHunksForFile(wsRoot: string, relativePath: string): Promise<DiffHunk[]> {
-		log.info(`DiffEngine.getHunksForFile: ${relativePath} in ${wsRoot}`)
-		const safeRelative = this._sanitisePath(relativePath)
-		try {
-			const { stdout } = await exec(
-				`git diff HEAD -- "${safeRelative}"`,
-				{ cwd: wsRoot },
-			)
-			return parseDiffHunks(stdout)
-		} catch (err) {
-			log.error(`DiffEngine.getHunksForFile error: ${String(err)}`)
+		log.debug(`DiffEngine.getHunksForFile: ${relativePath} in ${wsRoot}`)
+		requireInside(wsRoot, relativePath)
+		const safe = this._normalisePath(relativePath)
+
+		const cacheKey = `${wsRoot}::${safe}`
+		const absPath = path.join(wsRoot, safe)
+		const cached = this._hunkCache.get(cacheKey)
+		const now = Date.now()
+
+		// Cache hit if the entry is recent AND the on-disk mtime matches.
+		// Quick TTL short-circuits the stat call when the cache was just filled.
+		if (cached) {
+			if (now - cached.stampedAt < HUNK_CACHE_TTL_MS) {
+				this._hunkCache.delete(cacheKey)
+				this._hunkCache.set(cacheKey, cached)
+				return cached.hunks
+			}
+			try {
+				const st = await fsp.stat(absPath)
+				if (st.mtimeMs === cached.mtimeMs) {
+					cached.stampedAt = now
+					this._hunkCache.delete(cacheKey)
+					this._hunkCache.set(cacheKey, cached)
+					return cached.hunks
+				}
+			} catch {
+				// File missing — fall through and let git report the truth.
+			}
+		}
+
+		const { stdout, exitCode, stderr } = await this.runner.run(
+			['diff', 'HEAD', '--', safe],
+			{ cwd: wsRoot },
+		)
+		if (exitCode !== 0) {
+			log.error(`DiffEngine.getHunksForFile: git diff exited ${String(exitCode)}: ${stderr}`)
 			return []
 		}
+		const hunks = parseDiffHunks(stdout)
+
+		let mtimeMs = 0
+		try { mtimeMs = (await fsp.stat(absPath)).mtimeMs } catch { /* ignore */ }
+		if (this._hunkCache.size >= HUNK_CACHE_MAX) {
+			const oldest = this._hunkCache.keys().next().value
+			if (oldest !== undefined) this._hunkCache.delete(oldest)
+		}
+		this._hunkCache.set(cacheKey, { hunks, mtimeMs, stampedAt: now })
+		return hunks
+	}
+
+	/** Drop cached diff output for a specific file. */
+	invalidateCache(wsRoot: string, relativePath: string): void {
+		const safe = this._normalisePath(relativePath)
+		this._hunkCache.delete(`${wsRoot}::${safe}`)
 	}
 
 	/**
@@ -155,21 +222,21 @@ export class DiffEngine {
 		branch: string,
 	): Promise<DiffHunk[]> {
 		log.info(`DiffEngine.getHunksAgainstBranch: ${relativePath} against ${branch}`)
+		requireInside(wsRoot, relativePath)
 		const mergeBase = await this.getMergeBase(wsRoot, 'HEAD', branch)
 		if (!mergeBase) {
 			return this.getHunksForFile(wsRoot, relativePath)
 		}
-		const safeRelative = this._sanitisePath(relativePath)
-		try {
-			const { stdout } = await exec(
-				`git diff "${mergeBase}" -- "${safeRelative}"`,
-				{ cwd: wsRoot },
-			)
-			return parseDiffHunks(stdout)
-		} catch (err) {
-			log.error(`DiffEngine.getHunksAgainstBranch error: ${String(err)}`)
+		const safe = this._normalisePath(relativePath)
+		const { stdout, exitCode, stderr } = await this.runner.run(
+			['diff', mergeBase, '--', safe],
+			{ cwd: wsRoot },
+		)
+		if (exitCode !== 0) {
+			log.error(`DiffEngine.getHunksAgainstBranch: git diff exited ${String(exitCode)}: ${stderr}`)
 			return []
 		}
+		return parseDiffHunks(stdout)
 	}
 
 	/**
@@ -177,27 +244,26 @@ export class DiffEngine {
 	 */
 	async getMergeBase(wsRoot: string, ref1: string, ref2: string): Promise<string | undefined> {
 		log.info(`DiffEngine.getMergeBase: ${ref1} ${ref2} in ${wsRoot}`)
-		try {
-			const { stdout } = await exec(`git merge-base "${ref1}" "${ref2}"`, { cwd: wsRoot })
-			const sha = stdout.trim()
-			return sha || undefined
-		} catch {
-			log.error(`DiffEngine.getMergeBase: no common ancestor for ${ref1} and ${ref2}`)
+		const { stdout, exitCode } = await this.runner.run(
+			['merge-base', ref1, ref2],
+			{ cwd: wsRoot },
+		)
+		if (exitCode !== 0) {
+			log.debug(`DiffEngine.getMergeBase: no common ancestor for ${ref1} and ${ref2}`)
 			return undefined
 		}
+		return stdout.trim() || undefined
 	}
 
 	// ── Private helpers ────────────────────────────────────────────────────────
 
 	/**
-	 * Sanitise a relative path so it cannot escape the repository root via
-	 * path traversal.  The sanitised value is safe to interpolate into a git
-	 * command after being surrounded with double quotes.
+	 * Normalise slashes and strip leading `../` segments.  Shell-metacharacter
+	 * rejection is now redundant (args are passed through `spawn` as argv so
+	 * the shell never sees them), but we keep the `pathGuard.requireInside`
+	 * call at the public entry points to block filesystem escapes.
 	 */
-	private _sanitisePath(relativePath: string): string {
-		// Normalise and strip any leading '../' segments
-		const normalised = path.normalize(relativePath).replace(/^(\.\.\/|\.\.\\)+/, '')
-		// Escape double-quotes that appear inside the path itself
-		return normalised.replaceAll('"', String.raw`"`)
+	private _normalisePath(relativePath: string): string {
+		return path.normalize(relativePath).replace(/^(\.\.\/|\.\.\\)+/, '')
 	}
 }
