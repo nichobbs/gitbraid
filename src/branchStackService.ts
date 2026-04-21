@@ -1,13 +1,14 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as crypto from 'node:crypto'
 import util from 'node:util'
 import child_process from 'node:child_process'
 import { log } from './channelLogger'
 import { BranchStackError } from './errors'
 import { BranchStackEntry } from './configTypes'
 import { ConfigService } from './configService'
-import { git } from './gitFunctions'
+import { git, checkRefFormat } from './gitFunctions'
 
 const execAsync = util.promisify(child_process.exec)
 
@@ -18,16 +19,60 @@ const BRANCH_NAME_RE = /^[a-zA-Z0-9_./-]+$/
 
 /**
  * Maps a git branch name to a safe directory name under `.worktrees/`.
- * e.g. "feature/docs" → "feature-docs"
+ * e.g. "feature/docs" → "feature-docs__a1b2c3d"
+ *
+ * The 7-character sha1 suffix makes the mapping injective so two branches
+ * that would otherwise slug-collide (e.g. "feature/a" and "feature-a") map
+ * to distinct directories.  See `docs/remediation/02-p1-correctness.md#T9`
+ * and `docs/reviews/bugs.md` B4.
  */
 export function branchToWorktreeDirName(branchName: string): string {
+	const slug = branchName.replaceAll('/', '-').replaceAll(/[^a-zA-Z0-9._-]/g, '_')
+	const suffix = crypto.createHash('sha1').update(branchName).digest('hex').slice(0, 7)
+	return `${slug}__${suffix}`
+}
+
+/**
+ * Matches a directory name produced by the legacy (pre-T9) slug-only
+ * implementation.  Used by `_migrateLegacyDirs` to rename existing worktrees
+ * to the new hashed format without data loss.
+ */
+function legacySlugFor(branchName: string): string {
 	return branchName.replaceAll('/', '-').replaceAll(/[^a-zA-Z0-9._-]/g, '_')
 }
 
 function validateBranchName(name: string): void {
+	// Cheap pre-filter — rejects obvious junk without spawning git.
 	if (!BRANCH_NAME_RE.test(name)) {
 		throw new BranchStackError(
 			`Invalid branch name: "${name}". Only alphanumeric characters, dots, dashes, underscores, and slashes are allowed.`
+		)
+	}
+	// Reject values git would reject even though they pass the regex:
+	// `.foo`, `foo.`, `foo..bar`, `foo.lock`, leading/trailing `/`.
+	// Full validation via `git check-ref-format` runs asynchronously at
+	// addBranch time — see validateBranchNameStrict.
+	if (
+		name.startsWith('.') || name.endsWith('.') ||
+		name.startsWith('/') || name.endsWith('/') ||
+		name.includes('..') || name.endsWith('.lock') ||
+		name === 'HEAD' || name === '@'
+	) {
+		throw new BranchStackError(`Invalid branch name: "${name}". git would reject this as a branch ref.`)
+	}
+}
+
+/**
+ * Validate a branch name against git's own rules via `git check-ref-format`.
+ * Runs `validateBranchName` first (cheap, synchronous) and then consults git.
+ * Throws `BranchStackError` with a friendly message when the name is rejected.
+ */
+async function validateBranchNameStrict(name: string): Promise<void> {
+	validateBranchName(name)
+	const ok = await checkRefFormat(name)
+	if (!ok) {
+		throw new BranchStackError(
+			`Invalid branch name: "${name}" (git check-ref-format rejected it).`
 		)
 	}
 }
@@ -94,6 +139,10 @@ export class BranchStackService implements vscode.Disposable {
 		const worktreesDirUri = vscode.Uri.joinPath(workspaceRoot, WORKTREES_DIR)
 		fs.mkdirSync(worktreesDirUri.fsPath, { recursive: true })
 
+		// Migrate legacy slug-only worktree directories (pre-T9) to the new
+		// hashed form so we don't accidentally treat them as orphans.
+		await this._migrateLegacyDirs(stack, worktreesDirUri.fsPath)
+
 		// Create missing worktrees
 		for (const entry of stack) {
 			await this._ensureWorktree(entry)
@@ -101,6 +150,38 @@ export class BranchStackService implements vscode.Disposable {
 
 		// Prune orphans
 		await this._pruneOrphans(stack)
+	}
+
+	/**
+	 * Rename any pre-T9 slug-only worktree directory to the new hashed name.
+	 * The check is cheap: if the target (hashed) directory exists we skip,
+	 * otherwise we rename and update git's internal worktree registration
+	 * via `git worktree repair`.
+	 */
+	private async _migrateLegacyDirs(stack: BranchStackEntry[], worktreesDirPath: string): Promise<void> {
+		for (const entry of stack) {
+			const legacyName = legacySlugFor(entry.name)
+			const newName = branchToWorktreeDirName(entry.name)
+			if (legacyName === newName) {
+				continue
+			}
+			const legacyPath = path.join(worktreesDirPath, legacyName)
+			const newPath = path.join(worktreesDirPath, newName)
+			if (!fs.existsSync(legacyPath) || fs.existsSync(newPath)) {
+				continue
+			}
+			try {
+				fs.renameSync(legacyPath, newPath)
+				log.info(`BranchStackService: migrated legacy worktree dir ${legacyName} → ${newName}`)
+				try {
+					await git.worktree.repair()
+				} catch (e) {
+					log.warn(`git worktree repair failed after migration: ${e instanceof Error ? e.message : String(e)}`)
+				}
+			} catch (e) {
+				log.warn(`BranchStackService: could not migrate ${legacyPath} → ${newPath}: ${e instanceof Error ? e.message : String(e)}`)
+			}
+		}
 	}
 
 	// ─── Stack mutations ──────────────────────────────────────────────────────
@@ -114,7 +195,10 @@ export class BranchStackService implements vscode.Disposable {
 	 */
 	async addBranchToStack(name: string, base: string, color = '#888888'): Promise<void> {
 		this._assertInitialised()
-		validateBranchName(name)
+		// Two-tier validation: synchronous pre-filter rejects obvious junk
+		// without spawning git; `git check-ref-format` catches the edge cases
+		// the regex misses (`foo..bar`, `foo.lock`, `HEAD`, etc.).  See T19.
+		await validateBranchNameStrict(name)
 		validateBranchName(base)
 		this._validateNoCycle(name, base)
 

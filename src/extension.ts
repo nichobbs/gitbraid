@@ -1,7 +1,6 @@
 import * as vscode from 'vscode'
 import { git } from './gitFunctions'
 import { log } from './channelLogger'
-import { fileExists } from './utils'
 import { GitBraidAPI } from './commands'
 import { nodeMaps, WorktreeFile, WorktreeNode, WorktreeRoot } from './worktreeNodes'
 import { ConfigService } from './configService'
@@ -42,6 +41,21 @@ export async function activate(context: vscode.ExtensionContext) {
 		// activation events will re-fire once a folder opens. Previously this
 		// threw a raw Error which VS Code surfaced as a red notification.
 		log.info('gitbraid activation skipped: no workspace folder')
+		return
+	}
+
+	// Workspace trust: GitBraid spawns git subprocesses that can trigger
+	// repository-defined hooks. In an untrusted workspace we defer real
+	// activation until the user grants trust (T23).  Capabilities block in
+	// package.json declares untrustedWorkspaces: "limited" so VS Code lets
+	// the extension load but keeps it idle.
+	if (!vscode.workspace.isTrusted) {
+		log.info('gitbraid: workspace is not trusted — waiting for trust grant before activating')
+		const disposable = vscode.workspace.onDidGrantWorkspaceTrust(() => {
+			disposable.dispose()
+			void activate(context)
+		})
+		context.subscriptions.push(disposable)
 		return
 	}
 
@@ -447,7 +461,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(...commands)
 
 	await filesExcludeWorktreesDir()
-	await ignoreWorktreesDir()
+	// .gitignore stamping is owned by ConfigService._ensureGitignore (called
+	// on every write). The separate activation-time writer used to race with
+	// it and occasionally double-append; consolidated in T24.
 
 	log.info('subscribe')
 	context.subscriptions.push(api.worktreeView)
@@ -554,21 +570,5 @@ async function filesExcludeWorktreesDir () {
 	log.info('Pattern \'.worktrees/\' added to files.exclude')
 }
 
-async function ignoreWorktreesDir () {
-	const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, '.gitignore')
-	if (!fileExists(uri)) {
-		log.info('.gitignore not updated because it does not exist')
-		return
-	}
-
-	const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))
-	const lines = content.replace(/\\r/g,'').split('\n')
-	for (let line of lines) {
-		line = line.trim() // NOSONAR
-		if (line === '.worktrees/') {
-			log.info('Pattern \'.worktrees/\' already in .gitignore')
-			return
-		}
-	}
-	await vscode.workspace.fs.writeFile(uri, Uint8Array.from(Buffer.from(content + '\n## gitbraid: manage .worktrees/ (do not remove this line)\n.worktrees/\n')))
-}
+// ignoreWorktreesDir removed in T24: ConfigService._ensureGitignore is now
+// the sole owner of the .worktrees/ entry in .gitignore.

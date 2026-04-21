@@ -69,15 +69,34 @@ suite('BranchStackService', () => {
 
 	// ── Utilities ────────────────────────────────────────────────────────────
 
-	test('branchToWorktreeDirName: replaces slashes with dashes', () => {
-		assert.strictEqual(branchToWorktreeDirName('feature/docs'), 'feature-docs')
-		assert.strictEqual(branchToWorktreeDirName('feat/scope/sub'), 'feat-scope-sub')
-		assert.strictEqual(branchToWorktreeDirName('main'), 'main')
+	test('branchToWorktreeDirName: replaces slashes with dashes and appends a stable hash suffix', () => {
+		const dir = branchToWorktreeDirName('feature/docs')
+		assert.match(dir, /^feature-docs__[a-f0-9]{7}$/)
+		const dir2 = branchToWorktreeDirName('feat/scope/sub')
+		assert.match(dir2, /^feat-scope-sub__[a-f0-9]{7}$/)
+		const dir3 = branchToWorktreeDirName('main')
+		assert.match(dir3, /^main__[a-f0-9]{7}$/)
 	})
 
-	test('worktreePath: returns correct URI under .worktrees/', () => {
+	test('branchToWorktreeDirName: deterministic', () => {
+		assert.strictEqual(
+			branchToWorktreeDirName('feature/docs'),
+			branchToWorktreeDirName('feature/docs'),
+		)
+	})
+
+	test('branchToWorktreeDirName: is injective for slug-colliding names', () => {
+		// feat/a and feat-a used to map to the same directory (see T9 / reviews
+		// bugs.md B4); now they must differ.
+		assert.notStrictEqual(
+			branchToWorktreeDirName('feature/a'),
+			branchToWorktreeDirName('feature-a'),
+		)
+	})
+
+	test('worktreePath: returns URI under .worktrees/ with hashed leaf', () => {
 		const p = worktreePath(wsRoot(), 'feature/docs')
-		assert.ok(p.fsPath.endsWith(path.join('.worktrees', 'feature-docs')))
+		assert.match(p.fsPath, new RegExp(`\\${path.sep}\\.worktrees\\${path.sep}feature-docs__[a-f0-9]{7}$`))
 	})
 
 	// ── initStack ────────────────────────────────────────────────────────────

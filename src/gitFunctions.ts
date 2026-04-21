@@ -558,6 +558,39 @@ class Worktree {
 	public prune() {
 		return this.gitExec('worktree prune')
 	}
+
+	/**
+	 * Update git's internal worktree metadata after an external rename of a
+	 * worktree directory.  Needed by BranchStackService when migrating from
+	 * the legacy slug-only directory naming to the hashed form (T9).
+	 */
+	public repair() {
+		return this.gitExec('worktree repair')
+	}
+}
+
+/**
+ * Validate a branch name using git's own rules via `git check-ref-format`.
+ * Returns `true` if git accepts the name as a branch ref, `false` otherwise.
+ * Never throws — a missing git binary is reported as `false` and logged at
+ * debug level, so callers can layer their own cheap pre-filter before this.
+ */
+export async function checkRefFormat(branchName: string): Promise<boolean> {
+	// Cheap pre-filter: obviously-bad inputs never reach the spawn.
+	if (!branchName || /[\s~^:?*[\\\x00-\x1f\x7f]/.test(branchName) || branchName.includes('..')) {
+		return false
+	}
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const child = child_process.spawn('git', ['check-ref-format', '--branch', branchName], { shell: false })
+			child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`exit=${String(code)}`))))
+			child.on('error', reject)
+		})
+		return true
+	} catch (e) {
+		log.debug('checkRefFormat rejected: ' + branchName + ' (' + (e instanceof Error ? e.message : String(e)) + ')')
+		return false
+	}
 }
 
 const git = new Git()

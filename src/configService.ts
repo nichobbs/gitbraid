@@ -320,6 +320,10 @@ export class ConfigService implements vscode.Disposable {
 	/**
 	 * Ensure `.worktrees/` appears in the repo root `.gitignore`.
 	 * Creates or appends silently — this must never be committed.
+	 *
+	 * This is the sole writer of the `.worktrees/` entry (the duplicate in
+	 * `extension.ts` was removed in T24).  Preserves the existing line-ending
+	 * style so Windows repos with CRLF don't end up with mixed endings.
 	 */
 	private async _ensureGitignore(): Promise<void> {
 		if (!this._configPath) {
@@ -331,17 +335,21 @@ export class ConfigService implements vscode.Disposable {
 		const gitignorePath = path.join(repoRoot, '.gitignore')
 
 		const entry = '.worktrees/'
+		const MARKER = '## gitbraid: manage .worktrees/ (do not remove this line)'
 		try {
 			const existing = fs.readFileSync(gitignorePath, 'utf-8')
-			if (existing.split('\n').some((l) => l.trim() === entry || l.trim() === '.worktrees')) {
+			if (existing.split(/\r?\n/).some((l) => l.trim() === entry || l.trim() === '.worktrees')) {
 				return
 			}
-			const separator = existing.endsWith('\n') ? '' : '\n'
-			fs.appendFileSync(gitignorePath, separator + entry + '\n', 'utf-8')
+			// Detect CRLF vs LF line ending and match it so the file stays
+			// consistent after append.
+			const eol = existing.includes('\r\n') ? '\r\n' : '\n'
+			const separator = existing.endsWith('\n') || existing.endsWith('\r\n') ? '' : eol
+			fs.appendFileSync(gitignorePath, `${separator}${MARKER}${eol}${entry}${eol}`, 'utf-8')
 			log.info('ConfigService: added .worktrees/ to .gitignore')
 		} catch (e: unknown) {
 			if (isNodeError(e) && e.code === 'ENOENT') {
-				fs.writeFileSync(gitignorePath, entry + '\n', 'utf-8')
+				fs.writeFileSync(gitignorePath, `${MARKER}\n${entry}\n`, 'utf-8')
 				log.info('ConfigService: created .gitignore with .worktrees/ entry')
 				return
 			}

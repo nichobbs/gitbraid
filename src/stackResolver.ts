@@ -156,11 +156,10 @@ export class StackResolver implements vscode.Disposable {
 }
 
 /**
- * Strip path traversal and reject shell metacharacters.  The old implementation
- * only escaped `"`, which was not enough to block command injection via
- * backticks, `$(…)`, `;`, `|`, newlines, or leading `-`.  The full fix is the
- * spawn-with-argv migration (remediation plan T18); until that lands we fail
- * loudly instead of relying on brittle quoting.
+ * Strip path traversal and reject shell metacharacters.  Combined with
+ * `pathGuard.requireInside` at the call sites that accept a workspace-
+ * relative path, this prevents both shell-level injection and filesystem
+ * escapes.  The full fix (spawn-with-argv) lands with remediation plan T18.
  */
 function _sanitise(input: string): string {
 	const stripped = input

@@ -2,6 +2,7 @@ import util from 'node:util'
 import child_process from 'node:child_process'
 import path from 'node:path'
 import { log } from './channelLogger'
+import { requireInside } from './pathGuard'
 
 const exec = util.promisify(child_process.exec)
 
@@ -130,6 +131,8 @@ export class DiffEngine {
 	 */
 	async getHunksForFile(wsRoot: string, relativePath: string): Promise<DiffHunk[]> {
 		log.info(`DiffEngine.getHunksForFile: ${relativePath} in ${wsRoot}`)
+		// Reject path-traversal up front so we never pass an escape to git.
+		requireInside(wsRoot, relativePath)
 		const safeRelative = this._sanitisePath(relativePath)
 		try {
 			const { stdout } = await exec(
@@ -158,6 +161,7 @@ export class DiffEngine {
 		branch: string,
 	): Promise<DiffHunk[]> {
 		log.info(`DiffEngine.getHunksAgainstBranch: ${relativePath} against ${branch}`)
+		requireInside(wsRoot, relativePath)
 		const mergeBase = await this.getMergeBase(wsRoot, 'HEAD', branch)
 		if (!mergeBase) {
 			return this.getHunksForFile(wsRoot, relativePath)

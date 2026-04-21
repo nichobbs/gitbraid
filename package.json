@@ -460,7 +460,164 @@
 					"minimum": 0
 				}
 			}
-		}
+		},
+		"languageModelTools": [
+			{
+				"name": "mbc_getStack",
+				"displayName": "GitBraid: Get Branch Stack",
+				"modelDescription": "Returns the current GitBraid branch stack and its entries, ordered from base to top.",
+				"userDescription": "Read the current GitBraid branch stack.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetStack",
+				"icon": "$(list-tree)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "mbc_getFloatingFiles",
+				"displayName": "GitBraid: Get Floating Files",
+				"modelDescription": "Returns workspace-relative paths for files that are modified but not yet assigned to any branch in the stack.",
+				"userDescription": "List floating (unassigned) files.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetFloatingFiles",
+				"icon": "$(warning)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "mbc_getBranchStatus",
+				"displayName": "GitBraid: Get Branch Status",
+				"modelDescription": "Returns staged / unstaged / untracked counts for a branch's worktree.",
+				"userDescription": "Inspect the status of a branch in the stack.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetBranchStatus",
+				"icon": "$(info)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"branch": {
+							"type": "string",
+							"description": "The branch name to query."
+						}
+					},
+					"required": ["branch"],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "mbc_addBranch",
+				"displayName": "GitBraid: Add Branch to Stack",
+				"modelDescription": "Creates a new branch in the stack, parented on the provided base branch, and adds a worktree for it.",
+				"userDescription": "Add a branch to the GitBraid stack.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidAddBranch",
+				"icon": "$(git-branch-create)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"name": {
+							"type": "string",
+							"description": "The git branch name for the new stack entry, e.g. 'feature/docs'."
+						},
+						"base": {
+							"type": "string",
+							"description": "The parent branch name, e.g. 'main' or another branch already in the stack."
+						},
+						"color": {
+							"type": "string",
+							"description": "Optional hex colour (e.g. '#4ec9b0') for Explorer decorations.",
+							"pattern": "^#[0-9a-fA-F]{6}$"
+						}
+					},
+					"required": ["name", "base"],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "mbc_assignFile",
+				"displayName": "GitBraid: Assign File to Branch",
+				"modelDescription": "Assigns a workspace-relative file path to a branch in the stack. Subsequent saves of the file are copied to that branch's worktree.",
+				"userDescription": "Assign a file to a GitBraid branch.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidAssignFile",
+				"icon": "$(tag)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"relativePath": {
+							"type": "string",
+							"description": "Workspace-relative path to the file."
+						},
+						"branch": {
+							"type": "string",
+							"description": "The branch to assign the file to."
+						}
+					},
+					"required": ["relativePath", "branch"],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "mbc_assignHunk",
+				"displayName": "GitBraid: Assign Hunk to Branch",
+				"modelDescription": "Assigns a specific diff hunk within a file to a branch, identified by its 0-based index in the unified diff output.",
+				"userDescription": "Assign a specific hunk to a GitBraid branch.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidAssignHunk",
+				"icon": "$(diff-single)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"relativePath": {
+							"type": "string",
+							"description": "Workspace-relative path to the file containing the hunk."
+						},
+						"hunkIndex": {
+							"type": "integer",
+							"minimum": 0,
+							"description": "Zero-based hunk index (from git diff output)."
+						},
+						"branch": {
+							"type": "string",
+							"description": "The branch to assign the hunk to."
+						}
+					},
+					"required": ["relativePath", "hunkIndex", "branch"],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "mbc_commitBranch",
+				"displayName": "GitBraid: Commit Branch",
+				"modelDescription": "Stages all tracked changes in a branch's worktree and creates a commit. Fails if the branch's worktree has no changes.",
+				"userDescription": "Commit the current changes on a GitBraid branch.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidCommitBranch",
+				"icon": "$(check)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"branch": {
+							"type": "string",
+							"description": "The branch to commit."
+						},
+						"message": {
+							"type": "string",
+							"minLength": 1,
+							"description": "The commit message."
+						}
+					},
+					"required": ["branch", "message"],
+					"additionalProperties": false
+				}
+			}
+		]
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
