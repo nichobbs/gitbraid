@@ -9,6 +9,7 @@ build/
 *.env
 *.env.local
 *.vsix
+test_projects/proj1/src/
 
 ## added by vscode extension 'kherring.multi-branch-checkout'
 .worktrees/
