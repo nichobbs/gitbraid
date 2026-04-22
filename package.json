@@ -241,6 +241,18 @@
 				"title": "Rebase Branch onto Parent",
 				"category": "GitBraid",
 				"icon": "$(git-merge)"
+			},
+			{
+				"command": "gitbraid.pushStack",
+				"title": "Push Stack",
+				"category": "GitBraid",
+				"icon": "$(cloud-upload)"
+			},
+			{
+				"command": "gitbraid.syncStack",
+				"title": "Sync Stack (fetch + rebase each branch)",
+				"category": "GitBraid",
+				"icon": "$(sync)"
 			}
 		],
 		"viewsWelcome": [

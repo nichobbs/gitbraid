@@ -13,6 +13,7 @@ import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider
 import { StackResolver } from './stackResolver'
 import { StackContentProvider } from './stackContentProvider'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
+import { StackCommands } from './stackCommands'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
@@ -253,7 +254,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	const stackContentProvider = new StackContentProvider(stackResolver, workspaceRoot)
 	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
 	rebaseSvc.init(workspaceRoot)
-	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider)
+	const stackCommands = new StackCommands(configService, branchStack, rebaseSvc, workspaceRoot)
+	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider, stackCommands)
 
 	// Refresh any open gitbraid-stack: documents when assignments change.
 	context.subscriptions.push(
@@ -471,6 +473,41 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			await rebaseSvc.rebaseBranch(name)
+		})),
+
+		// T67 — stack-wide operations.
+		vscode.commands.registerCommand('gitbraid.pushStack', cmd(async () => {
+			const stack = configService.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to push.')
+				return
+			}
+			// Offer --force-with-lease as an opt-in, not the default: safe
+			// first-push vs "push over history" is a deliberate choice.
+			const mode = await vscode.window.showQuickPick(
+				[
+					{ label: 'Push', description: 'Fast-forward or fail', force: false },
+					{ label: 'Push with --force-with-lease', description: 'Rewrite upstream safely (post-rebase)', force: true },
+				],
+				{ placeHolder: `Push ${String(stack.length)} branch(es) to origin?` },
+			)
+			if (!mode) return
+			await stackCommands.pushStack({ forceWithLease: mode.force })
+		})),
+
+		vscode.commands.registerCommand('gitbraid.syncStack', cmd(async () => {
+			const stack = configService.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to sync.')
+				return
+			}
+			const proceed = await vscode.window.showWarningMessage(
+				`Fetch origin and rebase every branch in the stack (${String(stack.length)}) onto its parent?\n\nDirty worktrees will be skipped.`,
+				{ modal: true },
+				'Sync',
+			)
+			if (proceed !== 'Sync') return
+			await stackCommands.syncStack()
 		})),
 	)
 
