@@ -652,6 +652,7 @@
 		"package": "npx vsce package --no-dependencies",
 		"install-vsix": "npm run package && code --install-extension gitbraid-$(npm pkg get version | tr -d '\"').vsix",
 		"watch": "npm run build -- --watch",
+		"pretest": "node scripts/setup-test-fixture.js",
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
 		"refresh": "npm run install-vsix"
