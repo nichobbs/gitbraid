@@ -76,7 +76,7 @@
 						"title": "Add a branch to the stack",
 						"description": "Build a stack of related branches. Run the Add Stack Branch command to create a worktree-backed branch on top of an existing one.\n\n[Add Stack Branch](command:gitbraid.addStackBranch)",
 						"media": {
-							"image": "resources/walkthrough-add-branch.png",
+							"image": "resources/walkthrough-add-branch.svg",
 							"altText": "Stack view showing two branches"
 						}
 					},
@@ -85,7 +85,7 @@
 						"title": "Assign a file to a branch",
 						"description": "Right-click any file in the Explorer and choose **Assign to branch**, or run the command below.\n\n[Assign File](command:gitbraid.assignFile)",
 						"media": {
-							"image": "resources/walkthrough-assign-file.png",
+							"image": "resources/walkthrough-assign-file.svg",
 							"altText": "File assigned to branch"
 						}
 					},
@@ -94,7 +94,7 @@
 						"title": "Commit to a branch",
 						"description": "Each branch in the stack has its own SCM entry. Type a message there and press the commit button, or run the command below.\n\n[Commit Branch](command:gitbraid.scm.commitBranch)",
 						"media": {
-							"image": "resources/walkthrough-commit.png",
+							"image": "resources/walkthrough-commit.svg",
 							"altText": "SCM panel showing per-branch commit"
 						}
 					},
@@ -103,7 +103,7 @@
 						"title": "Add another layer",
 						"description": "Continue stacking branches for independent sets of changes. Use Rebase Branch to keep each layer up-to-date with its parent.\n\n[Rebase Branch](command:gitbraid.rebaseBranch)",
 						"media": {
-							"image": "resources/walkthrough-rebase.png",
+							"image": "resources/walkthrough-rebase.svg",
 							"altText": "Stack after rebase"
 						}
 					}
