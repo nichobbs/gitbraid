@@ -1,4 +1,9 @@
-# GitBraid Code Review — Overview
+# GitBraid Code Review — Overview (2026-04-21)
+
+> **Status (2026-04-22):** Most findings in this review have been addressed.
+> See `docs/remediation/outstanding.md` for what remains open, and
+> `docs/reviews/2026-04-22-review.md` for the follow-up review of the
+> current codebase state.
 
 Review performed against commit `6998dc7` on branch `claude/code-review-report-J9MhV`
 (2026-04-21).
