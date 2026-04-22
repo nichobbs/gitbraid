@@ -350,18 +350,32 @@ export class BranchStackService implements vscode.Disposable {
 			)
 		}
 
-		try {
-			// Attempt to create a new branch from base and add a worktree for it
-			await git.worktree.add(`-b "${branchName}" "${absPath}" "${base}"`)
-			log.info(`BranchStackService: created new branch "${branchName}" at ${absPath}`)
-		} catch (e: unknown) {
-			const msg = e instanceof Error ? e.message : JSON.stringify(e)
-			if (!msg.includes('already exists')) {
-				throw e
-			}
-			// Branch already exists on disk — check it out into the new worktree
+		// Check whether the branch already exists locally before calling git so
+		// we pick the right worktree-add form first time.  Using the runner
+		// (shell: false) avoids the gitExec error-notification path firing for
+		// a perfectly normal "branch already exists" condition.
+		const branchExists = await this._localBranchExists(branchName)
+
+		if (branchExists) {
+			// Existing branch — check it out into a new worktree.
 			await git.worktree.add(`"${absPath}" "${branchName}"`)
 			log.info(`BranchStackService: added existing branch "${branchName}" at ${absPath}`)
+		} else {
+			// New branch — create it from base and add the worktree in one step.
+			await git.worktree.add(`-b "${branchName}" "${absPath}" "${base}"`)
+			log.info(`BranchStackService: created new branch "${branchName}" at ${absPath}`)
+		}
+	}
+
+	private async _localBranchExists(branchName: string): Promise<boolean> {
+		try {
+			const { exitCode } = await getDefaultGitRunner().run(
+				['rev-parse', '--verify', `refs/heads/${branchName}`],
+				{ cwd: this._workspaceRoot!.fsPath },
+			)
+			return exitCode === 0
+		} catch {
+			return false
 		}
 	}
 
