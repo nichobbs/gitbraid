@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Add a branch to the stack</title>
+  <desc id="desc">The Branch Stack view shows two branches, main and feature/docs, stacked in order.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e1e1e"/>
+      <stop offset="1" stop-color="#252526"/>
+    </linearGradient>
+    <style>
+      .panel { fill: #252526; stroke: #3c3c3c; stroke-width: 1; }
+      .title { fill: #cccccc; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 13px; font-weight: 600; }
+      .subtitle { fill: #9d9d9d; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 12px; }
+      .branch { fill: #cccccc; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 13px; }
+      .faint { fill: #6a6a6a; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 11px; }
+      .accent-a { fill: #4ec9b0; }
+      .accent-b { fill: #c586c0; }
+    </style>
+  </defs>
+
+  <rect width="640" height="360" fill="url(#bg)"/>
+
+  <!-- Activity-bar strip -->
+  <rect x="0" y="0" width="52" height="360" fill="#333333"/>
+  <circle cx="26" cy="80" r="10" fill="#4ec9b0" opacity="0.9"/>
+  <text x="26" y="110" text-anchor="middle" fill="#9d9d9d" font-family="-apple-system, Segoe UI, Ubuntu, sans-serif" font-size="9">GitBraid</text>
+
+  <!-- Sidebar panel -->
+  <rect x="52" y="0" width="280" height="360" fill="#252526"/>
+  <text x="74" y="32" class="title">BRANCH STACK</text>
+
+  <!-- Branch rows -->
+  <rect x="64" y="56" width="256" height="32" rx="3" fill="#2a2d2e" class="panel"/>
+  <circle cx="78" cy="72" r="5" class="accent-a"/>
+  <text x="94" y="76" class="branch">main</text>
+  <text x="260" y="76" text-anchor="end" class="faint">base</text>
+
+  <rect x="64" y="96" width="256" height="32" rx="3" fill="#2a2d2e" class="panel"/>
+  <circle cx="78" cy="112" r="5" class="accent-b"/>
+  <text x="94" y="116" class="branch">feature/docs</text>
+  <text x="260" y="116" text-anchor="end" class="faint">on main</text>
+
+  <!-- Add-branch affordance -->
+  <rect x="64" y="148" width="256" height="38" rx="4" fill="#094771" stroke="#0e639c"/>
+  <text x="82" y="172" fill="#ffffff" font-family="-apple-system, Segoe UI, Ubuntu, sans-serif" font-size="12" font-weight="600">＋  Add Branch to Stack</text>
+
+  <!-- Editor area -->
+  <rect x="332" y="0" width="308" height="360" fill="#1e1e1e"/>
+  <text x="348" y="32" class="title">Editor</text>
+  <text x="348" y="58" class="subtitle">Run the command from the palette</text>
+  <text x="348" y="76" class="subtitle">or the view toolbar above.</text>
+
+  <!-- Command palette mock -->
+  <rect x="348" y="100" width="276" height="44" rx="4" fill="#3c3c3c" stroke="#5a5a5a"/>
+  <text x="366" y="128" fill="#d7d7d7" font-family="-apple-system, Segoe UI, Ubuntu, sans-serif" font-size="12">&gt; GitBraid: Add Branch to Stack</text>
+
+  <!-- Caption -->
+  <text x="320" y="338" text-anchor="middle" class="faint">Placeholder illustration — replace with screenshot before 1.0 (see resources/README.md)</text>
+</svg>

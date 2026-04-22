@@ -13,6 +13,18 @@ import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider
 import { StackResolver } from './stackResolver'
 import { StackContentProvider } from './stackContentProvider'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
+import { StackCommands } from './stackCommands'
+import { RebaseRecovery } from './rebaseRecovery'
+import {
+	UndoStack,
+	recordAssignFile,
+	recordUnassignFile,
+	recordAssignHunk,
+	recordUnassignHunk,
+} from './undoStack'
+import { StackShareService, SHARED_DIR, SHARED_FILE } from './stackShareService'
+import { PRAwareness } from './prAwareness'
+import * as path from 'node:path'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
@@ -71,7 +83,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	const workspaceSync = WorkspaceSync.getInstance(configService)
 	workspaceSync.init(workspaceRoot, bus)
 
-	context.subscriptions.push(configService, branchStack, workspaceSync)
+	// Undo/redo ring for assignment-level operations (T69).  Constructed
+	// early so Phase 2 providers can receive it.
+	const undoStack = new UndoStack()
+
+	context.subscriptions.push(configService, branchStack, workspaceSync, undoStack)
 
 	// ─── Phase 2: SCM Integration & UI ────────────────────────────────────────
 	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync)
@@ -81,7 +97,20 @@ export async function activate(context: vscode.ExtensionContext) {
 	await scmManager.initialize()
 	context.subscriptions.push(scmManager)
 
-	const stackTreeProvider = new BranchStackTreeProvider(configService, workspaceSync)
+	// PR awareness — feature-detects the GitHub PR extension at runtime.
+	// Absent / inactive / unexpected-API cases all fall back to "no
+	// decorations"; gated on `gitbraid.prDecorationsEnabled`.
+	const prAwareness = new PRAwareness()
+	context.subscriptions.push(prAwareness)
+	prAwareness.start()
+
+	const stackTreeProvider = new BranchStackTreeProvider(
+		configService,
+		workspaceSync,
+		(rel, newBranch, previous) => recordAssignFile(undoStack, configService, rel, newBranch, previous),
+		(rel, previous) => recordUnassignFile(undoStack, configService, rel, previous),
+		prAwareness,
+	)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
 		// Drag-and-drop: file nodes onto branch nodes reassigns; onto the
@@ -115,6 +144,34 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ── Phase 2 & 3 commands ──────────────────────────────────────────────────
 	commands.push(
 		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => stackTreeProvider.refresh()),
+
+		// Force a re-query of PR status without waiting for the 60s poll.
+		vscode.commands.registerCommand('gitbraid.refreshPRStatus', cmd(async () => {
+			await prAwareness.refresh()
+		})),
+
+		// T69 — undo / redo for assignment-level operations.  Session-only,
+		// in-memory.  No-ops when the corresponding stack is empty.
+		vscode.commands.registerCommand('gitbraid.undoLastAssignment', cmd(async () => {
+			if (!undoStack.canUndo()) {
+				await vscode.window.showInformationMessage('GitBraid: nothing to undo.')
+				return
+			}
+			const op = await undoStack.undo()
+			if (op) {
+				await vscode.window.setStatusBarMessage(`GitBraid: undid — ${op.label}`, 3000)
+			}
+		})),
+		vscode.commands.registerCommand('gitbraid.redoLastAssignment', cmd(async () => {
+			if (!undoStack.canRedo()) {
+				await vscode.window.showInformationMessage('GitBraid: nothing to redo.')
+				return
+			}
+			const op = await undoStack.redo()
+			if (op) {
+				await vscode.window.setStatusBarMessage(`GitBraid: redid — ${op.label}`, 3000)
+			}
+		})),
 
 		vscode.commands.registerCommand('gitbraid.focusStackView', () => {
 			stackView.reveal(undefined as never, { focus: true }).then(undefined, (e: unknown) => {
@@ -152,7 +209,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				// different line range (T8).
 				const hunks = await diffEngine.getHunksForFile(workspaceRoot.fsPath, rel)
 				const anchor = hunks[hunkIndex] ? anchorFor(hunks[hunkIndex]) : undefined
+				const previousBranch = configService.getHunkAssignments(rel)?.get(hunkIndex)
 				await configService.setHunkAssignment(rel, hunkIndex, picked.label, anchor)
+				recordAssignHunk(undoStack, configService, rel, hunkIndex, picked.label, previousBranch, anchor)
 				await vscode.window.showInformationMessage(`Hunk ${String(hunkIndex)} → ${picked.label}`)
 				await overlayDiagnostics.refreshForUri(uri)
 			}),
@@ -162,7 +221,12 @@ export async function activate(context: vscode.ExtensionContext) {
 			'gitbraid.unassignHunk',
 			cmd(async (uri: vscode.Uri, hunkIndex: number) => {
 				const rel = vscode.workspace.asRelativePath(uri, false)
+				const previousBranch = configService.getHunkAssignments(rel)?.get(hunkIndex)
+				const previousAnchor = configService.getHunkAnchor(rel, hunkIndex)
 				await configService.removeHunkAssignment(rel, hunkIndex)
+				if (previousBranch !== undefined) {
+					recordUnassignHunk(undoStack, configService, rel, hunkIndex, previousBranch, previousAnchor)
+				}
 				await overlayDiagnostics.refreshForUri(uri)
 			}),
 		),
@@ -253,7 +317,24 @@ export async function activate(context: vscode.ExtensionContext) {
 	const stackContentProvider = new StackContentProvider(stackResolver, workspaceRoot)
 	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
 	rebaseSvc.init(workspaceRoot)
-	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider)
+	const stackCommands = new StackCommands(configService, branchStack, rebaseSvc, workspaceRoot)
+	const rebaseRecovery = new RebaseRecovery()
+	const stackShare = new StackShareService(configService, workspaceRoot)
+	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider, stackCommands, rebaseRecovery)
+
+	// Watch every existing and future worktree for mid-rebase state so the
+	// "rebase paused" toast fires the moment a rebase bails (T70).
+	const watchAllWorktrees = () => {
+		for (const entry of configService.getStack()) {
+			if (branchStack.worktreeExists(entry.name)) {
+				rebaseRecovery.watch(branchStack.getWorktreePath(entry.name).fsPath)
+			}
+		}
+	}
+	watchAllWorktrees()
+	context.subscriptions.push(
+		configService.onDidChangeStack(() => watchAllWorktrees()),
+	)
 
 	// Refresh any open gitbraid-stack: documents when assignments change.
 	context.subscriptions.push(
@@ -261,6 +342,32 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (e.relativePath) stackContentProvider.refresh(e.relativePath)
 		}),
 	)
+
+	// Helper: resolve a BranchNode argument, a branch-name string, or prompt
+	// the user to pick one from the current stack.  Used by the T70 rebase
+	// recovery commands so they share a single UX.
+	const pickBranchWorktree = async (
+		arg: string | BranchNode | undefined,
+		placeholder: string,
+	): Promise<string | undefined> => {
+		const stack = configService.getStack()
+		if (stack.length === 0) {
+			await vscode.window.showWarningMessage('Stack is empty.')
+			return undefined
+		}
+		const name = arg instanceof BranchNode
+			? arg.entry.name
+			: (arg ?? (await vscode.window.showQuickPick(
+				stack.map((e) => e.name),
+				{ placeHolder: placeholder },
+			)))
+		if (!name) return undefined
+		if (!branchStack.worktreeExists(name)) {
+			await vscode.window.showWarningMessage(`No worktree exists for "${name}".`)
+			return undefined
+		}
+		return branchStack.getWorktreePath(name).fsPath
+	}
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
@@ -314,7 +421,10 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			for (const target of targets) {
-				await configService.setAssignment(vscode.workspace.asRelativePath(target), picked.label)
+				const rel = vscode.workspace.asRelativePath(target)
+				const previous = configService.getAssignment(rel)
+				await configService.setAssignment(rel, picked.label)
+				recordAssignFile(undoStack, configService, rel, picked.label, previous)
 			}
 			const msg = targets.length === 1
 				? `Assigned ${vscode.workspace.asRelativePath(targets[0])} → ${picked.label}`
@@ -329,7 +439,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			const rel = vscode.workspace.asRelativePath(target)
+			const previous = configService.getAssignment(rel)
 			await configService.removeAssignment(rel)
+			if (previous !== undefined) {
+				recordUnassignFile(undoStack, configService, rel, previous)
+			}
 			await vscode.window.showInformationMessage(`Unassigned ${rel}`)
 		})),
 
@@ -471,6 +585,125 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			await rebaseSvc.rebaseBranch(name)
+		})),
+
+		// T67 — stack-wide operations.
+		vscode.commands.registerCommand('gitbraid.pushStack', cmd(async () => {
+			const stack = configService.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to push.')
+				return
+			}
+			// Offer --force-with-lease as an opt-in, not the default: safe
+			// first-push vs "push over history" is a deliberate choice.
+			const mode = await vscode.window.showQuickPick(
+				[
+					{ label: 'Push', description: 'Fast-forward or fail', force: false },
+					{ label: 'Push with --force-with-lease', description: 'Rewrite upstream safely (post-rebase)', force: true },
+				],
+				{ placeHolder: `Push ${String(stack.length)} branch(es) to origin?` },
+			)
+			if (!mode) return
+			await stackCommands.pushStack({ forceWithLease: mode.force })
+		})),
+
+		// T71 — share the stack layout with teammates via a committed
+		// `.gitbraid/stack.json` file.
+		vscode.commands.registerCommand('gitbraid.exportStack', cmd(async () => {
+			const stack = configService.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to export.')
+				return
+			}
+			const filePath = await stackShare.exportToDisk()
+			const rel = path.relative(workspaceRoot.fsPath, filePath)
+			const open = await vscode.window.showInformationMessage(
+				`GitBraid: exported ${String(stack.length)} branch(es) to ${rel}. ` +
+				'Commit this file to share the layout with your team.',
+				'Open',
+			)
+			if (open === 'Open') {
+				await vscode.window.showTextDocument(vscode.Uri.file(filePath))
+			}
+		})),
+
+		vscode.commands.registerCommand('gitbraid.importStack', cmd(async () => {
+			const shared = await stackShare.readSharedFile()
+			if (!shared) {
+				await vscode.window.showInformationMessage(
+					`GitBraid: no shared stack found.  Run "GitBraid: Export Stack" on a colleague's machine and commit the resulting \`${SHARED_DIR}/${SHARED_FILE}\`.`,
+				)
+				return
+			}
+			const diff = stackShare.diffWithCurrent(shared)
+			const totalChanges =
+				diff.newBranches.length + diff.newAssignments.length +
+				diff.conflictBranches.length + diff.conflictAssignments.length
+			if (totalChanges === 0) {
+				await vscode.window.showInformationMessage('GitBraid: shared stack is already applied — nothing to import.')
+				return
+			}
+			const conflicts = diff.conflictBranches.length + diff.conflictAssignments.length
+			let resolution: { branches: 'theirs' | 'ours', assignments: 'theirs' | 'ours' } = {
+				branches: 'theirs',
+				assignments: 'theirs',
+			}
+			if (conflicts > 0) {
+				const pick = await vscode.window.showQuickPick(
+					[
+						{
+							label: 'Prefer shared file',
+							detail: `Overwrite ${String(conflicts)} local values with the shared version.`,
+							resolution: { branches: 'theirs', assignments: 'theirs' } as const,
+						},
+						{
+							label: 'Keep local values',
+							detail: 'Only import branches/assignments that don\'t conflict with the local stack.',
+							resolution: { branches: 'ours', assignments: 'ours' } as const,
+						},
+					],
+					{ placeHolder: `${String(conflicts)} conflict(s) with your local stack — choose how to resolve.` },
+				)
+				if (!pick) return
+				resolution = pick.resolution
+			}
+			const summary = await stackShare.applyImport(shared, resolution)
+			await vscode.window.showInformationMessage(
+				`GitBraid: imported ${String(summary.addedBranches)} new branch(es), ${String(summary.addedAssignments)} new assignment(s), ` +
+				`updated ${String(summary.updatedBranches)}/${String(summary.updatedAssignments)}, skipped ${String(summary.skipped)}.`,
+			)
+		})),
+
+		// T70 — rebase conflict recovery.
+		vscode.commands.registerCommand('gitbraid.rebaseAbort', cmd(async (arg?: string | BranchNode) => {
+			const wt = await pickBranchWorktree(arg, 'Abort rebase in branch')
+			if (!wt) return
+			await rebaseRecovery.abort(wt)
+		})),
+		vscode.commands.registerCommand('gitbraid.rebaseContinue', cmd(async (arg?: string | BranchNode) => {
+			const wt = await pickBranchWorktree(arg, 'Continue rebase in branch')
+			if (!wt) return
+			await rebaseRecovery.continue(wt)
+		})),
+		vscode.commands.registerCommand('gitbraid.openRebaseConflicts', cmd(async (arg?: string | BranchNode) => {
+			const wt = await pickBranchWorktree(arg, 'Open conflicts for branch')
+			if (!wt) return
+			await rebaseRecovery.openConflicts(wt)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.syncStack', cmd(async () => {
+			const stack = configService.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to sync.')
+				return
+			}
+			const proceed = await vscode.window.showWarningMessage(
+				`Fetch origin and rebase every branch in the stack (${String(stack.length)}) onto its parent?\n\nDirty worktrees will be skipped.`,
+				{ modal: true },
+				'Sync',
+			)
+			if (proceed !== 'Sync') return
+			await stackCommands.syncStack()
 		})),
 	)
 
