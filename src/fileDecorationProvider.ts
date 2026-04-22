@@ -120,7 +120,11 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
 			return { config: ctx.config, sync: ctx.workspaceSync, rel }
 		}
 		if (!vscode.workspace.workspaceFolders?.length) return undefined
-		const rel = vscode.workspace.asRelativePath(uri, false)
+		// `asRelativePath` returns a platform-native path (backslashes on
+		// Windows).  Config keys are stored in forward-slash form, so
+		// normalise here — otherwise `getAssignment` misses every
+		// Windows-authored lookup.
+		const rel = vscode.workspace.asRelativePath(uri, false).replaceAll('\\', '/')
 		return { config: this._fallbackConfig, sync: this._fallbackSync, rel }
 	}
 
