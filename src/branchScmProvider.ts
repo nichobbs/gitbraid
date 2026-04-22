@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { WorkspaceSync } from './workspaceSync'
@@ -7,6 +8,41 @@ import { worktreePath } from './branchStackService'
 import { BranchStackEntry } from './configTypes'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import { showError } from './errorSurfacer'
+
+// ─── HEAD content provider ────────────────────────────────────────────────────
+
+/** URI scheme used for the read-only "HEAD revision" side of diff views. */
+const HEAD_SCHEME = 'gitbraid-head'
+
+/**
+ * Build a virtual URI for the HEAD revision of a file.
+ * @param relativePath - path relative to the worktree root (forward slashes)
+ * @param wtDir        - absolute path to the worktree (or workspace root)
+ */
+function headUri(relativePath: string, wtDir: string): vscode.Uri {
+	return vscode.Uri.from({
+		scheme: HEAD_SCHEME,
+		// VS Code uses the path for the editor tab title — keep just the filename.
+		path: '/' + relativePath.replace(/\\/g, '/'),
+		query: 'wtDir=' + encodeURIComponent(wtDir),
+	})
+}
+
+/** TextDocumentContentProvider that returns `git show HEAD:<path>` content. */
+function createHeadContentProvider(runner: IGitRunner): vscode.TextDocumentContentProvider {
+	return {
+		async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+			const relativePath = uri.path.slice(1) // strip leading /
+			const wtDir = decodeURIComponent(new URLSearchParams(uri.query).get('wtDir') ?? '')
+			if (!wtDir || !relativePath) return ''
+			const { stdout, exitCode } = await runner.run(
+				['show', `HEAD:${relativePath}`],
+				{ cwd: wtDir },
+			)
+			return exitCode === 0 ? stdout : ''
+		},
+	}
+}
 
 // ─── Git status parsing ───────────────────────────────────────────────────────
 
@@ -42,13 +78,31 @@ async function gitStatusInDir(runner: IGitRunner, dir: string): Promise<Worktree
 	return results
 }
 
-function toResourceState(uri: vscode.Uri): vscode.SourceControlResourceState {
+/**
+ * Build a resource state for the SCM resource list.
+ * For tracked files (xy !== '??') opens a diff against HEAD.
+ * For untracked files just opens the file directly.
+ */
+function toResourceState(
+	uri: vscode.Uri,
+	relativePath: string,
+	wtDir: string,
+	isUntracked: boolean,
+): vscode.SourceControlResourceState {
+	if (isUntracked) {
+		return {
+			resourceUri: uri,
+			command: { command: 'vscode.open', title: 'Open', arguments: [uri] },
+		}
+	}
+	const left = headUri(relativePath, wtDir)
+	const title = `${path.basename(relativePath)} (HEAD ↔ Working)`
 	return {
 		resourceUri: uri,
 		command: {
-			command: 'vscode.open',
-			title: 'Open',
-			arguments: [uri],
+			command: 'vscode.diff',
+			title: 'Open Changes',
+			arguments: [left, uri, title],
 		},
 	}
 }
@@ -88,20 +142,32 @@ class BranchScmEntry implements vscode.Disposable {
 		this._sc.statusBarCommands = [
 			{
 				command: 'gitbraid.scm.generateCommitMessage',
-				title: '$(sparkle) Message',
+				title: '$(sparkle)',
 				tooltip: `Generate commit message for ${_entry.name}`,
 				arguments: [_entry.name],
 			},
 			{
 				command: 'gitbraid.scm.stashBranch',
-				title: '$(archive) Stash',
+				title: '$(archive)',
 				tooltip: `Stash changes in ${_entry.name}`,
+				arguments: [_entry.name],
+			},
+			{
+				command: 'gitbraid.scm.pushBranch',
+				title: '$(cloud-upload)',
+				tooltip: `Pull ${_entry.name}`,
 				arguments: [_entry.name],
 			},
 			{
 				command: 'gitbraid.scm.pushBranch',
 				title: '$(cloud-upload) Push',
 				tooltip: `Push ${_entry.name}`,
+				arguments: [_entry.name],
+			},
+			{
+				command: 'gitbraid.scm.syncBranch',
+				title: '$(sync) Sync',
+				tooltip: `Sync (pull then push) ${_entry.name}`,
 				arguments: [_entry.name],
 			},
 		]
@@ -152,16 +218,17 @@ class BranchScmEntry implements vscode.Disposable {
 			const uri = vscode.Uri.joinPath(statusRoot, relativePath)
 			const indexStatus = xy[0]
 			const workStatus = xy[1]
+			const isUntracked = xy === '??'
 
 			if (indexStatus !== ' ' && indexStatus !== '?') {
-				stagedUris.push(toResourceState(uri))
+				stagedUris.push(toResourceState(uri, relativePath, statusDir, isUntracked))
 			}
 			if (workStatus !== ' ' && workStatus !== '?') {
-				changedUris.push(toResourceState(uri))
+				changedUris.push(toResourceState(uri, relativePath, statusDir, isUntracked))
 			}
 			// Untracked (both '?') — show in Changes group
-			if (xy === '??') {
-				changedUris.push(toResourceState(uri))
+			if (isUntracked) {
+				changedUris.push(toResourceState(uri, relativePath, statusDir, true))
 			}
 		}
 
@@ -205,6 +272,11 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {
 		this._disposables.push(
+			// Register the HEAD content provider once per manager instance.
+			vscode.workspace.registerTextDocumentContentProvider(
+				HEAD_SCHEME,
+				createHeadContentProvider(this._runner),
+			),
 			_config.onDidChangeStack(() => void this._rebuild()),
 			// Targeted per-branch refresh (T47) — only the branch whose
 			// worktree received the sync needs to re-run `git status`.  The
@@ -299,6 +371,68 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		const entry = this._entries.get(branchName)
 		if (entry) {
 			entry.inputBox.value = value
+		}
+	}
+
+	/** Pull the latest changes from origin into the branch's worktree. Uses --rebase. */
+	async pullBranch(branchName: string): Promise<void> {
+		const entry = this._entries.get(branchName)
+		if (!entry) {
+			await vscode.window.showErrorMessage(`Branch "${branchName}" not found in stack`)
+			return
+		}
+		const { exitCode, stderr } = await this._runner.run(
+			['pull', '--rebase'],
+			{ cwd: entry.worktreeDir },
+		)
+		if (exitCode === 0) {
+			log.info(`[BranchScmProvider] pulled "${branchName}"`)
+			await vscode.window.showInformationMessage(`GitBraid: pulled "${branchName}"`)
+			await entry.refresh(true)
+		} else {
+			await showError(`Pull "${branchName}" failed`, new Error(stderr || `git pull exited ${String(exitCode)}`))
+		}
+	}
+
+	/** Sync the branch: pull (--rebase) then push to origin. */
+	async syncBranch(branchName: string): Promise<void> {
+		const entry = this._entries.get(branchName)
+		if (!entry) {
+			await vscode.window.showErrorMessage(`Branch "${branchName}" not found in stack`)
+			return
+		}
+		// Pull first
+		const pullResult = await this._runner.run(
+			['pull', '--rebase'],
+			{ cwd: entry.worktreeDir },
+		)
+		if (pullResult.exitCode !== 0) {
+			await showError(`Sync "${branchName}": pull failed`, new Error(pullResult.stderr || `git pull exited ${String(pullResult.exitCode)}`))
+			return
+		}
+		// Then push
+		const { exitCode, stderr } = await this._runner.run(
+			['push'],
+			{ cwd: entry.worktreeDir },
+		)
+		if (exitCode === 0) {
+			log.info(`[BranchScmProvider] synced "${branchName}"`)
+			await vscode.window.showInformationMessage(`GitBraid: synced "${branchName}"`)
+			await entry.refresh(true)
+		} else if (stderr.includes('no upstream') || stderr.includes('has no upstream')) {
+			const { exitCode: ec2, stderr: se2 } = await this._runner.run(
+				['push', '--set-upstream', 'origin', branchName],
+				{ cwd: entry.worktreeDir },
+			)
+			if (ec2 === 0) {
+				log.info(`[BranchScmProvider] synced "${branchName}" with --set-upstream`)
+				await vscode.window.showInformationMessage(`GitBraid: synced "${branchName}" and set upstream`)
+				await entry.refresh(true)
+			} else {
+				await showError(`Sync "${branchName}": push failed`, new Error(se2 || `git push exited ${String(ec2)}`))
+			}
+		} else {
+			await showError(`Sync "${branchName}": push failed`, new Error(stderr || `git push exited ${String(exitCode)}`))
 		}
 	}
 

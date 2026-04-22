@@ -345,6 +345,18 @@
 				"icon": "$(cloud-upload)"
 			},
 			{
+				"command": "gitbraid.scm.pullBranch",
+				"title": "Pull Branch",
+				"category": "GitBraid",
+				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "gitbraid.scm.syncBranch",
+				"title": "Sync Branch (Pull then Push)",
+				"category": "GitBraid",
+				"icon": "$(sync)"
+			},
+			{
 				"command": "gitbraid.scm.stashBranch",
 				"title": "Stash Branch Changes",
 				"category": "GitBraid",
@@ -417,14 +429,24 @@
 					"group": "1_scm@1"
 				},
 				{
-					"command": "gitbraid.scm.pushBranch",
+					"command": "gitbraid.scm.pullBranch",
 					"when": "scmProvider =~ /^gitbraid-/",
 					"group": "1_scm@2"
 				},
 				{
-					"command": "gitbraid.scm.stashBranch",
+					"command": "gitbraid.scm.pushBranch",
 					"when": "scmProvider =~ /^gitbraid-/",
 					"group": "1_scm@3"
+				},
+				{
+					"command": "gitbraid.scm.syncBranch",
+					"when": "scmProvider =~ /^gitbraid-/",
+					"group": "1_scm@4"
+				},
+				{
+					"command": "gitbraid.scm.stashBranch",
+					"when": "scmProvider =~ /^gitbraid-/",
+					"group": "1_scm@5"
 				}
 			],
 			"view/item/context": [
@@ -503,17 +525,6 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Warn when committing a branch that has floating (unassigned) files."
-				},
-				"gitbraid.autoDisableGit": {
-					"type": "string",
-					"default": "prompt",
-					"enum": ["never", "prompt", "auto"],
-					"enumDescriptions": [
-						"Never disable the built-in git extension automatically.",
-						"Ask once when the first branch is added to the stack.",
-						"Automatically disable the built-in git extension when the first branch is added."
-					],
-					"description": "Controls whether the built-in git SCM provider is disabled when GitBraid manages the first branch. GitBraid provides its own per-branch SCM entries, so the built-in git view becomes redundant."
 				},
 				"gitbraid.prDecorationsEnabled": {
 					"type": "boolean",

@@ -205,6 +205,35 @@ export class GitBraidApi implements GitBraidExportedAPI {
 		log.info(`GitBraidApi.stageBranch: staged in "${branch}"`)
 	}
 
+	async pullBranch(branch: string): Promise<void> {
+		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
+		const { exitCode, stderr } = await this._runner.run(['pull', '--rebase'], { cwd: wtDir })
+		if (exitCode !== 0) {
+			throw new GitError(`Pull "${branch}" failed: ${stderr}`, exitCode)
+		}
+		log.info(`GitBraidApi.pullBranch: pulled "${branch}"`)
+	}
+
+	async syncBranch(branch: string): Promise<void> {
+		await this.pullBranch(branch)
+		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
+		const pushResult = await this._runner.run(['push'], { cwd: wtDir })
+		if (pushResult.exitCode !== 0) {
+			if (pushResult.stderr.includes('no upstream') || pushResult.stderr.includes('has no upstream')) {
+				const upResult = await this._runner.run(
+					['push', '--set-upstream', 'origin', branch],
+					{ cwd: wtDir },
+				)
+				if (upResult.exitCode !== 0) {
+					throw new GitError(`Push "${branch}" failed: ${upResult.stderr}`, upResult.exitCode)
+				}
+			} else {
+				throw new GitError(`Push "${branch}" failed: ${pushResult.stderr}`, pushResult.exitCode)
+			}
+		}
+		log.info(`GitBraidApi.syncBranch: synced "${branch}"`)
+	}
+
 	// ── API parity with internal services ─────────────────────────────────────
 
 	/** Reorder branches in the stack by providing the desired name sequence. */

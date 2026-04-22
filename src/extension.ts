@@ -848,32 +848,8 @@ export async function activate(context: vscode.ExtensionContext) {
 				// to main — avoids creating a branch the user didn't confirm.
 				return
 			}
-			const isFirstBranch = stack.length === 0
 			await ctx.branchStack.addBranchToStack(name, basePick)
 			await vscode.window.showInformationMessage(`Branch "${name}" added to stack in ${path.basename(ctx.root.fsPath)}`)
-
-			// Offer to disable the built-in git provider once the stack has its
-			// first branch — GitBraid provides its own per-branch SCM entries
-			// so the default git view becomes redundant.
-			if (isFirstBranch) {
-				const autoDisableSetting = vscode.workspace.getConfiguration('gitbraid').get<string>('autoDisableGit', 'prompt')
-				const disableGit = async () => {
-					await vscode.workspace.getConfiguration('git').update('enabled', false, vscode.ConfigurationTarget.Workspace)
-					log.info('gitbraid: disabled built-in git extension (git.enabled = false) in workspace settings')
-				}
-				if (autoDisableSetting === 'auto') {
-					await disableGit()
-				} else if (autoDisableSetting === 'prompt') {
-					const action = await vscode.window.showInformationMessage(
-						'GitBraid provides its own per-branch SCM entries. Would you like to hide the built-in Git panel to reduce clutter?',
-						'Hide Git Panel',
-						'Keep Both',
-					)
-					if (action === 'Hide Git Panel') {
-						await disableGit()
-					}
-				}
-			}
 		})),
 
 		vscode.commands.registerCommand('gitbraid.removeStackBranch', cmd(async (node?: BranchNode) => {
@@ -1111,6 +1087,18 @@ export async function activate(context: vscode.ExtensionContext) {
 			const branchName = await resolveBranchNameArg(arg, 'Push branch to origin')
 			if (!branchName) return
 			await activeContext().scmManager.pushBranch(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.pullBranch', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Pull branch from origin')
+			if (!branchName) return
+			await activeContext().scmManager.pullBranch(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.syncBranch', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Sync branch (pull then push)')
+			if (!branchName) return
+			await activeContext().scmManager.syncBranch(branchName)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.scm.stashBranch', cmd(async (arg?: unknown) => {

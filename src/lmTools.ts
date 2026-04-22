@@ -243,6 +243,70 @@ class AddBranchTool implements vscode.LanguageModelTool<AddBranchInput> {
 	}
 }
 
+// ─── syncBranch ───────────────────────────────────────────────────────────────
+
+interface SyncBranchInput {
+	branch: string
+}
+
+class PullBranchTool implements vscode.LanguageModelTool<SyncBranchInput> {
+	readonly name = 'gitbraid_pullBranch'
+
+	constructor(private readonly _api: GitBraidApi) {}
+
+	async invoke(
+		options: vscode.LanguageModelToolInvocationOptions<SyncBranchInput>,
+		_token: vscode.CancellationToken,
+	): Promise<vscode.LanguageModelToolResult> {
+		await this._api.pullBranch(options.input.branch)
+		return textResult(`Pulled latest changes into branch "${options.input.branch}".`)
+	}
+
+	prepareInvocation(
+		options: vscode.LanguageModelToolInvocationPrepareOptions<SyncBranchInput>,
+		_token: vscode.CancellationToken,
+	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+		return {
+			invocationMessage: `Pulling "${options.input.branch}"…`,
+			confirmationMessages: {
+				title: 'Pull Branch',
+				message: new vscode.MarkdownString(
+					`Pull (rebase) the latest changes from origin into branch **${options.input.branch}**?`,
+				),
+			},
+		}
+	}
+}
+
+class SyncBranchTool implements vscode.LanguageModelTool<SyncBranchInput> {
+	readonly name = 'gitbraid_syncBranch'
+
+	constructor(private readonly _api: GitBraidApi) {}
+
+	async invoke(
+		options: vscode.LanguageModelToolInvocationOptions<SyncBranchInput>,
+		_token: vscode.CancellationToken,
+	): Promise<vscode.LanguageModelToolResult> {
+		await this._api.syncBranch(options.input.branch)
+		return textResult(`Synced branch "${options.input.branch}" (pull then push).`)
+	}
+
+	prepareInvocation(
+		options: vscode.LanguageModelToolInvocationPrepareOptions<SyncBranchInput>,
+		_token: vscode.CancellationToken,
+	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+		return {
+			invocationMessage: `Syncing "${options.input.branch}"…`,
+			confirmationMessages: {
+				title: 'Sync Branch',
+				message: new vscode.MarkdownString(
+					`Pull (rebase) then push branch **${options.input.branch}**?`,
+				),
+			},
+		}
+	}
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 /**
@@ -258,6 +322,8 @@ export function registerLmTools(api: GitBraidApi): vscode.Disposable[] {
 		new CommitBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new GetBranchStatusTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new AddBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
+		new PullBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
+		new SyncBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
 	]
 
 	const disposables: vscode.Disposable[] = []

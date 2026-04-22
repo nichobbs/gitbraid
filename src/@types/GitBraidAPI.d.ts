@@ -95,6 +95,18 @@ export interface GitBraidExportedAPI {
 	 */
 	stageBranch(branch: string, files?: string[]): Promise<void>
 
+	/**
+	 * Pulls the latest changes from origin into the branch's worktree.
+	 * Runs `git pull --rebase`.
+	 */
+	pullBranch(branch: string): Promise<void>
+
+	/**
+	 * Syncs the branch: pulls (--rebase) then pushes to origin.
+	 * Sets the upstream automatically on the first push if none is configured.
+	 */
+	syncBranch(branch: string): Promise<void>
+
 	// ── Symmetric read / mutate helpers ───────────────────────────────────────
 
 	/** Reorder branches in the stack by providing the desired name sequence. */
