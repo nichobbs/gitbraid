@@ -107,6 +107,8 @@ export class BranchStackTreeProvider
 	constructor(
 		private readonly _config: ConfigService,
 		private readonly _sync: WorkspaceSync,
+		private readonly _onAssign?: (rel: string, newBranch: string, previous: string | undefined) => void,
+		private readonly _onUnassign?: (rel: string, previous: string) => void,
 	) {
 		this._disposables.push(
 			_config.onDidChangeAssignment(() => this.refresh()),
@@ -165,7 +167,9 @@ export class BranchStackTreeProvider
 			for (const u of uris) {
 				const rel = vscode.workspace.asRelativePath(u, false)
 				if (rel.startsWith('.worktrees/')) continue
+				const previous = this._config.getAssignment(rel)
 				await this._config.setAssignment(rel, targetBranch)
+				this._onAssign?.(rel, targetBranch, previous)
 			}
 		}
 	}
@@ -195,11 +199,19 @@ export class BranchStackTreeProvider
 
 		if (target?.kind === 'branch') {
 			for (const fd of fileDrags) {
-				await this._config.setAssignment(fd.relativePath!, target.entry.name)
+				const rel = fd.relativePath!
+				const previous = this._config.getAssignment(rel)
+				await this._config.setAssignment(rel, target.entry.name)
+				this._onAssign?.(rel, target.entry.name, previous)
 			}
 		} else if (target?.kind === 'floatingGroup' || target === undefined) {
 			for (const fd of fileDrags) {
-				await this._config.removeAssignment(fd.relativePath!)
+				const rel = fd.relativePath!
+				const previous = this._config.getAssignment(rel)
+				await this._config.removeAssignment(rel)
+				if (previous !== undefined) {
+					this._onUnassign?.(rel, previous)
+				}
 			}
 		}
 	}

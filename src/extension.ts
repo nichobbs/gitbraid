@@ -15,6 +15,13 @@ import { StackContentProvider } from './stackContentProvider'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { StackCommands } from './stackCommands'
 import { RebaseRecovery } from './rebaseRecovery'
+import {
+	UndoStack,
+	recordAssignFile,
+	recordUnassignFile,
+	recordAssignHunk,
+	recordUnassignHunk,
+} from './undoStack'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
@@ -73,7 +80,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	const workspaceSync = WorkspaceSync.getInstance(configService)
 	workspaceSync.init(workspaceRoot, bus)
 
-	context.subscriptions.push(configService, branchStack, workspaceSync)
+	// Undo/redo ring for assignment-level operations (T69).  Constructed
+	// early so Phase 2 providers can receive it.
+	const undoStack = new UndoStack()
+
+	context.subscriptions.push(configService, branchStack, workspaceSync, undoStack)
 
 	// ─── Phase 2: SCM Integration & UI ────────────────────────────────────────
 	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync)
@@ -83,7 +94,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	await scmManager.initialize()
 	context.subscriptions.push(scmManager)
 
-	const stackTreeProvider = new BranchStackTreeProvider(configService, workspaceSync)
+	const stackTreeProvider = new BranchStackTreeProvider(
+		configService,
+		workspaceSync,
+		(rel, newBranch, previous) => recordAssignFile(undoStack, configService, rel, newBranch, previous),
+		(rel, previous) => recordUnassignFile(undoStack, configService, rel, previous),
+	)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
 		// Drag-and-drop: file nodes onto branch nodes reassigns; onto the
@@ -117,6 +133,29 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ── Phase 2 & 3 commands ──────────────────────────────────────────────────
 	commands.push(
 		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => stackTreeProvider.refresh()),
+
+		// T69 — undo / redo for assignment-level operations.  Session-only,
+		// in-memory.  No-ops when the corresponding stack is empty.
+		vscode.commands.registerCommand('gitbraid.undoLastAssignment', cmd(async () => {
+			if (!undoStack.canUndo()) {
+				await vscode.window.showInformationMessage('GitBraid: nothing to undo.')
+				return
+			}
+			const op = await undoStack.undo()
+			if (op) {
+				await vscode.window.setStatusBarMessage(`GitBraid: undid — ${op.label}`, 3000)
+			}
+		})),
+		vscode.commands.registerCommand('gitbraid.redoLastAssignment', cmd(async () => {
+			if (!undoStack.canRedo()) {
+				await vscode.window.showInformationMessage('GitBraid: nothing to redo.')
+				return
+			}
+			const op = await undoStack.redo()
+			if (op) {
+				await vscode.window.setStatusBarMessage(`GitBraid: redid — ${op.label}`, 3000)
+			}
+		})),
 
 		vscode.commands.registerCommand('gitbraid.focusStackView', () => {
 			stackView.reveal(undefined as never, { focus: true }).then(undefined, (e: unknown) => {
@@ -154,7 +193,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				// different line range (T8).
 				const hunks = await diffEngine.getHunksForFile(workspaceRoot.fsPath, rel)
 				const anchor = hunks[hunkIndex] ? anchorFor(hunks[hunkIndex]) : undefined
+				const previousBranch = configService.getHunkAssignments(rel)?.get(hunkIndex)
 				await configService.setHunkAssignment(rel, hunkIndex, picked.label, anchor)
+				recordAssignHunk(undoStack, configService, rel, hunkIndex, picked.label, previousBranch, anchor)
 				await vscode.window.showInformationMessage(`Hunk ${String(hunkIndex)} → ${picked.label}`)
 				await overlayDiagnostics.refreshForUri(uri)
 			}),
@@ -164,7 +205,12 @@ export async function activate(context: vscode.ExtensionContext) {
 			'gitbraid.unassignHunk',
 			cmd(async (uri: vscode.Uri, hunkIndex: number) => {
 				const rel = vscode.workspace.asRelativePath(uri, false)
+				const previousBranch = configService.getHunkAssignments(rel)?.get(hunkIndex)
+				const previousAnchor = configService.getHunkAnchor(rel, hunkIndex)
 				await configService.removeHunkAssignment(rel, hunkIndex)
+				if (previousBranch !== undefined) {
+					recordUnassignHunk(undoStack, configService, rel, hunkIndex, previousBranch, previousAnchor)
+				}
 				await overlayDiagnostics.refreshForUri(uri)
 			}),
 		),
@@ -358,7 +404,10 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			for (const target of targets) {
-				await configService.setAssignment(vscode.workspace.asRelativePath(target), picked.label)
+				const rel = vscode.workspace.asRelativePath(target)
+				const previous = configService.getAssignment(rel)
+				await configService.setAssignment(rel, picked.label)
+				recordAssignFile(undoStack, configService, rel, picked.label, previous)
 			}
 			const msg = targets.length === 1
 				? `Assigned ${vscode.workspace.asRelativePath(targets[0])} → ${picked.label}`
@@ -373,7 +422,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			const rel = vscode.workspace.asRelativePath(target)
+			const previous = configService.getAssignment(rel)
 			await configService.removeAssignment(rel)
+			if (previous !== undefined) {
+				recordUnassignFile(undoStack, configService, rel, previous)
+			}
 			await vscode.window.showInformationMessage(`Unassigned ${rel}`)
 		})),
 

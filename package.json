@@ -271,6 +271,18 @@
 				"title": "Continue Rebase",
 				"category": "GitBraid",
 				"icon": "$(play)"
+			},
+			{
+				"command": "gitbraid.undoLastAssignment",
+				"title": "Undo Last Assignment",
+				"category": "GitBraid",
+				"icon": "$(discard)"
+			},
+			{
+				"command": "gitbraid.redoLastAssignment",
+				"title": "Redo Last Assignment",
+				"category": "GitBraid",
+				"icon": "$(redo)"
 			}
 		],
 		"viewsWelcome": [
@@ -581,6 +593,16 @@
 				"key": "ctrl+alt+t",
 				"mac": "cmd+alt+t",
 				"when": "editorTextFocus"
+			},
+			{
+				"command": "gitbraid.undoLastAssignment",
+				"key": "ctrl+alt+z",
+				"mac": "cmd+alt+z"
+			},
+			{
+				"command": "gitbraid.redoLastAssignment",
+				"key": "ctrl+alt+shift+z",
+				"mac": "cmd+alt+shift+z"
 			}
 		]
 	},
