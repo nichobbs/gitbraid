@@ -22,6 +22,8 @@ import {
 	recordAssignHunk,
 	recordUnassignHunk,
 } from './undoStack'
+import { StackShareService, SHARED_DIR, SHARED_FILE } from './stackShareService'
+import * as path from 'node:path'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
@@ -303,6 +305,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	rebaseSvc.init(workspaceRoot)
 	const stackCommands = new StackCommands(configService, branchStack, rebaseSvc, workspaceRoot)
 	const rebaseRecovery = new RebaseRecovery()
+	const stackShare = new StackShareService(configService, workspaceRoot)
 	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider, stackCommands, rebaseRecovery)
 
 	// Watch every existing and future worktree for mid-rebase state so the
@@ -588,6 +591,73 @@ export async function activate(context: vscode.ExtensionContext) {
 			)
 			if (!mode) return
 			await stackCommands.pushStack({ forceWithLease: mode.force })
+		})),
+
+		// T71 — share the stack layout with teammates via a committed
+		// `.gitbraid/stack.json` file.
+		vscode.commands.registerCommand('gitbraid.exportStack', cmd(async () => {
+			const stack = configService.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to export.')
+				return
+			}
+			const filePath = await stackShare.exportToDisk()
+			const rel = path.relative(workspaceRoot.fsPath, filePath)
+			const open = await vscode.window.showInformationMessage(
+				`GitBraid: exported ${String(stack.length)} branch(es) to ${rel}. ` +
+				'Commit this file to share the layout with your team.',
+				'Open',
+			)
+			if (open === 'Open') {
+				await vscode.window.showTextDocument(vscode.Uri.file(filePath))
+			}
+		})),
+
+		vscode.commands.registerCommand('gitbraid.importStack', cmd(async () => {
+			const shared = await stackShare.readSharedFile()
+			if (!shared) {
+				await vscode.window.showInformationMessage(
+					`GitBraid: no shared stack found.  Run "GitBraid: Export Stack" on a colleague's machine and commit the resulting \`${SHARED_DIR}/${SHARED_FILE}\`.`,
+				)
+				return
+			}
+			const diff = stackShare.diffWithCurrent(shared)
+			const totalChanges =
+				diff.newBranches.length + diff.newAssignments.length +
+				diff.conflictBranches.length + diff.conflictAssignments.length
+			if (totalChanges === 0) {
+				await vscode.window.showInformationMessage('GitBraid: shared stack is already applied — nothing to import.')
+				return
+			}
+			const conflicts = diff.conflictBranches.length + diff.conflictAssignments.length
+			let resolution: { branches: 'theirs' | 'ours', assignments: 'theirs' | 'ours' } = {
+				branches: 'theirs',
+				assignments: 'theirs',
+			}
+			if (conflicts > 0) {
+				const pick = await vscode.window.showQuickPick(
+					[
+						{
+							label: 'Prefer shared file',
+							detail: `Overwrite ${String(conflicts)} local values with the shared version.`,
+							resolution: { branches: 'theirs', assignments: 'theirs' } as const,
+						},
+						{
+							label: 'Keep local values',
+							detail: 'Only import branches/assignments that don\'t conflict with the local stack.',
+							resolution: { branches: 'ours', assignments: 'ours' } as const,
+						},
+					],
+					{ placeHolder: `${String(conflicts)} conflict(s) with your local stack — choose how to resolve.` },
+				)
+				if (!pick) return
+				resolution = pick.resolution
+			}
+			const summary = await stackShare.applyImport(shared, resolution)
+			await vscode.window.showInformationMessage(
+				`GitBraid: imported ${String(summary.addedBranches)} new branch(es), ${String(summary.addedAssignments)} new assignment(s), ` +
+				`updated ${String(summary.updatedBranches)}/${String(summary.updatedAssignments)}, skipped ${String(summary.skipped)}.`,
+			)
 		})),
 
 		// T70 — rebase conflict recovery.

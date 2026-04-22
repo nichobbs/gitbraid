@@ -283,6 +283,18 @@
 				"title": "Redo Last Assignment",
 				"category": "GitBraid",
 				"icon": "$(redo)"
+			},
+			{
+				"command": "gitbraid.exportStack",
+				"title": "Export Stack (to .gitbraid/stack.json)",
+				"category": "GitBraid",
+				"icon": "$(export)"
+			},
+			{
+				"command": "gitbraid.importStack",
+				"title": "Import Stack (from .gitbraid/stack.json)",
+				"category": "GitBraid",
+				"icon": "$(cloud-download)"
 			}
 		],
 		"viewsWelcome": [
