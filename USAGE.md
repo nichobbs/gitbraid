@@ -11,21 +11,21 @@ Control panel.
 
 | Term | Meaning |
 |------|---------|
-| **Stack** | An ordered list of branches, each building on the one below. Stored in `.worktrees/local-config.json` (never committed). |
-| **Floating file** | A file with uncommitted changes that has not yet been assigned to any branch. Shown under **Floating (unassigned)** in the Branch Stack view with a ⚠ icon. |
+| **Stack** | An ordered list of branches, each building on the one below. Stored in `.worktrees/local-config.json` (never committed to the repo). |
+| **Floating file** | A file with uncommitted changes that has not yet been assigned to any branch. Shown under **Floating (unassigned)** in the Branch Stack view. |
 | **Assignment** | A mapping from a file path (or individual diff hunk) to a branch name. |
-| **Worktree** | A separate Git working tree on disk, one per stacked branch. GitBraid creates and manages these automatically. |
+| **Worktree** | A separate Git working tree on disk, one per stacked branch. GitBraid creates and manages these automatically under `.worktrees/`. |
 
 ---
 
 ## Views
 
-The **Branch Stack** view lives in the **Source Control** panel (git icon in the Activity Bar).
+The **Branch Stack** view lives in its own **GitBraid** activity-bar icon (the braid
+icon on the left sidebar). It shows the ordered stack: each branch lists its assigned
+files; floating (unassigned) files appear at the bottom under **Floating (unassigned)**.
 
-It shows the ordered stack. Each branch lists its assigned files; floating (unassigned) files appear at the bottom under **Floating (unassigned)**.
-
-A status-bar item shows the count of floating files so you always know when
-something is unassigned.
+A status-bar item shows the count of floating files so you always know when something
+is unassigned. It hides automatically when the stack is empty or all files are assigned.
 
 ---
 
@@ -33,8 +33,9 @@ something is unassigned.
 
 ### 1 — Open the walkthrough
 
-*Help → Get Started* → search **GitBraid: Get Started**.
-The walkthrough covers adding a branch, assigning a file, and committing.
+*Click the GitBraid icon in the activity bar* and follow the in-panel walkthrough, or
+open it via *Help → Get Started* → search **GitBraid: Get Started**. It covers adding a
+branch, assigning a file, and committing.
 
 ---
 
@@ -42,12 +43,13 @@ The walkthrough covers adding a branch, assigning a file, and committing.
 
 ### Add a branch to the stack
 
-**Command Palette:** `GitBraid: Add Branch to Stack`
-(`gitbraid.addStackBranch`)
+**Command Palette:** `GitBraid: Add Branch to Stack` (`gitbraid.addStackBranch`)
+or **`Ctrl+Alt+B`**
 
-1. Enter a branch name (e.g. `feature/my-feature`).
-2. Pick a base branch — `main` or any branch already in the stack.
-3. GitBraid creates a new git worktree for that branch.
+1. A QuickPick shows existing local/remote branches. Select one, or choose
+   **+ Create a new branch** at the top of the list and type a name.
+2. Pick a base branch — the repository's default branch or any branch already in the stack.
+3. GitBraid creates a git worktree for that branch under `.worktrees/`.
 
 > To remove a branch: **Command Palette** → `GitBraid: Remove Branch from Stack`.
 
@@ -59,28 +61,42 @@ Files with untracked or modified content that are not yet assigned appear under
 **Floating (unassigned)** in the Branch Stack view.
 
 **Option A — Explorer context menu**
-Right-click the file → **Assign File to Branch** → pick a branch.
+Right-click the file → **GitBraid: Assign File to Branch** → pick a branch.
 
-**Option B — Command Palette**
-`GitBraid: Assign File to Branch` (`gitbraid.assignFile`) — uses the currently
-active editor file if no URI is provided.
+**Option B — Keyboard**
+`Ctrl+Alt+A` — assigns the currently active editor file.
 
-The file's name is decorated with the branch colour in the Explorer.
+**Option C — Assign an entire folder**
+Right-click a folder in Explorer → **GitBraid: Assign Folder to Branch**. Every
+tracked file under the folder is assigned at once.
 
-**To unassign:** right-click → **Unassign File from Branch**, or
-`gitbraid.unassignFile` from the Command Palette.
+The file's name is decorated with the branch colour and a short badge in the Explorer.
+
+**To unassign:** right-click → **GitBraid: Unassign File from Branch**, or use the
+file's context menu in the Branch Stack view.
 
 ---
 
 ### Commit changes to a branch
 
-Each stacked branch gets its own entry in the **Source Control** panel showing
-only the files assigned to it.
+Each stacked branch gets its own entry in the **Source Control** panel (`Ctrl+Shift+G`)
+showing only the files assigned to it.
 
 1. Open the Source Control panel.
-2. Find the entry for the branch you want to commit.
+2. Find the entry for the branch you want to commit (labelled **GitBraid: \<branch\>**).
 3. Type a commit message in that branch's input box.
 4. Press the ✓ **Commit** button (or run `GitBraid: Commit Branch`).
+
+---
+
+### Push or sync the whole stack
+
+**Push stack** (`gitbraid.pushStack`) — pushes every branch in the stack to `origin`
+in order (base first). Sets the upstream automatically on first push.
+
+**Sync stack** (`gitbraid.syncStack`) — fetches from `origin` and rebases each branch
+onto its parent, walking from the base outward. Stops on conflict and shows a recovery
+dialog.
 
 ---
 
@@ -90,20 +106,50 @@ When a single file contains changes that belong to different branches:
 
 1. Open the file — CodeLens links appear above each diff hunk.
 2. Click **Assign Hunk to Branch** above the relevant hunk and pick a branch.
+   Click **Unassign** to remove an existing hunk assignment.
 3. Repeat for other hunks in the file.
-4. Run `GitBraid: Route Hunks to Assigned Branches` (`gitbraid.routeHunks`) to
-   apply the routing — this copies each hunk into the appropriate worktree and
-   clears the hunk assignments for that file.
+4. Run `GitBraid: Route Hunks to Assigned Branches` (`gitbraid.routeHunks` /
+   `Ctrl+Alt+R`) to apply the routing — this copies each hunk into the appropriate
+   worktree.
+
+If any two assigned hunks overlap, routing is blocked with a clear error message
+until the conflict is resolved.
 
 ---
 
 ### Rebase a branch onto its parent
 
-When a parent branch advances, GitBraid detects the gap and offers a notification.
+When a parent branch advances, GitBraid detects the gap and shows a notification.
 
-- Click the notification button, **or**
-- Run `GitBraid: Rebase Branch onto Parent` (`gitbraid.rebaseBranch`) and pick
-  the branch.
+- Click the **Rebase now** button in the notification, **or**
+- Run `GitBraid: Rebase Branch onto Parent` (`gitbraid.rebaseBranch`) and pick the branch.
+
+If the rebase pauses on a conflict, a dialog appears with **Open conflicts**,
+**Abort**, and **Continue** options. Resolve the conflicts in VS Code's merge editor,
+then click **Continue**.
+
+---
+
+### Undo and redo assignments
+
+Assignments (file, hunk, reorder, add/remove branch) are reversible within the session.
+
+- `Ctrl+Alt+Z` — undo the last assignment action
+- `Ctrl+Alt+Shift+Z` — redo
+
+The undo history holds the last 100 operations and is cleared when the session ends.
+
+---
+
+### Import and export a stack layout
+
+**Export** (`gitbraid.exportStack`) — writes the current stack order and file
+assignments to `.gitbraid/stack.json`. Commit this file to share the layout with
+teammates.
+
+**Import** (`gitbraid.importStack`) — reads `.gitbraid/stack.json` and merges it into
+your local config. When a file is assigned to a different branch locally, a QuickPick
+lets you choose which assignment wins.
 
 ---
 
@@ -113,10 +159,10 @@ Right-click a branch node in the **Branch Stack** view:
 
 | Action | How |
 |--------|-----|
-| Open worktree in new window | Right-click a branch → **Open in New Window** |
-| Lock / unlock worktree | Right-click a branch → **Lock Worktree** / **Unlock Worktree** |
-| Copy file to another branch | Right-click an assigned or floating file → **Copy to Branch** |
-| Move file to another branch | Right-click an assigned or floating file → **Move to Branch** |
+| Open worktree in new window | Right-click branch → **Open in New Window** |
+| Lock / unlock worktree | Right-click branch → **Lock Worktree** / **Unlock Worktree** |
+| Copy file to another branch | Right-click an assigned file → **Copy File to Branch Worktree** |
+| Move file to another branch | Right-click an assigned file → **Move File to Branch Worktree** |
 
 ---
 
@@ -126,41 +172,51 @@ Settings are under `gitbraid.*` in VS Code preferences.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `gitbraid.syncDebounceMs` | `500` | Debounce delay (ms) for workspace sync on file changes. |
+| `gitbraid.syncDebounceMs` | `200` | Debounce delay (ms) before a saved file is synced to its worktree. |
 | `gitbraid.showFloatingWarningOnCommit` | `true` | Warn when committing if floating (unassigned) files exist. |
-| `gitbraid.prDecorationsEnabled` | `true` | Show branch-colour decorations on files in the Explorer. |
-| `gitbraid.defaultBranchColor` | `"#4CAF50"` | Default colour for new stack branches. |
+| `gitbraid.prDecorationsEnabled` | `true` | Show PR status decorations on branch nodes in the stack view. |
+| `gitbraid.defaultBranchColor` | `"#4ec9b0"` | Default colour for new stack branches. |
+| `gitbraid.maxSyncFileSizeKb` | `10240` | Files larger than this (KB) are skipped during sync. |
+| `gitbraid.rebaseCheckIntervalMinutes` | `5` | How often (minutes) to check whether a parent branch has advanced. Set to `0` to disable polling (checks happen on stack change and window focus). |
+| `gitbraid.bidirectionalSync` | `false` | *(Experimental)* Sync changes made directly inside a worktree back to the primary workspace. |
 
 ---
 
 ## AI / chat integration
 
 Seven language model tools allow AI assistants (e.g. GitHub Copilot Chat) to
-interact with the stack programmatically:
+interact with the stack programmatically. Reference them with `#gitbraid_*` in chat.
 
 | Tool | What it does |
 |------|-------------|
-| `mbc_getStack` | Returns the current branch stack. |
-| `mbc_addBranch` | Adds a branch to the stack. |
-| `mbc_assignFile` | Assigns a file to a branch. |
-| `mbc_assignHunk` | Assigns an individual diff hunk to a branch. |
-| `mbc_getFloatingFiles` | Lists files not yet assigned to any branch. |
-| `mbc_commitBranch` | Commits assigned files on a branch. |
-| `mbc_getBranchStatus` | Returns staged/unstaged/untracked counts for a branch. |
+| `gitbraid_getStack` | Returns the current branch stack. |
+| `gitbraid_addBranch` | Adds a branch to the stack. |
+| `gitbraid_assignFile` | Assigns a file to a branch. |
+| `gitbraid_assignHunk` | Assigns an individual diff hunk to a branch. |
+| `gitbraid_getFloatingFiles` | Lists files not yet assigned to any branch. |
+| `gitbraid_commitBranch` | Commits assigned files on a branch. |
+| `gitbraid_getBranchStatus` | Returns staged/unstaged/untracked counts for a branch. |
 
-Example prompt: *"Assign src/auth.ts to the feature/auth branch and commit it
-with the message 'feat: add auth module'."*
+Example prompt: *"Assign src/auth.ts to the feature/auth branch and commit it with
+the message 'feat: add auth module'."*
 
 ---
 
 ## Troubleshooting
 
-**Stack view is empty** — run `GitBraid: Add Branch to Stack` to add the first
-branch.
+**Stack view is empty** — run `GitBraid: Add Branch to Stack` (`Ctrl+Alt+B`) to add
+the first branch.
 
 **File is not appearing in the SCM entry for a branch** — check that the file is
-assigned (look for the branch colour in the Explorer, or check the Branch Stack
-view). If it shows under Floating, assign it first.
+assigned (look for the branch colour badge in the Explorer, or check the Branch Stack
+view). If it shows under **Floating**, assign it first.
 
 **Hunk routing produced unexpected results** — check the GitBraid output channel
 (*View → Output → GitBraid*) for error details.
+
+**Sync seems slow or stalls** — reduce `gitbraid.syncDebounceMs`, or check whether
+`gitbraid.maxSyncFileSizeKb` is limiting a large generated file.
+
+**"Branch is already checked out" error** — the branch is open in another git
+worktree or another VS Code window. Close that window or run
+`git worktree list` to identify where it is checked out.

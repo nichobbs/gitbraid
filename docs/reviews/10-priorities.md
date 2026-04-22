@@ -1,4 +1,7 @@
-# Suggested Triage Order
+# Suggested Triage Order (2026-04-21 review)
+
+> **Status (2026-04-22):** All P0 and most P1–P2 items have been resolved.
+> See `docs/remediation/outstanding.md` for the current open list.
 
 A pragmatic ordering of the findings across the other review files.
 Scope-hardening before feature work.
