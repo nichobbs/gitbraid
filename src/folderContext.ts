@@ -18,8 +18,8 @@ import { FileChangeBus } from './fileChangeBus'
 // `StackContentProvider` is deliberately NOT created here — it registers
 // a `vscode.workspace.registerTextDocumentContentProvider(scheme, ...)`
 // which is global to the extension host.  Activation wires up a single
-// instance bound to the primary folder's StackResolver; multi-folder
-// support for the `gitbraid-stack:` scheme is a follow-up.
+// registry-aware instance; URIs carry a `?folder=` query that routes each
+// request to the owning folder's `StackResolver`.
 
 /**
  * All per-folder state for a single `vscode.WorkspaceFolder` that is a git
