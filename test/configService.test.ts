@@ -393,4 +393,32 @@ suite('ConfigService', () => {
 		assert.strictEqual(result.get(0), 'feature/docs')
 		svc2.dispose()
 	})
+
+	test('lock file is created and removed during a write', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#f00', base: 'main' })
+		// After addBranch the write is debounced; flush it.
+		await svc.flushPendingWrites()
+		// The lock file must be gone after the write completes.
+		const lockPath = configPath() + '.lock'
+		assert.ok(!fs.existsSync(lockPath), 'lock file should not exist after write completes')
+	})
+
+	test('stale lock file is removed and write succeeds', async () => {
+		await svc.load(wsRoot())
+		// Plant a stale lock file (mtime far in the past).
+		fs.mkdirSync(worktreesDir(), { recursive: true })
+		const lockPath = configPath() + '.lock'
+		fs.writeFileSync(lockPath, '', 'utf-8')
+		// Back-date the mtime by 10 seconds.
+		const past = new Date(Date.now() - 10_000)
+		fs.utimesSync(lockPath, past, past)
+
+		// A write should succeed by removing the stale lock.
+		await svc.addBranch({ name: 'feature/b', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+
+		assert.ok(!fs.existsSync(lockPath), 'stale lock should have been cleaned up')
+		assert.ok(fs.existsSync(configPath()), 'config should have been written')
+	})
 })
