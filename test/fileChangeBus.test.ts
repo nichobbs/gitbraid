@@ -56,55 +56,30 @@ suite('FileChangeBus (T10)', () => {
 		)
 	})
 
-	test('writes under .worktrees/<dir>/ go to onDidChangeWorktree, not onDidSavePrimary', async () => {
-		// Pre-create the worktree directory and rebuild the bus so the
-		// watcher can pick up writes under it.  VS Code's FileSystemWatcher
-		// on `**/*` is flaky for dotted subdirectories and for paths that
-		// didn't exist when the watch started, especially on CI runners,
-		// so we probe with retries and skip rather than false-fail.  Use a
-		// per-run unique directory name so stale events from earlier runs
-		// (e.g. a crashed teardown) can't contaminate this run's assertion.
-		bus.dispose()
-		const dirName = `synthetic-dir-${String(Date.now())}-${String(Math.floor(Math.random() * 1e6))}`
-		const worktreeDir = path.join(wsRoot().fsPath, '.worktrees', dirName)
-		fs.mkdirSync(worktreeDir, { recursive: true })
-		bus = new FileChangeBus(wsRoot())
-		await sleep(150)
-
+	test('writes under .worktrees/<dir>/ go to onDidChangeWorktree, not onDidSavePrimary', () => {
+		// Drive the bus's dispatcher directly rather than waiting on
+		// `vscode.workspace.createFileSystemWatcher` to notice a write.  The
+		// watcher's recursion into newly-created subdirectories is
+		// platform-dependent (inotify on Linux, FSEvents on macOS, the
+		// Windows native watcher) and historically flaky on CI runners —
+		// what we actually own here is the routing logic, not the watcher.
 		const primary: string[] = []
 		const worktree: Array<{ worktreeDirName: string, relativePath: string }> = []
 		const d1 = bus.onDidSavePrimary((e) => primary.push(e.relativePath))
 		const d2 = bus.onDidChangeWorktree((e) => worktree.push({ worktreeDirName: e.worktreeDirName, relativePath: e.relativePath }))
 
-		// Write then poll for up to 2 s — some watchers need an
-		// appendFile/touch to fire reliably rather than a single create.
-		// Break only when the *target* event arrives, not just any event,
-		// so a spurious unrelated event can't short-circuit the probe.
-		const targetFile = path.join(worktreeDir, 'file.txt')
-		const hasTarget = () => worktree.some((e) => e.worktreeDirName === dirName && e.relativePath === 'file.txt')
-		for (let attempt = 0; attempt < 10; attempt++) {
-			fs.writeFileSync(targetFile, `hi-${String(attempt)}`)
-			await sleep(200)
-			if (hasTarget()) break
-		}
+		const worktreeUri = vscode.Uri.joinPath(wsRoot(), '.worktrees', 'synthetic-dir', 'file.txt')
+		;(bus as unknown as { _dispatch(u: vscode.Uri, r: vscode.Uri, k: 'change' | 'delete'): void })
+			._dispatch(worktreeUri, wsRoot(), 'change')
 
 		d1.dispose()
 		d2.dispose()
-		fs.rmSync(worktreeDir, { recursive: true, force: true })
-
-		if (worktree.length === 0) {
-			// The FileSystemWatcher didn't fire at all — this is an
-			// environment-level flake (inotify / kqueue sub-watch
-			// registration), not a GitBraid regression.  Skip instead of
-			// failing CI to avoid masking real problems.
-			console.warn('FileChangeBus test: watcher fired no events under .worktrees/ — skipping (environment flake)')
-			return
-		}
 
 		assert.strictEqual(primary.length, 0, 'worktree writes must not fire onDidSavePrimary')
-		assert.ok(
-			hasTarget(),
-			`expected worktree event for ${dirName}/file.txt, got ${JSON.stringify(worktree)}`,
+		assert.deepStrictEqual(
+			worktree,
+			[{ worktreeDirName: 'synthetic-dir', relativePath: 'file.txt' }],
+			`expected a single worktree event for synthetic-dir/file.txt, got ${JSON.stringify(worktree)}`,
 		)
 	})
 })
