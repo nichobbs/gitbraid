@@ -358,12 +358,12 @@ export class FloatingStatusBarItem implements vscode.Disposable {
 		private readonly _config: ConfigService,
 	) {
 		this._item = vscode.window.createStatusBarItem(
-			'mbc-floating',
+			'gitbraid-floating',
 			vscode.StatusBarAlignment.Left,
 			100,
 		)
 		this._item.command = 'gitbraid.focusStackView'
-		this._item.name = 'MBC Floating Files'
+		this._item.name = 'GitBraid Floating Files'
 
 		this._disposables.push(
 			_sync.onDidFloatFile(() => this._update()),
