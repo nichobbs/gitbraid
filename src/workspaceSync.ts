@@ -180,6 +180,60 @@ export class WorkspaceSync implements vscode.Disposable {
 				}
 			}),
 		)
+
+		// Seed the floating-dirty set from the current git status so that files
+		// already modified before the extension loaded (or changed externally
+		// without a VS Code save event) are visible in the floating list.
+		void this._seedFromGitStatus(workspaceRoot)
+	}
+
+	// ─── Startup scan ────────────────────────────────────────────────────────
+
+	/**
+	 * Scan `git status` in the workspace root and seed `_floatingDirty` with
+	 * any dirty files that have no branch assignment.  This covers files that
+	 * were already modified before the extension loaded — the file-system
+	 * watcher would never fire for those.
+	 */
+	private async _seedFromGitStatus(workspaceRoot: vscode.Uri): Promise<void> {
+		try {
+			const runner = getDefaultGitRunner()
+			const { stdout, exitCode } = await runner.run(
+				['status', '--porcelain=v1', '-z'],
+				{ cwd: workspaceRoot.fsPath },
+			)
+			if (exitCode !== 0) return
+
+			const entries = stdout.split('\0').filter((s) => s.length > 0)
+			let seeded = 0
+			for (const entry of entries) {
+				// Valid porcelain v1 format: "XY path" — 2 status chars + space + path.
+				// Rename/copy entries produce a second NUL-delimited token that is
+				// just the old name without an XY prefix; the entry[2] !== ' ' guard
+				// skips those.
+				if (entry.length < 4 || entry[2] !== ' ') continue
+				const relativePath = entry.slice(3)
+				if (relativePath.startsWith('.worktrees/') || relativePath.startsWith('.git/')) continue
+				// Skip files already assigned — rehideAssignedFiles handles those.
+				if (this._config.getAssignment(relativePath)) continue
+
+				const key = normalisePath(relativePath)
+				if (!this._floatingDirty.has(key)) {
+					if (this._floatingDirty.size >= FLOATING_DIRTY_CAP) {
+						const oldest = this._floatingDirty.values().next().value
+						if (oldest !== undefined) this._floatingDirty.delete(oldest)
+					}
+					this._floatingDirty.add(key)
+					this._onDidFloatFile.fire({ relativePath: key })
+					seeded++
+				}
+			}
+			if (seeded > 0) {
+				log.info(`WorkspaceSync: seeded ${seeded} pre-existing floating file(s) from git status`)
+			}
+		} catch (e) {
+			log.warn(`WorkspaceSync._seedFromGitStatus: ${e instanceof Error ? e.message : String(e)}`)
+		}
 	}
 
 	// ─── Queries ─────────────────────────────────────────────────────────────

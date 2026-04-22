@@ -607,14 +607,22 @@ export async function activate(context: vscode.ExtensionContext) {
 				await vscode.window.showWarningMessage('No file selected to assign.')
 				return
 			}
-			// Expand any folders to their contained files
+			// Expand any folders to their contained changed files.
+			// Uses `git ls-files` so .gitignore is honoured and only modified /
+			// untracked files are included — avoids crawling node_modules etc.
 			const targets: vscode.Uri[] = []
 			for (const uri of uris) {
 				const stat = await vscode.workspace.fs.stat(uri)
 				if (stat.type === vscode.FileType.Directory) {
-					const rel = vscode.workspace.asRelativePath(uri)
-					const found = await vscode.workspace.findFiles(`${rel}/**`, '**/.git/**')
-					for (const f of found) { targets.push(f) }
+					const folderCtx = contextForUri(uri)
+					const relFolder = relativePathIn(folderCtx, uri)
+					const result = await getDefaultGitRunner().run(
+						['ls-files', '--modified', '--others', '--exclude-standard', '--', relFolder],
+						{ cwd: folderCtx.root.fsPath },
+					)
+					for (const f of result.stdout.split('\n').filter(Boolean)) {
+						targets.push(vscode.Uri.joinPath(folderCtx.root, f))
+					}
 				} else {
 					targets.push(uri)
 				}
@@ -675,6 +683,14 @@ export async function activate(context: vscode.ExtensionContext) {
 				? `Assigned ${vscode.workspace.asRelativePath(targets[0])} → ${picked.label}`
 				: `Assigned ${targets.length} files → ${picked.label}`
 			await vscode.window.showInformationMessage(msg)
+		})),
+
+		// gitbraid.assignFolder is a dedicated entry point for folder context
+		// menus so the label reads "Assign Folder to Branch" instead of "Assign
+		// File to Branch".  It delegates to the same assignFile logic which
+		// already handles directory expansion.
+		vscode.commands.registerCommand('gitbraid.assignFolder', cmd(async (arg?: unknown, allArgs?: unknown[]) => {
+			await vscode.commands.executeCommand('gitbraid.assignFile', arg, allArgs)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.unassignFile', cmd(async (arg?: unknown) => {

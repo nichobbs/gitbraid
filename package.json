@@ -189,6 +189,12 @@
 				"icon": "$(tag)"
 			},
 			{
+				"command": "gitbraid.assignFolder",
+				"title": "Assign Folder to Branch",
+				"category": "GitBraid",
+				"icon": "$(tag)"
+			},
+			{
 				"command": "gitbraid.unassignFile",
 				"title": "Unassign File from Branch",
 				"category": "GitBraid",
@@ -367,6 +373,12 @@
 			"explorer/context": [
 				{
 					"command": "gitbraid.assignFile",
+					"when": "!explorerResourceIsFolder",
+					"group": "gitbraid@1"
+				},
+				{
+					"command": "gitbraid.assignFolder",
+					"when": "explorerResourceIsFolder",
 					"group": "gitbraid@1"
 				},
 				{
