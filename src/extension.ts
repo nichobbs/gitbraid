@@ -1,8 +1,6 @@
 import * as vscode from 'vscode'
 import { git } from './gitFunctions'
 import { log } from './channelLogger'
-import { GitBraidAPI } from './commands'
-import { nodeMaps, WorktreeFile, WorktreeNode, WorktreeRoot } from './worktreeNodes'
 import { ConfigService } from './configService'
 import { BranchStackService } from './branchStackService'
 import { WorkspaceSync } from './workspaceSync'
@@ -14,12 +12,9 @@ import { HunkRouter, anchorFor } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
 import { StackResolver } from './stackResolver'
 import { StackContentProvider } from './stackContentProvider'
-import { FileChangeBus } from './fileChangeBus'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
-
-export const api = new GitBraidAPI()
 
 import { withErrorHandler, showError } from './errorSurfacer'
 export { showError }
@@ -58,9 +53,6 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	log.info('activating gitbraid (version=' + context.extension.packageJSON.version + ')')
-	api.tempDir = context.storageUri!
-	await api.worktreeView.initTreeview()
-
 	// ─── Phase 1: Branch-overlay services ─────────────────────────────────────
 	const workspaceRoot = vscode.workspace.workspaceFolders[0].uri
 	const configService = ConfigService.getInstance()
@@ -479,49 +471,53 @@ export async function activate(context: vscode.ExtensionContext) {
 	const mbcExportedApi = new MbcApi(configService, branchStack, workspaceSync, workspaceRoot)
 	context.subscriptions.push(...registerLmTools(mbcExportedApi))
 
-	// ********** WorktreeView Refresh Events ********** //
-	// context.subscriptions.push(api.worktreeView.onDidChangeTreeData((e) => {
-	// 	// if (e.uri.fsPath == vscode.workspace.workspaceFolders![0].uri.fsPath) {
-	// 	// 	return
-	// 	// }
-	// 	log.info('onDidChangeTreeData e=' + e?.id + ' ' + e)
-	// 	// return worktreeView.refresh()
-	// }))
-
-	// ********** WorktreeView Commands ********** //
-	commands.push(vscode.commands.registerCommand('gitbraid.refreshView', () => api.refresh()))
-
-	// ********** WorktreeRoot Commands ********** //
+	// ─── Phase 6: Worktree management commands ────────────────────────────────
 	commands.push(
-		vscode.commands.registerCommand('gitbraid.refresh', (node?: WorktreeNode) => api.refresh(node)),
-		vscode.commands.registerCommand('gitbraid.createWorktree', () => api.createWorktree(vscode.workspace.workspaceFolders![0])),
-		vscode.commands.registerCommand('gitbraid.deleteWorktree', (node: WorktreeRoot) => api.deleteWorktree(node)),
-		vscode.commands.registerCommand('gitbraid.lockWorktree', (node: WorktreeRoot) => api.lockWorktree(node)),
-		vscode.commands.registerCommand('gitbraid.swapWorktrees', (node: WorktreeRoot) => api.swapWorktrees(node)),
-		vscode.commands.registerCommand('gitbraid.unlockWorktree', (node: WorktreeRoot) => api.unlockWorktree(node)),
-		vscode.commands.registerCommand('gitbraid.launchWindowForWorktree', (node: WorktreeRoot) => api.launchWindowForWorktree(node))
+		vscode.commands.registerCommand('gitbraid.launchWindowForWorktree', cmd(async (node?: BranchNode) => {
+			const branchName = node instanceof BranchNode ? node.entry.name
+				: await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Open branch worktree in new window' })
+			if (!branchName) return
+			await vscode.commands.executeCommand('vscode.openFolder', branchStack.getWorktreePath(branchName), { forceNewWindow: true })
+		})),
+		vscode.commands.registerCommand('gitbraid.lockWorktree', cmd(async (node?: BranchNode) => {
+			const branchName = node instanceof BranchNode ? node.entry.name
+				: await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Lock worktree for branch' })
+			if (!branchName) return
+			await git.worktree.lock(branchStack.getWorktreePath(branchName).fsPath)
+			await vscode.window.showInformationMessage(`Locked worktree for "${branchName}"`)
+		})),
+		vscode.commands.registerCommand('gitbraid.unlockWorktree', cmd(async (node?: BranchNode) => {
+			const branchName = node instanceof BranchNode ? node.entry.name
+				: await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Unlock worktree for branch' })
+			if (!branchName) return
+			await git.worktree.unlock(branchStack.getWorktreePath(branchName).fsPath)
+			await vscode.window.showInformationMessage(`Unlocked worktree for "${branchName}"`)
+		})),
+		vscode.commands.registerCommand('gitbraid.copyToWorktree', cmd(async (node?: FileNode | FloatingFileNode) => {
+			const fileUri = (node instanceof FileNode || node instanceof FloatingFileNode) ? node.resourceUri
+				: vscode.window.activeTextEditor?.document.uri
+			if (!fileUri) return
+			const picked = await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Copy file to branch worktree' })
+			if (!picked) return
+			const rel = vscode.workspace.asRelativePath(fileUri)
+			await vscode.workspace.fs.copy(fileUri, vscode.Uri.joinPath(branchStack.getWorktreePath(picked), rel), { overwrite: true })
+			await vscode.window.showInformationMessage(`Copied ${rel} → ${picked}`)
+		})),
+		vscode.commands.registerCommand('gitbraid.moveToWorktree', cmd(async (node?: FileNode | FloatingFileNode) => {
+			const fileUri = (node instanceof FileNode || node instanceof FloatingFileNode) ? node.resourceUri
+				: vscode.window.activeTextEditor?.document.uri
+			if (!fileUri) return
+			const picked = await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Move file to branch worktree' })
+			if (!picked) return
+			const rel = vscode.workspace.asRelativePath(fileUri)
+			await vscode.workspace.fs.copy(fileUri, vscode.Uri.joinPath(branchStack.getWorktreePath(picked), rel), { overwrite: true })
+			await vscode.workspace.fs.delete(fileUri)
+			if (node instanceof FileNode) {
+				await configService.removeAssignment(rel)
+			}
+			await vscode.window.showInformationMessage(`Moved ${rel} → ${picked}`)
+		})),
 	)
-
-	// ********** WorktreeFile Commands ********** //
-	commands.push(
-		vscode.commands.registerCommand('gitbraid.selectFileNode', (id: string) => api.selectWorktreeFile(id)),
-		vscode.commands.registerCommand('gitbraid.copyToWorktree', (node: WorktreeFile) => api.copyToWorktree(node)),
-		vscode.commands.registerCommand('gitbraid.moveToWorktree', (node: WorktreeFile) => api.moveToWorktree(node)),
-		// vscode.commands.registerCommand('gitbraid.patchToWorktree', (node: WorktreeFile) => api.patchToWorktree(node)),
-		vscode.commands.registerCommand('gitbraid.stageNode', (node: WorktreeNode) => api.stage(node)),
-		vscode.commands.registerCommand('gitbraid.unstageNode', (node: WorktreeNode) => api.unstage(node)),
-		vscode.commands.registerCommand('gitbraid.discardChanges', (node: WorktreeFile) => api.discardChanges(node)),
-		// vscode.commands.registerCommand('gitbraid.compareFileWithMergeBase', (node: WorktreeFile) => api.compare(node)),
-	)
-
-	// ********** NON-API commands ********** //
-	commands.push(
-		vscode.commands.registerCommand('gitbraid.openFile', (node: WorktreeFile) => {
-			log.info('gitbraid.openFile')
-			return api.openFile(node)
-		}),
-	)
-
 
 	context.subscriptions.push(...commands)
 
@@ -530,33 +526,6 @@ export async function activate(context: vscode.ExtensionContext) {
 	// on every write). The separate activation-time writer used to race with
 	// it and occasionally double-append; consolidated in T24.
 
-	log.info('subscribe')
-	context.subscriptions.push(api.worktreeView)
-	log.info('register worktreeView')
-	vscode.window.registerTreeDataProvider('gitbraid.worktreeView', api.worktreeView)
-
-	log.info('register filewatcher (FileChangeBus)')
-	// Collapsed watcher (T10): one FileSystemWatcher + domain events instead of
-	// three overlapping `**/*` watchers.  Downstream services keep their own
-	// watchers for now — this is only the legacy worktree-view refresh path.
-	const bus = new FileChangeBus(vscode.workspace.workspaceFolders[0].uri)
-	context.subscriptions.push(bus)
-
-	bus.onDidSavePrimary((e) => {
-		if (git.ignoreCache.includes(e.uri.fsPath)) {
-			return
-		}
-		log.debug('bus.save: ' + e.relativePath)
-		void api.refreshUri(e.uri)
-	})
-	bus.onDidDeletePrimary(async (e) => {
-		if (await git.checkIgnore(e.uri.fsPath)) {
-			return
-		}
-		const repoNode = nodeMaps.getWorktreeForUri(e.uri)
-		log.debug('bus.delete: ' + e.relativePath)
-		void api.refresh(repoNode)
-	})
 	log.info('extension activation complete')
 	return mbcExportedApi
 

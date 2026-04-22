@@ -1,18 +1,7 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
-import { WorktreeNode } from './worktreeNodes'
 import { log } from './channelLogger'
 import { ConfigError } from './errors'
-
-export function validateUri (node: WorktreeNode, throwError = true) {
-	if (!node.uri) {
-		if (throwError) {
-			throw new ConfigError('Uri is undefined for node.id:' + node.id)
-		}
-		return false
-	}
-	return true
-}
 
 export function pathExists (uri: vscode.Uri) {
 	try {

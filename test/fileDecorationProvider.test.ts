@@ -48,7 +48,7 @@ suite('BranchFileDecorationProvider', () => {
 		const { git } = await import('../src/gitFunctions')
 		try {
 			await git.init()
-			await git.add(wsRoot().fsPath)
+			await git.add(undefined, wsRoot().fsPath)
 			await git.commit('Initial commit for decoration tests')
 		} catch {}
 	})
