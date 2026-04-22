@@ -253,6 +253,24 @@
 				"title": "Sync Stack (fetch + rebase each branch)",
 				"category": "GitBraid",
 				"icon": "$(sync)"
+			},
+			{
+				"command": "gitbraid.openRebaseConflicts",
+				"title": "Open Rebase Conflicts",
+				"category": "GitBraid",
+				"icon": "$(merge)"
+			},
+			{
+				"command": "gitbraid.rebaseAbort",
+				"title": "Abort Rebase",
+				"category": "GitBraid",
+				"icon": "$(close)"
+			},
+			{
+				"command": "gitbraid.rebaseContinue",
+				"title": "Continue Rebase",
+				"category": "GitBraid",
+				"icon": "$(play)"
 			}
 		],
 		"viewsWelcome": [

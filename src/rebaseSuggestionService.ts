@@ -1,8 +1,32 @@
 import * as vscode from 'vscode'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
+
+/**
+ * Detect whether `worktreeDir` is currently in the middle of a rebase.
+ * Inlined (not imported from `rebaseRecovery`) to avoid a circular import
+ * — `rebaseSuggestionService` already has a terminal position in the
+ * dependency graph, and both consumers work out of the same git state.
+ */
+function isMidRebase(worktreeDir: string): boolean {
+	let gitdir = path.join(worktreeDir, '.git')
+	try {
+		const st = fs.statSync(gitdir, { throwIfNoEntry: false })
+		if (st && st.isFile()) {
+			const content = fs.readFileSync(gitdir, 'utf-8').trim()
+			const m = /^gitdir:\s*(.+)$/.exec(content)
+			if (m) gitdir = path.resolve(worktreeDir, m[1])
+		}
+	} catch {
+		return false
+	}
+	return fs.existsSync(path.join(gitdir, 'rebase-merge')) ||
+		fs.existsSync(path.join(gitdir, 'rebase-apply'))
+}
 
 /** Default interval between automatic rebase checks (ms). */
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60 * 1_000  // 5 minutes
@@ -182,9 +206,20 @@ export class RebaseSuggestionService implements vscode.Disposable {
 			await vscode.window.showInformationMessage(`"${entry.name}" rebased onto "${entry.base}" successfully.`)
 		} else {
 			log.error(`RebaseSuggestionService: rebase failed for "${entry.name}": ${stderr}`)
-			await vscode.window.showErrorMessage(
-				`Rebase of "${entry.name}" failed. You may need to resolve conflicts manually.\n${stderr}`,
-			)
+			// If the worktree is in mid-rebase state the `RebaseRecovery`
+			// watcher will surface the conflict resolution prompt.  Point the
+			// user at it rather than duplicating the "resolve manually" popup.
+			const paused = isMidRebase(cwd)
+			if (paused) {
+				await vscode.window.showWarningMessage(
+					`Rebase of "${entry.name}" paused — resolve the conflicts then run "GitBraid: Continue Rebase".`,
+					{ modal: false },
+				)
+			} else {
+				await vscode.window.showErrorMessage(
+					`Rebase of "${entry.name}" failed.\n${stderr}`,
+				)
+			}
 		}
 	}
 

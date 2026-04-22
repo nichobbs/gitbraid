@@ -195,10 +195,28 @@ Annotated during execution. Checkpoint SHAs refer to the
 
 ### Still to land
 
-- T11 (full tree-view reconciliation — retire the legacy worktree
-  view or drive it from the same data model).
-- T16 (walkthrough PNGs — asset capture).
-- P3 roadmap items per `10-sequencing.md`.
+- T16 (walkthrough **real screenshots** — placeholder SVGs landed, real
+  screenshots still pending; procedure documented in
+  `resources/README.md`).
+- P3 roadmap items per `10-sequencing.md` (undo/redo, assignment
+  import/export, PR awareness, multi-root, MCP server).
+
+### Roadmap — landed
+
+- **T11** (full tree-view reconciliation) — landed directly on `main`
+  via commits `e73a326` and `3becd35`; legacy `WorktreeView`,
+  `worktreeNodes`, and `commands.ts` subsystems retired in favour of
+  the Branch Stack view.
+- **T16 (partial)** — four walkthrough SVG placeholder illustrations
+  ship; real screenshots can be dropped in as follow-up by keeping
+  the filenames.
+- **T67** — `gitbraid.pushStack` / `gitbraid.syncStack` with
+  `--force-with-lease` opt-in gating and dirty-worktree skip.
+- **T70** — rebase conflict recovery: detects mid-rebase via
+  `.git/rebase-merge` / `.git/rebase-apply`, watches worktrees for
+  state transitions, and exposes Open Conflicts / Abort / Continue
+  commands.  `RebaseSuggestionService` hands off to the recovery path
+  when its own rebase bails instead of showing a generic error.
 
 ### Bus-migration + hardening — landed
 

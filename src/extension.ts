@@ -14,6 +14,7 @@ import { StackResolver } from './stackResolver'
 import { StackContentProvider } from './stackContentProvider'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { StackCommands } from './stackCommands'
+import { RebaseRecovery } from './rebaseRecovery'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
 
@@ -255,7 +256,22 @@ export async function activate(context: vscode.ExtensionContext) {
 	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
 	rebaseSvc.init(workspaceRoot)
 	const stackCommands = new StackCommands(configService, branchStack, rebaseSvc, workspaceRoot)
-	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider, stackCommands)
+	const rebaseRecovery = new RebaseRecovery()
+	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider, stackCommands, rebaseRecovery)
+
+	// Watch every existing and future worktree for mid-rebase state so the
+	// "rebase paused" toast fires the moment a rebase bails (T70).
+	const watchAllWorktrees = () => {
+		for (const entry of configService.getStack()) {
+			if (branchStack.worktreeExists(entry.name)) {
+				rebaseRecovery.watch(branchStack.getWorktreePath(entry.name).fsPath)
+			}
+		}
+	}
+	watchAllWorktrees()
+	context.subscriptions.push(
+		configService.onDidChangeStack(() => watchAllWorktrees()),
+	)
 
 	// Refresh any open gitbraid-stack: documents when assignments change.
 	context.subscriptions.push(
@@ -263,6 +279,32 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (e.relativePath) stackContentProvider.refresh(e.relativePath)
 		}),
 	)
+
+	// Helper: resolve a BranchNode argument, a branch-name string, or prompt
+	// the user to pick one from the current stack.  Used by the T70 rebase
+	// recovery commands so they share a single UX.
+	const pickBranchWorktree = async (
+		arg: string | BranchNode | undefined,
+		placeholder: string,
+	): Promise<string | undefined> => {
+		const stack = configService.getStack()
+		if (stack.length === 0) {
+			await vscode.window.showWarningMessage('Stack is empty.')
+			return undefined
+		}
+		const name = arg instanceof BranchNode
+			? arg.entry.name
+			: (arg ?? (await vscode.window.showQuickPick(
+				stack.map((e) => e.name),
+				{ placeHolder: placeholder },
+			)))
+		if (!name) return undefined
+		if (!branchStack.worktreeExists(name)) {
+			await vscode.window.showWarningMessage(`No worktree exists for "${name}".`)
+			return undefined
+		}
+		return branchStack.getWorktreePath(name).fsPath
+	}
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
 	commands.push(
@@ -493,6 +535,23 @@ export async function activate(context: vscode.ExtensionContext) {
 			)
 			if (!mode) return
 			await stackCommands.pushStack({ forceWithLease: mode.force })
+		})),
+
+		// T70 — rebase conflict recovery.
+		vscode.commands.registerCommand('gitbraid.rebaseAbort', cmd(async (arg?: string | BranchNode) => {
+			const wt = await pickBranchWorktree(arg, 'Abort rebase in branch')
+			if (!wt) return
+			await rebaseRecovery.abort(wt)
+		})),
+		vscode.commands.registerCommand('gitbraid.rebaseContinue', cmd(async (arg?: string | BranchNode) => {
+			const wt = await pickBranchWorktree(arg, 'Continue rebase in branch')
+			if (!wt) return
+			await rebaseRecovery.continue(wt)
+		})),
+		vscode.commands.registerCommand('gitbraid.openRebaseConflicts', cmd(async (arg?: string | BranchNode) => {
+			const wt = await pickBranchWorktree(arg, 'Open conflicts for branch')
+			if (!wt) return
+			await rebaseRecovery.openConflicts(wt)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.syncStack', cmd(async () => {
