@@ -214,6 +214,8 @@ export class WorkspaceSync implements vscode.Disposable {
 				if (entry.length < 4 || entry[2] !== ' ') continue
 				const relativePath = entry.slice(3)
 				if (relativePath.startsWith('.worktrees/') || relativePath.startsWith('.git/')) continue
+				// Skip bare ".git" entries (worktree pointer files or git internals).
+				if (relativePath === '.git' || relativePath.endsWith('/.git')) continue
 				// Skip files already assigned — rehideAssignedFiles handles those.
 				if (this._config.getAssignment(relativePath)) continue
 

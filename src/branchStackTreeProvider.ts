@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import * as path from 'node:path'
 import { ConfigService } from './configService'
 import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry } from './configTypes'
@@ -8,7 +9,25 @@ import { git } from './gitFunctions'
 
 // ─── Tree node types ──────────────────────────────────────────────────────────
 
-export type StackTreeNode = BranchNode | FileNode | FloatingGroupNode | FloatingFileNode
+export type StackTreeNode = ProjectNode | BranchNode | FileNode | FloatingGroupNode | FloatingFileNode
+
+/**
+ * Root-level node representing the workspace folder (project).  Branch nodes
+ * are shown as its children so the active folder name is visible at a glance.
+ * Only created when a `rootUri` is supplied to the provider — omitted in
+ * test contexts that construct the provider without a URI.
+ */
+export class ProjectNode extends vscode.TreeItem {
+	readonly kind = 'project' as const
+	constructor(public readonly rootUri: vscode.Uri) {
+		const name = path.basename(rootUri.fsPath)
+		super(name, vscode.TreeItemCollapsibleState.Expanded)
+		this.contextValue = 'project'
+		this.iconPath = new vscode.ThemeIcon('root-folder')
+		this.tooltip = rootUri.fsPath
+		this.resourceUri = rootUri
+	}
+}
 
 /** A branch in the stack — top-level node. */
 export class BranchNode extends vscode.TreeItem {
@@ -130,6 +149,7 @@ export class BranchStackTreeProvider
 
 	private _config: ConfigService
 	private _sync: WorkspaceSync
+	private _rootUri: vscode.Uri | undefined
 
 	/** The currently checked-out branch name; refreshed on HEAD change. */
 	private _currentBranch: string | undefined = undefined
@@ -140,9 +160,11 @@ export class BranchStackTreeProvider
 		private readonly _onAssign?: (rel: string, newBranch: string, previous: string | undefined) => void,
 		private readonly _onUnassign?: (rel: string, previous: string) => void,
 		private readonly _prAwareness?: PRAwareness,
+		rootUri?: vscode.Uri,
 	) {
 		this._config = config
 		this._sync = sync
+		this._rootUri = rootUri
 		this._wireContext()
 
 		// Seed the current branch cache before the first render.
@@ -176,12 +198,13 @@ export class BranchStackTreeProvider
 	 * the active folder in multi-root workspaces (multi-root phase 2).
 	 * Idempotent — passing the same services is a no-op.
 	 */
-	setContext(config: ConfigService, sync: WorkspaceSync): void {
-		if (config === this._config && sync === this._sync) return
+	setContext(config: ConfigService, sync: WorkspaceSync, rootUri?: vscode.Uri): void {
+		if (config === this._config && sync === this._sync && (rootUri === undefined || rootUri === this._rootUri)) return
 		for (const d of this._contextDisposables) d.dispose()
 		this._contextDisposables = []
 		this._config = config
 		this._sync = sync
+		if (rootUri !== undefined) this._rootUri = rootUri
 		this._wireContext()
 		this.refresh()
 	}
@@ -310,6 +333,7 @@ export class BranchStackTreeProvider
 	}
 
 	getTreeItem(element: StackTreeNode): vscode.TreeItem {
+		if (element.kind === 'project') return element
 		if (element.kind === 'branch' && this._prAwareness) {
 			const info = this._prAwareness.getForBranch(element.entry.name)
 			if (info) {
@@ -328,18 +352,17 @@ export class BranchStackTreeProvider
 
 	getChildren(element?: StackTreeNode): StackTreeNode[] {
 		if (!element) {
-			// Root: current branch (if not in the managed stack) + stack entries + floating group
-			const stack = this._config.getStack()
-			const floating = this._sync.getFloatingDirty()
-			const nodes: StackTreeNode[] = []
-			// Show the active checkout branch so users can assign files to it
-			// without those files appearing as "floating".
-			if (this._currentBranch && !stack.some(e => e.name === this._currentBranch)) {
-				nodes.push(new CurrentBranchNode(this._currentBranch))
+			// When a rootUri is set, the root level contains a single ProjectNode;
+			// branches and the floating group are its children.  Without a rootUri
+			// the flat list is returned directly (backwards-compatible for tests).
+			if (this._rootUri) {
+				return [new ProjectNode(this._rootUri)]
 			}
-			nodes.push(...stack.map((e) => new BranchNode(e)))
-			nodes.push(new FloatingGroupNode(floating.length))
-			return nodes
+			return this._branchChildren()
+		}
+
+		if (element.kind === 'project') {
+			return this._branchChildren()
 		}
 
 		if (element.kind === 'branch') {
@@ -360,7 +383,31 @@ export class BranchStackTreeProvider
 		return []
 	}
 
+	/**
+	 * Returns the children of the project/root node: the active branch first
+	 * (if it is not already a managed stack entry), then managed stack branches
+	 * sorted alphabetically, then the floating group at the end.
+	 */
+	private _branchChildren(): StackTreeNode[] {
+		const stack = this._config.getStack()
+		const floating = this._sync.getFloatingDirty()
+		const nodes: StackTreeNode[] = []
+		// Active checkout branch — shown first when not already in the managed stack.
+		if (this._currentBranch && !stack.some(e => e.name === this._currentBranch)) {
+			nodes.push(new CurrentBranchNode(this._currentBranch))
+		}
+		// Managed stack branches sorted alphabetically.
+		const sorted = [...stack].sort((a, b) => a.name.localeCompare(b.name))
+		nodes.push(...sorted.map((e) => new BranchNode(e)))
+		nodes.push(new FloatingGroupNode(floating.length))
+		return nodes
+	}
+
 	getParent(element: StackTreeNode): StackTreeNode | undefined {
+		if (element.kind === 'project') return undefined
+		if (element.kind === 'branch' || element.kind === 'floatingGroup') {
+			return this._rootUri ? new ProjectNode(this._rootUri) : undefined
+		}
 		if (element.kind === 'file') {
 			const entry = this._config.getBranch(element.branchName)
 			return entry ? new BranchNode(entry) : undefined

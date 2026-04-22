@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import * as fs from 'node:fs'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { WorkspaceSync } from './workspaceSync'
@@ -25,9 +26,13 @@ async function gitStatusInDir(runner: IGitRunner, dir: string): Promise<Worktree
 		return []
 	}
 	const results: WorktreeFileStatus[] = []
-	// null-separated entries; each entry is "<XY> <path>" (or rename "XY old\0new")
+	// NUL-separated entries in porcelain v1 -z format.
+	// Each primary entry is "XY<SP>path"; for renames the old path follows as
+	// a bare "old_path" token (no XY prefix).  We skip those secondary tokens
+	// by requiring entry[2] === ' '.
 	const entries = stdout.split('\0').filter((s) => s.length > 0)
 	for (const entry of entries) {
+		if (entry.length < 4 || entry[2] !== ' ') continue
 		const xy = entry.slice(0, 2)
 		const file = entry.slice(3)
 		if (file) {
@@ -129,12 +134,22 @@ class BranchScmEntry implements vscode.Disposable {
 			return
 		}
 		this._lastRefreshAt = now
-		const statuses = await gitStatusInDir(this._runner, this._worktreeDir)
+		// If the worktree directory does not exist the branch is the currently
+		// checked-out branch whose files live in the primary workspace.  Fall
+		// back to the workspace root so its changes are visible in the SCM view
+		// (important when the built-in git provider is disabled).
+		const statusDir = fs.existsSync(this._worktreeDir)
+			? this._worktreeDir
+			: this._workspaceRoot.fsPath
+		const statusRoot = fs.existsSync(this._worktreeDir)
+			? vscode.Uri.file(this._worktreeDir)
+			: this._workspaceRoot
+		const statuses = await gitStatusInDir(this._runner, statusDir)
 		const stagedUris: vscode.SourceControlResourceState[] = []
 		const changedUris: vscode.SourceControlResourceState[] = []
 
 		for (const { xy, relativePath } of statuses) {
-			const uri = vscode.Uri.joinPath(vscode.Uri.file(this._worktreeDir), relativePath)
+			const uri = vscode.Uri.joinPath(statusRoot, relativePath)
 			const indexStatus = xy[0]
 			const workStatus = xy[1]
 
@@ -223,22 +238,33 @@ export class BranchScmProviderManager implements vscode.Disposable {
 	}
 
 	private async _rebuild(): Promise<void> {
-		// Dispose entries for branches no longer in the stack
-		const currentNames = new Set(this._config.getStack().map((e) => e.name))
+		// Sort branches alphabetically so the SCM view presents them in a
+		// consistent, predictable order regardless of stack insertion sequence.
+		const stackEntries = [...this._config.getStack()].sort((a, b) => a.name.localeCompare(b.name))
+		const currentNames = new Set(stackEntries.map((e) => e.name))
+
+		// Save input-box values so typed-but-not-committed messages survive a
+		// rebuild (e.g. when the user adds a new branch while composing a commit).
+		const savedValues = new Map<string, string>()
 		for (const [name, entry] of this._entries) {
-			if (!currentNames.has(name)) {
-				entry.dispose()
-				this._entries.delete(name)
-			}
+			savedValues.set(name, entry.inputBox.value)
 		}
 
-		// Create entries for new branches
-		for (const branchEntry of this._config.getStack()) {
-			if (!this._entries.has(branchEntry.name)) {
-				const wtDir = worktreePath(this._workspaceRoot, branchEntry.name).fsPath
-				const scmEntry = new BranchScmEntry(branchEntry, wtDir, this._workspaceRoot, this._runner)
-				this._entries.set(branchEntry.name, scmEntry)
-			}
+		// Dispose all existing entries and recreate in sorted order.
+		// VS Code shows SCM providers in creation order, so recreating them
+		// ensures alphabetical display even after branches are added/reordered.
+		for (const entry of this._entries.values()) {
+			entry.dispose()
+		}
+		this._entries.clear()
+
+		for (const branchEntry of stackEntries) {
+			if (!currentNames.has(branchEntry.name)) continue
+			const wtDir = worktreePath(this._workspaceRoot, branchEntry.name).fsPath
+			const scmEntry = new BranchScmEntry(branchEntry, wtDir, this._workspaceRoot, this._runner)
+			const saved = savedValues.get(branchEntry.name)
+			if (saved) scmEntry.inputBox.value = saved
+			this._entries.set(branchEntry.name, scmEntry)
 		}
 
 		await this._refreshAll()

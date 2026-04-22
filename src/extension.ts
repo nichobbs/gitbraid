@@ -154,6 +154,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			recordUnassignFile(ctx.undoStack, ctx.config, rel, previous)
 		},
 		prAwareness,
+		primary.root,
 	)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
@@ -178,7 +179,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// registry-aware per-URI so they need no rebinding.
 	const updateActive = () => {
 		const ctx = registry.getActive() ?? primary
-		stackTreeProvider.setContext(ctx.config, ctx.workspaceSync)
+		stackTreeProvider.setContext(ctx.config, ctx.workspaceSync, ctx.root)
 		statusBar.setContext(ctx.workspaceSync, ctx.config)
 	}
 	context.subscriptions.push(
