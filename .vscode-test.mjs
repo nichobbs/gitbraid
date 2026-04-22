@@ -56,8 +56,10 @@ const config = {
     ],
     /** @type {import('@vscode/test-cli').ICoverageConfiguration} */
     coverage: {
+        // @vscode/test-cli's `lcovonly` reporter writes to `coverage/`
+        // regardless of the `output` setting, so don't mislead by
+        // specifying one.  CI reads `coverage/lcov.info` directly.
         reporter: [ 'text', 'lcovonly' ],
-        output: path.resolve(__dirname, 'artifacts'),
     }
 }
 

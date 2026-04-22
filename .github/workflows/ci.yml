@@ -60,7 +60,10 @@ jobs:
 
       # Coverage floor (Linux only — macOS / Windows share the same code
       # coverage as Linux so there's no value in running this three times).
-      # Thresholds intentionally left conservative for 0.1; they should be
+      # `@vscode/test-cli` writes the lcovonly report to `coverage/` by
+      # default regardless of the `coverage.output` hint, so point the
+      # gate and the upload at the real location.  Thresholds
+      # intentionally left conservative for 0.1; they should be
       # ratcheted up as the test suite grows.  Failures are blocking.
       - name: Check coverage floor
         if: matrix.os == 'ubuntu-latest'
@@ -69,7 +72,7 @@ jobs:
             --lines 55 \
             --branches 45 \
             --functions 55 \
-            artifacts/lcov.info
+            coverage/lcov.info
 
       - name: Package VSIX
         run: npx vsce package --no-dependencies
@@ -87,5 +90,5 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && always()
         with:
           name: gitbraid-coverage
-          path: artifacts/lcov.info
+          path: coverage/lcov.info
           if-no-files-found: warn
