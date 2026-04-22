@@ -61,9 +61,12 @@ suite('FileChangeBus (T10)', () => {
 		// watcher can pick up writes under it.  VS Code's FileSystemWatcher
 		// on `**/*` is flaky for dotted subdirectories and for paths that
 		// didn't exist when the watch started, especially on CI runners,
-		// so we probe with retries and skip rather than false-fail.
+		// so we probe with retries and skip rather than false-fail.  Use a
+		// per-run unique directory name so stale events from earlier runs
+		// (e.g. a crashed teardown) can't contaminate this run's assertion.
 		bus.dispose()
-		const worktreeDir = path.join(wsRoot().fsPath, '.worktrees', 'synthetic-dir')
+		const dirName = `synthetic-dir-${String(Date.now())}-${String(Math.floor(Math.random() * 1e6))}`
+		const worktreeDir = path.join(wsRoot().fsPath, '.worktrees', dirName)
 		fs.mkdirSync(worktreeDir, { recursive: true })
 		bus = new FileChangeBus(wsRoot())
 		await sleep(150)
@@ -75,16 +78,19 @@ suite('FileChangeBus (T10)', () => {
 
 		// Write then poll for up to 2 s — some watchers need an
 		// appendFile/touch to fire reliably rather than a single create.
+		// Break only when the *target* event arrives, not just any event,
+		// so a spurious unrelated event can't short-circuit the probe.
 		const targetFile = path.join(worktreeDir, 'file.txt')
+		const hasTarget = () => worktree.some((e) => e.worktreeDirName === dirName && e.relativePath === 'file.txt')
 		for (let attempt = 0; attempt < 10; attempt++) {
 			fs.writeFileSync(targetFile, `hi-${String(attempt)}`)
 			await sleep(200)
-			if (worktree.length > 0) break
+			if (hasTarget()) break
 		}
 
 		d1.dispose()
 		d2.dispose()
-		fs.rmSync(path.join(wsRoot().fsPath, '.worktrees', 'synthetic-dir'), { recursive: true, force: true })
+		fs.rmSync(worktreeDir, { recursive: true, force: true })
 
 		if (worktree.length === 0) {
 			// The FileSystemWatcher didn't fire at all — this is an
@@ -97,8 +103,8 @@ suite('FileChangeBus (T10)', () => {
 
 		assert.strictEqual(primary.length, 0, 'worktree writes must not fire onDidSavePrimary')
 		assert.ok(
-			worktree.some((e) => e.worktreeDirName === 'synthetic-dir' && e.relativePath === 'file.txt'),
-			`expected worktree event for synthetic-dir/file.txt, got ${JSON.stringify(worktree)}`,
+			hasTarget(),
+			`expected worktree event for ${dirName}/file.txt, got ${JSON.stringify(worktree)}`,
 		)
 	})
 })
