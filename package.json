@@ -213,6 +213,12 @@
 				"icon": "$(git-branch-delete)"
 			},
 			{
+				"command": "gitbraid.resetBranch",
+				"title": "Reset Branch (Unassign All Files)",
+				"category": "GitBraid",
+				"icon": "$(discard)"
+			},
+			{
 				"command": "gitbraid.routeHunks",
 				"title": "Route Hunks to Assigned Branches",
 				"category": "GitBraid",
@@ -385,6 +391,11 @@
 					"command": "gitbraid.unassignFile",
 					"when": "!explorerResourceIsFolder",
 					"group": "gitbraid@2"
+				},
+				{
+					"command": "gitbraid.unassignFolder",
+					"when": "explorerResourceIsFolder",
+					"group": "gitbraid@2"
 				}
 			],
 			"scm/resourceState/context": [
@@ -466,6 +477,11 @@
 					"command": "gitbraid.removeStackBranch",
 					"when": "view == gitbraid.stackView && viewItem == branch",
 					"group": "inline"
+				},
+				{
+					"command": "gitbraid.resetBranch",
+					"when": "view == gitbraid.stackView && viewItem == branch",
+					"group": "branch@1"
 				},
 				{
 					"command": "gitbraid.setBranchColor",

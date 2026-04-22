@@ -712,6 +712,39 @@ export async function activate(context: vscode.ExtensionContext) {
 			await vscode.window.showInformationMessage(`Unassigned ${rel}`)
 		})),
 
+		// gitbraid.unassignFolder — removes assignments for all assigned files
+		// under a folder, mirroring assignFolder.  Only files that currently
+		// have an assignment are touched.
+		vscode.commands.registerCommand('gitbraid.unassignFolder', cmd(async (arg?: unknown) => {
+			const folderUri = extractFileUri(arg)
+			if (!folderUri) {
+				await vscode.window.showWarningMessage('No folder selected to unassign.')
+				return
+			}
+			const ctx = contextForUri(folderUri)
+			const relFolder = relativePathIn(ctx, folderUri)
+			const result = await getDefaultGitRunner().run(
+				['ls-files', '--modified', '--others', '--exclude-standard', '--', relFolder],
+				{ cwd: ctx.root.fsPath },
+			)
+			const files = result.stdout.split('\n').filter(Boolean)
+			const runner = getDefaultGitRunner()
+			let count = 0
+			for (const f of files) {
+				const previous = ctx.config.getAssignment(f)
+				if (previous === undefined) continue
+				await ctx.config.removeAssignment(f)
+				recordUnassignFile(ctx.undoStack, ctx.config, f, previous)
+				await unhideAssignedFile(runner, ctx.root.fsPath, f)
+				count++
+			}
+			if (count === 0) {
+				await vscode.window.showInformationMessage('No assigned files found under that folder.')
+			} else {
+				await vscode.window.showInformationMessage(`Unassigned ${count} file${count === 1 ? '' : 's'} under ${relFolder}`)
+			}
+		})),
+
 		vscode.commands.registerCommand('gitbraid.addStackBranch', cmd(async () => {
 			// Multi-root: add to whichever folder the user is currently
 			// editing (not the first workspace folder).
@@ -860,6 +893,73 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			await ctx.branchStack.removeBranchFromStack(picked)
 			await vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
+		})),
+
+		// ── Reset branch ──────────────────────────────────────────────────────
+		// Unassigns every file from a branch, restores those files in the branch's
+		// worktree to HEAD (discarding uncommitted changes), and un-hides them in
+		// the main workspace so they appear as normal floating changes again.
+		vscode.commands.registerCommand('gitbraid.resetBranch', cmd(async (arg?: unknown) => {
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showWarningMessage('Stack is empty.')
+				return
+			}
+			const picked = arg instanceof BranchNode
+				? arg.entry.name
+				: await resolveBranchNameArg(arg, 'Reset branch — unassign all files')
+			if (!picked) return
+
+			const allAssignments = ctx.config.getAllAssignments()
+			const assignedFiles = Object.entries(allAssignments)
+				.filter(([, b]) => b === picked)
+				.map(([rel]) => rel)
+
+			if (assignedFiles.length === 0) {
+				await vscode.window.showInformationMessage(
+					`Branch "${picked}" has no assigned files.`,
+				)
+				return
+			}
+
+			const confirm = await vscode.window.showWarningMessage(
+				`Reset "${picked}"? This will unassign ${assignedFiles.length} file(s) and discard their uncommitted changes in the worktree.`,
+				{ modal: true },
+				'Reset',
+			)
+			if (confirm !== 'Reset') return
+
+			const runner = getDefaultGitRunner()
+			const hasWorktree = ctx.branchStack.worktreeExists(picked)
+			const wtDir = hasWorktree ? ctx.branchStack.getWorktreePath(picked).fsPath : undefined
+
+			await vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: `GitBraid: resetting "${picked}"…`, cancellable: false },
+				async () => {
+					for (const rel of assignedFiles) {
+						// Restore file to HEAD in the worktree (discards uncommitted edits).
+						if (wtDir) {
+							try {
+								await runner.run(
+									['checkout', 'HEAD', '--', rel],
+									{ cwd: wtDir },
+								)
+							} catch {
+								// File may not exist in HEAD yet (untracked in worktree) — skip restore
+							}
+						}
+						// Undo skip-worktree / .git/info/exclude so main workspace sees the file again.
+						await unhideAssignedFile(runner, ctx.root.fsPath, rel)
+						// Remove the assignment record.
+						await ctx.config.removeAssignment(rel)
+					}
+				},
+			)
+
+			await vscode.window.showInformationMessage(
+				`GitBraid: reset "${picked}" — ${assignedFiles.length} file(s) returned to main workspace.`,
+			)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.rebaseBranch', cmd(async (arg?: string | BranchNode) => {
