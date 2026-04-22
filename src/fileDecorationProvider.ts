@@ -218,7 +218,12 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
  * mapping to the same chart colour can still be visually distinguished.
  */
 function branchBadge(branchName: string): string {
-	const slug = branchName.replace(/^[^A-Za-z0-9]*/, '').slice(0, 2)
+	// For "feature/my-feature" → use the part AFTER the first slash ("my")
+	// so branches under the same prefix (feature/, chore/, fix/) stay distinct.
+	// For "main" or "develop" (no slash) → use the name directly.
+	const slashIdx = branchName.indexOf('/')
+	const meaningful = slashIdx >= 0 ? branchName.slice(slashIdx + 1) : branchName
+	const slug = meaningful.replace(/^[^A-Za-z0-9]*/, '').slice(0, 2)
 	return slug.length > 0 ? slug.toUpperCase() : '·'
 }
 

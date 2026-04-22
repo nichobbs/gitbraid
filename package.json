@@ -307,6 +307,36 @@
 				"title": "Show Active Folder (multi-root)",
 				"category": "GitBraid",
 				"icon": "$(folder-active)"
+			},
+			{
+				"command": "gitbraid.setBranchColor",
+				"title": "Set Branch Colour",
+				"category": "GitBraid",
+				"icon": "$(symbol-color)"
+			},
+			{
+				"command": "gitbraid.rehideAssignedFiles",
+				"title": "Re-hide Assigned Files",
+				"category": "GitBraid",
+				"icon": "$(eye-closed)"
+			},
+			{
+				"command": "gitbraid.scm.generateCommitMessage",
+				"title": "Generate Commit Message",
+				"category": "GitBraid",
+				"icon": "$(sparkle)"
+			},
+			{
+				"command": "gitbraid.scm.pushBranch",
+				"title": "Push Branch",
+				"category": "GitBraid",
+				"icon": "$(cloud-upload)"
+			},
+			{
+				"command": "gitbraid.scm.stashBranch",
+				"title": "Stash Branch Changes",
+				"category": "GitBraid",
+				"icon": "$(archive)"
 			}
 		],
 		"viewsWelcome": [
@@ -327,6 +357,11 @@
 					"command": "gitbraid.stackView.refresh",
 					"when": "view == gitbraid.stackView",
 					"group": "navigation"
+				},
+				{
+					"command": "gitbraid.rehideAssignedFiles",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
 				}
 			],
 			"explorer/context": [
@@ -338,6 +373,35 @@
 					"command": "gitbraid.unassignFile",
 					"when": "!explorerResourceIsFolder",
 					"group": "gitbraid@2"
+				}
+			],
+			"scm/resourceState/context": [
+				{
+					"command": "gitbraid.assignFile",
+					"when": "scmProvider == git",
+					"group": "gitbraid@1"
+				},
+				{
+					"command": "gitbraid.unassignFile",
+					"when": "scmProvider == git",
+					"group": "gitbraid@2"
+				}
+			],
+			"scm/title": [
+				{
+					"command": "gitbraid.scm.generateCommitMessage",
+					"when": "scmProvider =~ /^gitbraid-/",
+					"group": "1_scm@1"
+				},
+				{
+					"command": "gitbraid.scm.pushBranch",
+					"when": "scmProvider =~ /^gitbraid-/",
+					"group": "1_scm@2"
+				},
+				{
+					"command": "gitbraid.scm.stashBranch",
+					"when": "scmProvider =~ /^gitbraid-/",
+					"group": "1_scm@3"
 				}
 			],
 			"view/item/context": [
@@ -390,6 +454,11 @@
 					"command": "gitbraid.removeStackBranch",
 					"when": "view == gitbraid.stackView && viewItem == branch",
 					"group": "inline"
+				},
+				{
+					"command": "gitbraid.setBranchColor",
+					"when": "view == gitbraid.stackView && viewItem == branch",
+					"group": "branch@3"
 				}
 			]
 		},
@@ -406,6 +475,17 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Warn when committing a branch that has floating (unassigned) files."
+				},
+				"gitbraid.autoDisableGit": {
+					"type": "string",
+					"default": "prompt",
+					"enum": ["never", "prompt", "auto"],
+					"enumDescriptions": [
+						"Never disable the built-in git extension automatically.",
+						"Ask once when the first branch is added to the stack.",
+						"Automatically disable the built-in git extension when the first branch is added."
+					],
+					"description": "Controls whether the built-in git SCM provider is disabled when GitBraid manages the first branch. GitBraid provides its own per-branch SCM entries, so the built-in git view becomes redundant."
 				},
 				"gitbraid.prDecorationsEnabled": {
 					"type": "boolean",

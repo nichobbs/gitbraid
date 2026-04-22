@@ -209,6 +209,89 @@ export async function activate(context: vscode.ExtensionContext) {
 	commands.push(
 		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => stackTreeProvider.refresh()),
 
+		// Set the colour of a branch in the stack.
+		vscode.commands.registerCommand('gitbraid.setBranchColor', cmd(async (arg?: BranchNode) => {
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
+			let branchName: string | undefined
+
+			if (arg instanceof BranchNode) {
+				branchName = arg.entry.name
+			} else {
+				const picked = await vscode.window.showQuickPick(
+					stack.map((e) => ({ label: e.name, description: e.color })),
+					{ placeHolder: 'Select branch to recolour' },
+				)
+				branchName = picked?.label
+			}
+
+			if (!branchName) { return }
+
+			const presets: Array<vscode.QuickPickItem & { color: string }> = [
+				{ label: '$(circle-filled) Teal',    description: '#4ec9b0', color: '#4ec9b0' },
+				{ label: '$(circle-filled) Blue',    description: '#2196F3', color: '#2196F3' },
+				{ label: '$(circle-filled) Green',   description: '#4CAF50', color: '#4CAF50' },
+				{ label: '$(circle-filled) Yellow',  description: '#f0d000', color: '#f0d000' },
+				{ label: '$(circle-filled) Orange',  description: '#f5a623', color: '#f5a623' },
+				{ label: '$(circle-filled) Red',     description: '#e06c75', color: '#e06c75' },
+				{ label: '$(circle-filled) Purple',  description: '#c586c0', color: '#c586c0' },
+				{ label: '$(circle-filled) Grey',    description: '#888888', color: '#888888' },
+				{ label: '$(edit) Enter hex colour…', description: 'e.g. #a0c4ff', color: '' },
+			]
+
+			const selection = await vscode.window.showQuickPick(presets, {
+				placeHolder: `Choose colour for "${branchName}"`,
+			})
+			if (!selection) { return }
+
+			let color = selection.color
+			if (color === '') {
+				const input = await vscode.window.showInputBox({
+					prompt: `Hex colour for "${branchName}"`,
+					placeHolder: '#a0c4ff',
+					validateInput: (v) =>
+						/^#[0-9a-fA-F]{6}$/.test(v) ? undefined : 'Must be a 6-digit hex colour, e.g. #4ec9b0',
+				})
+				if (!input) { return }
+				color = input
+			}
+
+			await ctx.config.setBranchColor(branchName, color)
+		})),
+
+		// Re-apply skip-worktree / exclude hiding for all currently assigned
+		// files.  Useful after a repo clone, or for files assigned before the
+		// hiding logic was introduced.
+		vscode.commands.registerCommand('gitbraid.rehideAssignedFiles', cmd(async () => {
+			const ctx = activeContext()
+			const assignments = ctx.config.getAllAssignments()
+			const entries = Object.entries(assignments)
+			if (entries.length === 0) {
+				await vscode.window.showInformationMessage('GitBraid: no files are currently assigned.')
+				return
+			}
+			const runner = getDefaultGitRunner()
+			let hidden = 0
+			let skipped = 0
+			await vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: 'GitBraid: re-hiding assigned files…', cancellable: false },
+				async () => {
+					for (const [rel, branch] of entries) {
+						if (ctx.branchStack.worktreeExists(branch)) {
+							await hideAssignedFile(runner, ctx.root.fsPath, rel)
+							hidden++
+						} else {
+							skipped++
+						}
+					}
+				},
+			)
+			const msg = skipped > 0
+				? `Re-hid ${hidden} file(s). Skipped ${skipped} (assigned to the current branch — no worktree).`
+				: `Re-hid ${hidden} file(s).`
+			await vscode.window.showInformationMessage(`GitBraid: ${msg}`)
+		})),
+
 		// Multi-root: report which folder the extension is currently
 		// targeting.  No-op for single-folder workspaces.  A folder picker
 		// that actually swaps the UI binding is future work.
@@ -435,6 +518,31 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Helper: resolve a BranchNode argument, a branch-name string, or prompt
 	// the user to pick one from the current stack.  Used by the T70 rebase
 	// recovery commands so they share a single UX.
+
+	/**
+	 * Resolve a branch name from a command argument, which may be:
+	 * - a plain string (e.g. from statusBarCommands)
+	 * - a SourceControl-like object with an `id` of the form `gitbraid-<branch>`
+	 *   (from scm/title menu items)
+	 * - undefined — in which case we show a quick-pick
+	 */
+	const resolveBranchNameArg = async (arg: unknown, placeholder: string): Promise<string | undefined> => {
+		if (typeof arg === 'string') return arg
+		if (arg && typeof arg === 'object' && 'id' in arg) {
+			const id = (arg as { id?: unknown }).id
+			if (typeof id === 'string' && id.startsWith('gitbraid-')) {
+				return id.slice('gitbraid-'.length)
+			}
+		}
+		const ctx = activeContext()
+		const stack = ctx.config.getStack()
+		if (stack.length === 0) {
+			await vscode.window.showWarningMessage('Stack is empty.')
+			return undefined
+		}
+		return vscode.window.showQuickPick(stack.map((e) => e.name), { placeHolder: placeholder })
+	}
+
 	const resolveActiveBranchWorktree = async (
 		arg: string | BranchNode | undefined,
 		placeholder: string,
@@ -460,23 +568,40 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
+
+	/** Extract a file URI from Explorer (vscode.Uri), SCM view (SourceControlResourceState),
+	 *  or a tree node (FileNode / FloatingFileNode). */
+	const extractFileUri = (a: unknown): vscode.Uri | undefined => {
+		if (a instanceof vscode.Uri) return a
+		if (a && typeof a === 'object' && 'resourceUri' in a) {
+			const uri = (a as { resourceUri?: unknown }).resourceUri
+			if (uri instanceof vscode.Uri) return uri
+		}
+		return undefined
+	}
+
 	commands.push(
-		vscode.commands.registerCommand('gitbraid.assignFile', cmd(async (arg?: vscode.Uri | FloatingFileNode, allArgs?: vscode.Uri[]) => {
-			// Collect initial URIs — multi-selection from Explorer passes all selected URIs as allArgs
+		vscode.commands.registerCommand('gitbraid.assignFile', cmd(async (arg?: unknown, allArgs?: unknown[]) => {
+			// Collect initial URIs — multi-selection from Explorer or SCM view passes allArgs
 			let uris: vscode.Uri[]
 			if (allArgs && allArgs.length > 0) {
-				uris = allArgs
+				uris = allArgs.map(extractFileUri).filter((u): u is vscode.Uri => u !== undefined)
 			} else if (arg instanceof FloatingFileNode) {
 				uris = arg.resourceUri ? [arg.resourceUri] : []
 			} else if (arg instanceof vscode.Uri) {
 				uris = [arg]
 			} else {
-				const active = vscode.window.activeTextEditor?.document.uri
-				if (!active) {
-					await vscode.window.showWarningMessage('No file selected to assign.')
-					return
+				const u = extractFileUri(arg)
+				if (u) {
+					uris = [u]
+				} else {
+					const active = vscode.window.activeTextEditor?.document.uri
+					if (!active) {
+						await vscode.window.showWarningMessage('No file selected to assign.')
+						return
+					}
+					uris = [active]
 				}
-				uris = [active]
 			}
 			if (uris.length === 0) {
 				await vscode.window.showWarningMessage('No file selected to assign.')
@@ -552,8 +677,9 @@ export async function activate(context: vscode.ExtensionContext) {
 			await vscode.window.showInformationMessage(msg)
 		})),
 
-		vscode.commands.registerCommand('gitbraid.unassignFile', cmd(async (arg?: vscode.Uri | FileNode) => {
-			const target = arg instanceof FileNode ? arg.resourceUri : (arg ?? vscode.window.activeTextEditor?.document.uri)
+		vscode.commands.registerCommand('gitbraid.unassignFile', cmd(async (arg?: unknown) => {
+			const target = arg instanceof FileNode ? arg.resourceUri
+				: (extractFileUri(arg) ?? vscode.window.activeTextEditor?.document.uri)
 			if (!target) {
 				await vscode.window.showWarningMessage('No file selected to unassign.')
 				return
@@ -672,8 +798,32 @@ export async function activate(context: vscode.ExtensionContext) {
 				// to main — avoids creating a branch the user didn't confirm.
 				return
 			}
+			const isFirstBranch = stack.length === 0
 			await ctx.branchStack.addBranchToStack(name, basePick)
 			await vscode.window.showInformationMessage(`Branch "${name}" added to stack in ${path.basename(ctx.root.fsPath)}`)
+
+			// Offer to disable the built-in git provider once the stack has its
+			// first branch — GitBraid provides its own per-branch SCM entries
+			// so the default git view becomes redundant.
+			if (isFirstBranch) {
+				const autoDisableSetting = vscode.workspace.getConfiguration('gitbraid').get<string>('autoDisableGit', 'prompt')
+				const disableGit = async () => {
+					await vscode.workspace.getConfiguration('git').update('enabled', false, vscode.ConfigurationTarget.Workspace)
+					log.info('gitbraid: disabled built-in git extension (git.enabled = false) in workspace settings')
+				}
+				if (autoDisableSetting === 'auto') {
+					await disableGit()
+				} else if (autoDisableSetting === 'prompt') {
+					const action = await vscode.window.showInformationMessage(
+						'GitBraid provides its own per-branch SCM entries. Would you like to hide the built-in Git panel to reduce clutter?',
+						'Hide Git Panel',
+						'Keep Both',
+					)
+					if (action === 'Hide Git Panel') {
+						await disableGit()
+					}
+				}
+			}
 		})),
 
 		vscode.commands.registerCommand('gitbraid.removeStackBranch', cmd(async (node?: BranchNode) => {
@@ -836,6 +986,87 @@ export async function activate(context: vscode.ExtensionContext) {
 			)
 			if (proceed !== 'Sync') return
 			await ctx.stackCommands.syncStack()
+		})),
+
+		// ── Per-branch SCM commands ───────────────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.scm.pushBranch', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Push branch to origin')
+			if (!branchName) return
+			await activeContext().scmManager.pushBranch(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.stashBranch', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Stash changes in branch')
+			if (!branchName) return
+			await activeContext().scmManager.stashBranch(branchName)
+		})),
+
+		// AI-assisted commit message generation.
+		// Gets the staged diff (or working-tree diff if nothing staged) from the
+		// branch's worktree and asks the active Copilot model for a message.
+		vscode.commands.registerCommand('gitbraid.scm.generateCommitMessage', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Generate commit message for branch')
+			if (!branchName) return
+
+			const ctx = activeContext()
+			if (!ctx.branchStack.worktreeExists(branchName)) {
+				await vscode.window.showWarningMessage(`No worktree for "${branchName}"`)
+				return
+			}
+			const worktreeDir = ctx.branchStack.getWorktreePath(branchName).fsPath
+			const runner = getDefaultGitRunner()
+
+			// Prefer staged changes; fall back to unstaged
+			const staged = await runner.run(['diff', '--cached'], { cwd: worktreeDir })
+			const diff = staged.stdout.trim()
+				? staged.stdout
+				: (await runner.run(['diff'], { cwd: worktreeDir })).stdout
+
+			if (!diff.trim()) {
+				await vscode.window.showInformationMessage(`No changes in "${branchName}" to generate a message for.`)
+				return
+			}
+
+			// Select the best available language model
+			const models = await vscode.lm.selectChatModels().catch(() => [] as vscode.LanguageModelChat[])
+			const model = models[0]
+			if (!model) {
+				await vscode.window.showWarningMessage(
+					'No language model available. Install GitHub Copilot and sign in to use AI commit message generation.',
+				)
+				return
+			}
+
+			let generatedMessage = ''
+			const cts = new vscode.CancellationTokenSource()
+			try {
+				await vscode.window.withProgress(
+					{ location: vscode.ProgressLocation.Notification, title: `Generating commit message for "${branchName}"…`, cancellable: true },
+					async (_progress, token) => {
+						token.onCancellationRequested(() => cts.cancel())
+						const messages = [
+							vscode.LanguageModelChatMessage.User(
+								'Generate a concise git commit message in Conventional Commits format for the following diff. ' +
+								'Respond with ONLY the commit message (subject line optionally followed by a blank line and a body). ' +
+								'Do not include any explanation, code blocks, or markdown.\n\n' +
+								diff.slice(0, 12_000),
+							),
+						]
+						const response = await model.sendRequest(messages, {}, cts.token)
+						for await (const chunk of response.text) {
+							generatedMessage += chunk
+						}
+					},
+				)
+			} finally {
+				cts.dispose()
+			}
+
+			generatedMessage = generatedMessage.trim()
+			if (generatedMessage) {
+				ctx.scmManager.setInputBoxValue(branchName, generatedMessage)
+			}
 		})),
 	)
 

@@ -66,12 +66,13 @@ class BranchScmEntry implements vscode.Disposable {
 	constructor(
 		private readonly _entry: BranchStackEntry,
 		private readonly _worktreeDir: string,
+		private readonly _workspaceRoot: vscode.Uri,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {
 		this._sc = vscode.scm.createSourceControl(
 			`gitbraid-${_entry.name}`,
-			`GitBraid: ${_entry.name}`,
-			vscode.Uri.file(_worktreeDir),
+			_entry.name,
+			_workspaceRoot,
 		)
 		this._sc.inputBox.placeholder = `Commit to ${_entry.name} (message)`
 		this._sc.acceptInputCommand = {
@@ -79,6 +80,26 @@ class BranchScmEntry implements vscode.Disposable {
 			title: 'Commit',
 			arguments: [_entry.name],
 		}
+		this._sc.statusBarCommands = [
+			{
+				command: 'gitbraid.scm.generateCommitMessage',
+				title: '$(sparkle) Message',
+				tooltip: `Generate commit message for ${_entry.name}`,
+				arguments: [_entry.name],
+			},
+			{
+				command: 'gitbraid.scm.stashBranch',
+				title: '$(archive) Stash',
+				tooltip: `Stash changes in ${_entry.name}`,
+				arguments: [_entry.name],
+			},
+			{
+				command: 'gitbraid.scm.pushBranch',
+				title: '$(cloud-upload) Push',
+				tooltip: `Push ${_entry.name}`,
+				arguments: [_entry.name],
+			},
+		]
 		this._sc.quickDiffProvider = undefined
 
 		this._staged = this._sc.createResourceGroup('staged', 'Staged Changes')
@@ -215,7 +236,7 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		for (const branchEntry of this._config.getStack()) {
 			if (!this._entries.has(branchEntry.name)) {
 				const wtDir = worktreePath(this._workspaceRoot, branchEntry.name).fsPath
-				const scmEntry = new BranchScmEntry(branchEntry, wtDir, this._runner)
+				const scmEntry = new BranchScmEntry(branchEntry, wtDir, this._workspaceRoot, this._runner)
 				this._entries.set(branchEntry.name, scmEntry)
 			}
 		}
@@ -247,6 +268,81 @@ export class BranchScmProviderManager implements vscode.Disposable {
 	 * Commit all staged changes in the given branch's worktree.
 	 * Shows a warning (not a block) if floating files exist.
 	 */
+	/** Set the commit message input box for a branch (used by AI generation). */
+	setInputBoxValue(branchName: string, value: string): void {
+		const entry = this._entries.get(branchName)
+		if (entry) {
+			entry.inputBox.value = value
+		}
+	}
+
+	/** Push the branch's worktree to origin, setting upstream if needed. */
+	async pushBranch(branchName: string): Promise<void> {
+		const entry = this._entries.get(branchName)
+		if (!entry) {
+			await vscode.window.showErrorMessage(`Branch "${branchName}" not found in stack`)
+			return
+		}
+		const { exitCode, stderr } = await this._runner.run(
+			['push'],
+			{ cwd: entry.worktreeDir },
+		)
+		if (exitCode === 0) {
+			log.info(`[BranchScmProvider] pushed "${branchName}"`)
+			await vscode.window.showInformationMessage(`GitBraid: pushed "${branchName}"`)
+		} else if (stderr.includes('no upstream') || stderr.includes('has no upstream')) {
+			// First push — set upstream automatically
+			const { exitCode: ec2, stderr: se2 } = await this._runner.run(
+				['push', '--set-upstream', 'origin', branchName],
+				{ cwd: entry.worktreeDir },
+			)
+			if (ec2 === 0) {
+				log.info(`[BranchScmProvider] pushed "${branchName}" with --set-upstream`)
+				await vscode.window.showInformationMessage(`GitBraid: pushed "${branchName}" and set upstream`)
+			} else {
+				await showError(`Push "${branchName}" failed`, new Error(se2 || `git push exited ${String(ec2)}`))
+			}
+		} else {
+			await showError(`Push "${branchName}" failed`, new Error(stderr || `git push exited ${String(exitCode)}`))
+		}
+	}
+
+	/**
+	 * Stash or pop stash in a branch's worktree.
+	 * Shows a quick-pick: Stash / Stash Pop.
+	 */
+	async stashBranch(branchName: string): Promise<void> {
+		const entry = this._entries.get(branchName)
+		if (!entry) {
+			await vscode.window.showErrorMessage(`Branch "${branchName}" not found in stack`)
+			return
+		}
+		const op = await vscode.window.showQuickPick(
+			[
+				{ label: '$(archive) Stash', description: 'Save current changes to a stash', value: 'push' as const },
+				{ label: '$(history) Stash Pop', description: 'Apply and remove the most recent stash', value: 'pop' as const },
+			],
+			{ placeHolder: `Stash operation for "${branchName}"` },
+		)
+		if (!op) return
+
+		const args = op.value === 'push'
+			? ['stash', 'push', '--include-untracked']
+			: ['stash', 'pop']
+
+		const { exitCode, stderr } = await this._runner.run(args, { cwd: entry.worktreeDir })
+		if (exitCode === 0) {
+			log.info(`[BranchScmProvider] stash ${op.value} "${branchName}"`)
+			const msg = op.value === 'push'
+				? `GitBraid: stashed changes in "${branchName}"`
+				: `GitBraid: applied stash in "${branchName}"`
+			await vscode.window.showInformationMessage(msg)
+			await entry.refresh(true)
+		} else {
+			await showError(`Stash ${op.value} "${branchName}" failed`, new Error(stderr || `git stash exited ${String(exitCode)}`))
+		}
+	}
+
 	async commitBranch(branchName: string): Promise<void> {
 		const entry = this._entries.get(branchName)
 		if (!entry) {
