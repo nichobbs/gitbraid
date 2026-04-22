@@ -399,7 +399,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				if (stat.type === vscode.FileType.Directory) {
 					const rel = vscode.workspace.asRelativePath(uri)
 					const found = await vscode.workspace.findFiles(`${rel}/**`, '**/.git/**')
-					targets.push(...found)
+					for (const f of found) { targets.push(f) }
 				} else {
 					targets.push(uri)
 				}

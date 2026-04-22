@@ -7,6 +7,7 @@ import { BranchStackEntry, BranchStatus, StackStatus, AssignmentChangeEvent, Sta
 import { GitError } from './errors'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import type { GitBraidExportedAPI, BranchOptions, CommitOptions } from './@types/GitBraidAPI'
+import { hideAssignedFile, unhideAssignedFile } from './gitIndex'
 
 // ─── Git status helper ────────────────────────────────────────────────────────
 
@@ -68,7 +69,18 @@ export class MbcApi implements GitBraidExportedAPI {
 	}
 
 	async removeBranch(name: string, force = false): Promise<void> {
+		// Collect files assigned to this branch before removing it from the stack
+		// so we can undo skip-worktree / exclude entries after removal.
+		const allAssignments = this._config.getAllAssignments()
+		const assignedFiles = Object.entries(allAssignments)
+			.filter(([, b]) => b === name)
+			.map(([rel]) => rel)
+
 		await this._branchStack.removeBranchFromStack(name, force)
+
+		for (const rel of assignedFiles) {
+			await unhideAssignedFile(this._runner, this._workspaceRoot.fsPath, rel)
+		}
 	}
 
 	// ── File assignment ───────────────────────────────────────────────────────
@@ -79,6 +91,7 @@ export class MbcApi implements GitBraidExportedAPI {
 
 	async assignFile(relativePath: string, branch: string): Promise<void> {
 		await this._config.setAssignment(relativePath, branch)
+		await hideAssignedFile(this._runner, this._workspaceRoot.fsPath, relativePath)
 	}
 
 	async assignHunk(relativePath: string, hunkIndex: number, branch: string): Promise<void> {
@@ -87,6 +100,7 @@ export class MbcApi implements GitBraidExportedAPI {
 
 	async unassignFile(relativePath: string): Promise<void> {
 		await this._config.removeAssignment(relativePath)
+		await unhideAssignedFile(this._runner, this._workspaceRoot.fsPath, relativePath)
 	}
 
 	getFloatingFiles(): string[] {
