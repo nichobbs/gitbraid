@@ -20,12 +20,9 @@ Control panel.
 
 ## Views
 
-Both views live in the **Source Control** panel (git icon in the Activity Bar).
+The **Branch Stack** view lives in the **Source Control** panel (git icon in the Activity Bar).
 
-| View | Purpose |
-|------|---------|
-| **GitBraid (Worktrees)** | Shows all worktrees and their changed files. Use for staging, discarding, copying/moving files between worktrees. |
-| **Branch Stack** | Shows the ordered stack. Each branch lists its assigned files; floating (unassigned) files appear at the bottom. |
+It shows the ordered stack. Each branch lists its assigned files; floating (unassigned) files appear at the bottom under **Floating (unassigned)**.
 
 A status-bar item shows the count of floating files so you always know when
 something is unassigned.
@@ -110,21 +107,16 @@ When a parent branch advances, GitBraid detects the gap and offers a notificatio
 
 ---
 
-### Worktree management (GitBraid Worktrees view)
+### Worktree management (Branch Stack view)
 
-From the **GitBraid (Worktrees)** view toolbar or by right-clicking a worktree
-root:
+Right-click a branch node in the **Branch Stack** view:
 
 | Action | How |
 |--------|-----|
-| Create worktree | Toolbar `+` button |
-| Delete worktree | Right-click → **Delete Branch / Worktree** (worktree must be unlocked) |
-| Open in new window | Right-click → **Open worktree in new window** |
-| Lock / unlock | Right-click → **Lock worktree** / **Unlock worktree** |
-| Swap primary worktree | Right-click the primary worktree → **Swap worktree** |
-| Copy file to another worktree | Right-click a file → **Copy to worktree** |
-| Move file to another worktree | Right-click a file → **Move to worktree** |
-| Stage / unstage / discard | Inline buttons or right-click on files/groups |
+| Open worktree in new window | Right-click a branch → **Open in New Window** |
+| Lock / unlock worktree | Right-click a branch → **Lock Worktree** / **Unlock Worktree** |
+| Copy file to another branch | Right-click an assigned or floating file → **Copy to Branch** |
+| Move file to another branch | Right-click an assigned or floating file → **Move to Branch** |
 
 ---
 
