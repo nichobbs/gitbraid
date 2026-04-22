@@ -41,6 +41,18 @@ export class BranchNode extends vscode.TreeItem {
 	}
 }
 
+/** A scratch worktree node — parking area for files not to be committed. */
+export class ScratchNode extends vscode.TreeItem {
+	readonly kind = 'branch' as const
+	constructor(public readonly entry: BranchStackEntry) {
+		super(entry.name, vscode.TreeItemCollapsibleState.Collapsed)
+		this.contextValue = 'scratchBranch'
+		this.iconPath = new vscode.ThemeIcon('pinned')
+		this.tooltip = `Scratch area: ${entry.name} — files parked here are not committed`
+		this.description = 'scratch'
+	}
+}
+
 /** A file assigned to a branch — child of BranchNode. */
 export class FileNode extends vscode.TreeItem {
 	readonly kind = 'file' as const
@@ -396,9 +408,11 @@ export class BranchStackTreeProvider
 		if (this._currentBranch && !stack.some(e => e.name === this._currentBranch)) {
 			nodes.push(new CurrentBranchNode(this._currentBranch))
 		}
-		// Managed stack branches sorted alphabetically.
+		// Managed stack branches: non-scratch sorted alphabetically first, scratch last.
 		const sorted = [...stack].sort((a, b) => a.name.localeCompare(b.name))
-		nodes.push(...sorted.map((e) => new BranchNode(e)))
+		for (const e of sorted) {
+			nodes.push(e.scratch ? new ScratchNode(e) : new BranchNode(e))
+		}
 		nodes.push(new FloatingGroupNode(floating.length))
 		return nodes
 	}

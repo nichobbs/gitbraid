@@ -78,32 +78,95 @@ async function gitStatusInDir(runner: IGitRunner, dir: string): Promise<Worktree
 	return results
 }
 
+// ─── Per-file status decorations ─────────────────────────────────────────────
+
+/**
+ * Generates a tiny SVG data-URI showing a coloured status letter (M, A, D…).
+ * VS Code's SCM panel renders `decorations.iconPath` next to each file,
+ * matching the appearance of the built-in git SCM provider.
+ */
+function makeStatusIcon(letter: string, color: string): vscode.Uri {
+	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">` +
+		`<text x="8" y="12.5" text-anchor="middle" font-family="monospace,sans-serif" ` +
+		`font-size="12" font-weight="700" fill="${color}">${letter}</text></svg>`
+	return vscode.Uri.parse(`data:image/svg+xml,${encodeURIComponent(svg)}`)
+}
+
+interface StatusMeta { letter: string; color: string; tooltip: string; strikeThrough?: boolean }
+
+const _STATUS_META: Record<string, StatusMeta> = {
+	M: { letter: 'M', color: '#E2C08D', tooltip: 'Modified' },
+	A: { letter: 'A', color: '#73C991', tooltip: 'Added' },
+	D: { letter: 'D', color: '#F14C4C', tooltip: 'Deleted', strikeThrough: true },
+	R: { letter: 'R', color: '#3DC9B0', tooltip: 'Renamed' },
+	C: { letter: 'C', color: '#3DC9B0', tooltip: 'Copied' },
+	U: { letter: 'U', color: '#E4676B', tooltip: 'Unmerged' },
+	'?': { letter: '?', color: '#73C991', tooltip: 'Untracked' },
+}
+
+/** Cache so we don't recreate SVG URIs on every refresh tick. */
+const _decoCache = new Map<string, vscode.SourceControlResourceDecorations>()
+
+function statusDecoration(xy: string, isStaged: boolean): vscode.SourceControlResourceDecorations | undefined {
+	let code: string
+	if (xy === '??') {
+		code = '?'
+	} else if (isStaged) {
+		code = xy[0] ?? ''
+	} else {
+		code = xy[1] ?? ''
+	}
+	if (_decoCache.has(code)) return _decoCache.get(code)
+	const meta = _STATUS_META[code]
+	if (!meta) return undefined
+	const icon = makeStatusIcon(meta.letter, meta.color)
+	const deco: vscode.SourceControlResourceDecorations = {
+		tooltip: meta.tooltip,
+		strikeThrough: meta.strikeThrough ?? false,
+		light: { iconPath: icon },
+		dark: { iconPath: icon },
+	}
+	_decoCache.set(code, deco)
+	return deco
+}
+
 /**
  * Build a resource state for the SCM resource list.
  * For tracked files (xy !== '??') opens a diff against HEAD.
  * For untracked files just opens the file directly.
+ *
+ * @param displayUri  Workspace-root URI used for the SCM label (repo-relative path).
+ * @param actualUri   Real on-disk URI inside the worktree (used for diff/open commands).
  */
 function toResourceState(
-	uri: vscode.Uri,
+	displayUri: vscode.Uri,
+	actualUri: vscode.Uri,
 	relativePath: string,
 	wtDir: string,
-	isUntracked: boolean,
+	xy: string,
+	isStaged: boolean,
 ): vscode.SourceControlResourceState {
+	const isUntracked = xy === '??'
+	const decorations = statusDecoration(xy, isStaged)
 	if (isUntracked) {
 		return {
-			resourceUri: uri,
-			command: { command: 'vscode.open', title: 'Open', arguments: [uri] },
+			resourceUri: displayUri,
+			command: { command: 'vscode.open', title: 'Open', arguments: [actualUri] },
+			decorations,
+			contextValue: 'changes',
 		}
 	}
 	const left = headUri(relativePath, wtDir)
 	const title = `${path.basename(relativePath)} (HEAD ↔ Working)`
 	return {
-		resourceUri: uri,
+		resourceUri: displayUri,
 		command: {
 			command: 'vscode.diff',
 			title: 'Open Changes',
-			arguments: [left, uri, title],
+			arguments: [left, actualUri, title],
 		},
+		decorations,
+		contextValue: isStaged ? 'staged' : 'changes',
 	}
 }
 
@@ -133,44 +196,50 @@ class BranchScmEntry implements vscode.Disposable {
 			_entry.name,
 			_workspaceRoot,
 		)
-		this._sc.inputBox.placeholder = `Commit to ${_entry.name} (message)`
-		this._sc.acceptInputCommand = {
-			command: 'gitbraid.scm.commitBranch',
-			title: 'Commit',
-			arguments: [_entry.name],
+		if (_entry.scratch) {
+			// Scratch worktrees are parking areas — hide the commit input box
+			// and all commit/push action buttons.
+			this._sc.inputBox.visible = false
+		} else {
+			this._sc.inputBox.placeholder = `Commit to ${_entry.name} (message)`
+			this._sc.acceptInputCommand = {
+				command: 'gitbraid.scm.commitBranch',
+				title: 'Commit',
+				arguments: [_entry.name],
+			}
+			this._sc.statusBarCommands = [
+				{
+					command: 'gitbraid.scm.generateCommitMessage',
+					title: '$(sparkle)',
+					tooltip: `Generate commit message for ${_entry.name}`,
+					arguments: [_entry.name],
+				},
+				{
+					command: 'gitbraid.scm.stashBranch',
+					title: '$(archive)',
+					tooltip: `Stash changes in ${_entry.name}`,
+					arguments: [_entry.name],
+				},
+				{
+					command: 'gitbraid.scm.pullBranch',
+					title: '$(cloud-download)',
+					tooltip: `Pull ${_entry.name}`,
+					arguments: [_entry.name],
+				},
+				{
+					command: 'gitbraid.scm.pushBranch',
+					title: '$(cloud-upload)',
+					tooltip: `Push ${_entry.name}`,
+					arguments: [_entry.name],
+				},
+				{
+					command: 'gitbraid.scm.syncBranch',
+					title: '$(sync)',
+					tooltip: `Sync (pull then push) ${_entry.name}`,
+					arguments: [_entry.name],
+				},
+			]
 		}
-		this._sc.statusBarCommands = [
-			{
-				command: 'gitbraid.scm.generateCommitMessage',
-				title: '$(sparkle)',
-				tooltip: `Generate commit message for ${_entry.name}`,
-				arguments: [_entry.name],
-			},
-			{
-				command: 'gitbraid.scm.stashBranch',
-				title: '$(archive)',
-				tooltip: `Stash changes in ${_entry.name}`,
-				arguments: [_entry.name],
-			},
-			{
-				command: 'gitbraid.scm.pushBranch',
-				title: '$(cloud-upload)',
-				tooltip: `Pull ${_entry.name}`,
-				arguments: [_entry.name],
-			},
-			{
-				command: 'gitbraid.scm.pushBranch',
-				title: '$(cloud-upload) Push',
-				tooltip: `Push ${_entry.name}`,
-				arguments: [_entry.name],
-			},
-			{
-				command: 'gitbraid.scm.syncBranch',
-				title: '$(sync) Sync',
-				tooltip: `Sync (pull then push) ${_entry.name}`,
-				arguments: [_entry.name],
-			},
-		]
 		this._sc.quickDiffProvider = undefined
 
 		this._staged = this._sc.createResourceGroup('staged', 'Staged Changes')
@@ -190,6 +259,10 @@ class BranchScmEntry implements vscode.Disposable {
 	private _lastStatusHash: string | undefined
 	/** Timestamp of the last refresh; combined with REFRESH_TTL_MS to coalesce bursts. */
 	private _lastRefreshAt = 0
+	/** Effective directory used for git status (worktreeDir if it exists, else workspaceRoot). */
+	private _statusDir: string = ''
+
+	get statusDir(): string { return this._statusDir }
 
 	async refresh(force = false): Promise<void> {
 		const now = Date.now()
@@ -210,25 +283,29 @@ class BranchScmEntry implements vscode.Disposable {
 		const statusRoot = fs.existsSync(this._worktreeDir)
 			? vscode.Uri.file(this._worktreeDir)
 			: this._workspaceRoot
+		this._statusDir = statusDir
 		const statuses = await gitStatusInDir(this._runner, statusDir)
 		const stagedUris: vscode.SourceControlResourceState[] = []
 		const changedUris: vscode.SourceControlResourceState[] = []
 
 		for (const { xy, relativePath } of statuses) {
-			const uri = vscode.Uri.joinPath(statusRoot, relativePath)
+			// actualUri  — the real file in the worktree (used for diff/open commands)
+			// displayUri — the equivalent workspace-root path (drives SCM label)
+			const actualUri = vscode.Uri.joinPath(statusRoot, relativePath)
+			const displayUri = vscode.Uri.joinPath(this._workspaceRoot, relativePath)
 			const indexStatus = xy[0]
 			const workStatus = xy[1]
 			const isUntracked = xy === '??'
 
 			if (indexStatus !== ' ' && indexStatus !== '?') {
-				stagedUris.push(toResourceState(uri, relativePath, statusDir, isUntracked))
+				stagedUris.push(toResourceState(displayUri, actualUri, relativePath, statusDir, xy, true))
 			}
 			if (workStatus !== ' ' && workStatus !== '?') {
-				changedUris.push(toResourceState(uri, relativePath, statusDir, isUntracked))
+				changedUris.push(toResourceState(displayUri, actualUri, relativePath, statusDir, xy, false))
 			}
 			// Untracked (both '?') — show in Changes group
 			if (isUntracked) {
-				changedUris.push(toResourceState(uri, relativePath, statusDir, true))
+				changedUris.push(toResourceState(displayUri, actualUri, relativePath, statusDir, xy, false))
 			}
 		}
 
@@ -372,6 +449,62 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		if (entry) {
 			entry.inputBox.value = value
 		}
+	}
+
+	/**
+	 * Finds the `BranchScmEntry` whose effective status directory is a prefix
+	 * of the given absolute file path. Used to route per-file stage/unstage
+	 * commands to the correct branch.
+	 */
+	private _findEntryForPath(absolutePath: string): BranchScmEntry | undefined {
+		for (const entry of this._entries.values()) {
+			const dir = entry.statusDir
+			if (dir && (absolutePath.startsWith(dir + path.sep) || absolutePath.startsWith(dir + '/'))) {
+				return entry
+			}
+		}
+		return undefined
+	}
+
+	/** Stage a single file (by absolute path) in its owning branch's worktree. */
+	async stageFile(absolutePath: string): Promise<void> {
+		const entry = this._findEntryForPath(absolutePath)
+		if (!entry) return
+		const rel = path.relative(entry.statusDir, absolutePath)
+		const { exitCode, stderr } = await this._runner.run(['add', '--', rel], { cwd: entry.statusDir })
+		if (exitCode !== 0) {
+			await showError(`Stage failed`, new Error(stderr || `git add exited ${String(exitCode)}`))
+			return
+		}
+		await entry.refresh(true)
+	}
+
+	/** Unstage a single file (by absolute path) in its owning branch's worktree. */
+	async unstageFile(absolutePath: string): Promise<void> {
+		const entry = this._findEntryForPath(absolutePath)
+		if (!entry) return
+		const rel = path.relative(entry.statusDir, absolutePath)
+		const { exitCode, stderr } = await this._runner.run(
+			['restore', '--staged', '--', rel],
+			{ cwd: entry.statusDir },
+		)
+		if (exitCode !== 0) {
+			await showError(`Unstage failed`, new Error(stderr || `git restore exited ${String(exitCode)}`))
+			return
+		}
+		await entry.refresh(true)
+	}
+
+	/** Stage all modified tracked files in the given branch's worktree. */
+	async stageAll(branchName: string): Promise<void> {
+		const entry = this._entries.get(branchName)
+		if (!entry) return
+		const { exitCode, stderr } = await this._runner.run(['add', '-u'], { cwd: entry.statusDir })
+		if (exitCode !== 0) {
+			await showError(`Stage all failed for "${branchName}"`, new Error(stderr || `git add -u exited ${String(exitCode)}`))
+			return
+		}
+		await entry.refresh(true)
 	}
 
 	/** Pull the latest changes from origin into the branch's worktree. Uses --rebase. */

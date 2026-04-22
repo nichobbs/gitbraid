@@ -20,6 +20,12 @@ export interface BranchStackEntry {
 	 * (e.g. "main") for the lowest layer.
 	 */
 	base: string
+	/**
+	 * When true this is a scratch worktree — a parking area for files that are
+	 * not intended to be committed to any branch.  The SCM panel for scratch
+	 * entries hides the commit/push controls.
+	 */
+	scratch?: boolean
 }
 
 /**

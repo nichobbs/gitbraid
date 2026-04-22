@@ -333,6 +333,16 @@ export class ConfigService implements vscode.Disposable {
 		this._onDidChangeStack.fire({ type: 'reorder', branch: name })
 	}
 
+	async setScratch(name: string, scratch: boolean): Promise<void> {
+		const entry = this._config.stack.find((e) => e.name === name)
+		if (!entry) {
+			throw new ConfigError(`Branch "${name}" is not in the stack`)
+		}
+		entry.scratch = scratch
+		await this._writeToDisk()
+		this._onDidChangeStack.fire({ type: 'reorder', branch: name })
+	}
+
 	async reorderStack(orderedNames: string[]): Promise<void> {
 		for (let i = 0; i < orderedNames.length; i++) {
 			const entry = this._config.stack.find((e) => e.name === orderedNames[i])

@@ -872,6 +872,25 @@ export async function activate(context: vscode.ExtensionContext) {
 			await vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
 		})),
 
+		// ── Add scratch worktree ──────────────────────────────────────────────
+		// Creates a dedicated scratch worktree — a parking area for files that
+		// should be kept out of the way but not committed to any branch.
+		vscode.commands.registerCommand('gitbraid.addScratchWorktree', cmd(async () => {
+			const ctx = activeContext()
+			const SCRATCH_NAME = 'gitbraid-scratch'
+			if (ctx.config.getStack().some((e) => e.name === SCRATCH_NAME)) {
+				await vscode.window.showInformationMessage('A scratch worktree already exists.')
+				return
+			}
+			const defaultBranch = await detectDefaultBranch(workspaceUri).catch(() => 'main')
+			await ctx.branchStack.addBranchToStack(SCRATCH_NAME, defaultBranch, '#888888')
+			// Mark the new entry as scratch in config.
+			await ctx.config.setScratch(SCRATCH_NAME, true)
+			await vscode.window.showInformationMessage(
+				`Scratch area "${SCRATCH_NAME}" created. Assign files to it to park them out of the way.`,
+			)
+		})),
+
 		// ── Reset branch ──────────────────────────────────────────────────────
 		// Unassigns every file from a branch, restores those files in the branch's
 		// worktree to HEAD (discarding uncommitted changes), and un-hides them in
@@ -1105,6 +1124,24 @@ export async function activate(context: vscode.ExtensionContext) {
 			const branchName = await resolveBranchNameArg(arg, 'Stash changes in branch')
 			if (!branchName) return
 			await activeContext().scmManager.stashBranch(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.stageFile', cmd(async (resourceState?: unknown) => {
+			const uri = (resourceState as { resourceUri?: vscode.Uri } | undefined)?.resourceUri
+			if (!uri) return
+			await activeContext().scmManager.stageFile(uri.fsPath)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.unstageFile', cmd(async (resourceState?: unknown) => {
+			const uri = (resourceState as { resourceUri?: vscode.Uri } | undefined)?.resourceUri
+			if (!uri) return
+			await activeContext().scmManager.unstageFile(uri.fsPath)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.stageAll', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Stage all changes in branch')
+			if (!branchName) return
+			await activeContext().scmManager.stageAll(branchName)
 		})),
 
 		// AI-assisted commit message generation.

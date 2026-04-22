@@ -1,11 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Connector lines as filled rectangles (stroke not used: VS Code masks via fill/alpha only) -->
+  <!-- Bottom vertical: (12,19) → (12,15), width 1.75 -->
+  <path d="M11.125 15 H12.875 V19 H11.125 Z" fill="currentColor"/>
+  <!-- Middle-to-left diagonal: (10.8,11.9) → (4.5,3.5), width 1.75 -->
+  <path d="M11.5 11.375 L10.1 12.425 L3.8 4.025 L5.2 2.975 Z" fill="currentColor"/>
+  <!-- Center vertical: (12,11.5) → (12,3.5), width 1.75 -->
+  <path d="M11.125 3.5 H12.875 V11.5 H11.125 Z" fill="currentColor"/>
+  <!-- Middle-to-right diagonal: (13.2,11.9) → (19.5,3.5), width 1.75 -->
+  <path d="M12.5 11.375 L13.9 12.425 L20.2 4.025 L18.8 2.975 Z" fill="currentColor"/>
+  <!-- Node circles -->
   <circle cx="12" cy="21" r="2" fill="currentColor"/>
-  <path d="M12 19 L12 15" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none"/>
   <circle cx="12" cy="13.5" r="2" fill="currentColor"/>
-  <path d="M10.8 11.9 L4.5 3.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none"/>
   <circle cx="4.5" cy="2.5" r="2" fill="currentColor"/>
-  <path d="M12 11.5 L12 3.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none"/>
   <circle cx="12" cy="2.5" r="2" fill="currentColor"/>
-  <path d="M13.2 11.9 L19.5 3.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none"/>
   <circle cx="19.5" cy="2.5" r="2" fill="currentColor"/>
 </svg>

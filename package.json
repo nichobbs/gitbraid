@@ -207,6 +207,12 @@
 				"icon": "$(git-branch-create)"
 			},
 			{
+				"command": "gitbraid.addScratchWorktree",
+				"title": "Add Scratch Area",
+				"category": "GitBraid",
+				"icon": "$(pinned)"
+			},
+			{
 				"command": "gitbraid.removeStackBranch",
 				"title": "Remove Branch from Stack",
 				"category": "GitBraid",
@@ -361,6 +367,24 @@
 				"title": "Stash Branch Changes",
 				"category": "GitBraid",
 				"icon": "$(archive)"
+			},
+			{
+				"command": "gitbraid.scm.stageFile",
+				"title": "Stage Changes",
+				"category": "GitBraid",
+				"icon": "$(add)"
+			},
+			{
+				"command": "gitbraid.scm.unstageFile",
+				"title": "Unstage Changes",
+				"category": "GitBraid",
+				"icon": "$(remove)"
+			},
+			{
+				"command": "gitbraid.scm.stageAll",
+				"title": "Stage All Changes",
+				"category": "GitBraid",
+				"icon": "$(add)"
 			}
 		],
 		"viewsWelcome": [
@@ -374,6 +398,11 @@
 			"view/title": [
 				{
 					"command": "gitbraid.addStackBranch",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
+				},
+				{
+					"command": "gitbraid.addScratchWorktree",
 					"when": "view == gitbraid.stackView",
 					"group": "navigation"
 				},
@@ -412,6 +441,16 @@
 			],
 			"scm/resourceState/context": [
 				{
+					"command": "gitbraid.scm.stageFile",
+					"when": "scmProvider =~ /^gitbraid-/ && scmResourceGroup == changes",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.scm.unstageFile",
+					"when": "scmProvider =~ /^gitbraid-/ && scmResourceGroup == staged",
+					"group": "inline"
+				},
+				{
 					"command": "gitbraid.assignFile",
 					"when": "scmProvider == git",
 					"group": "gitbraid@1"
@@ -423,6 +462,11 @@
 				}
 			],
 			"scm/title": [
+				{
+					"command": "gitbraid.scm.stageAll",
+					"when": "scmProvider =~ /^gitbraid-/",
+					"group": "1_scm@0"
+				},
 				{
 					"command": "gitbraid.scm.generateCommitMessage",
 					"when": "scmProvider =~ /^gitbraid-/",
@@ -509,6 +553,16 @@
 					"command": "gitbraid.setBranchColor",
 					"when": "view == gitbraid.stackView && viewItem == branch",
 					"group": "branch@3"
+				},
+				{
+					"command": "gitbraid.removeStackBranch",
+					"when": "view == gitbraid.stackView && viewItem == scratchBranch",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.resetBranch",
+					"when": "view == gitbraid.stackView && viewItem == scratchBranch",
+					"group": "scratch@1"
 				}
 			]
 		},
