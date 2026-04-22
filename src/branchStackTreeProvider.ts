@@ -2,6 +2,8 @@ import * as vscode from 'vscode'
 import { ConfigService } from './configService'
 import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry } from './configTypes'
+import type { PRAwareness } from './prAwareness'
+import { codiconForState, stateLabel } from './prAwareness'
 
 // ─── Tree node types ──────────────────────────────────────────────────────────
 
@@ -109,6 +111,7 @@ export class BranchStackTreeProvider
 		private readonly _sync: WorkspaceSync,
 		private readonly _onAssign?: (rel: string, newBranch: string, previous: string | undefined) => void,
 		private readonly _onUnassign?: (rel: string, previous: string) => void,
+		private readonly _prAwareness?: PRAwareness,
 	) {
 		this._disposables.push(
 			_config.onDidChangeAssignment(() => this.refresh()),
@@ -116,6 +119,9 @@ export class BranchStackTreeProvider
 			_sync.onDidFloatFile(() => this.refresh()),
 			_sync.onDidSyncFile(() => this.refresh()),
 		)
+		if (_prAwareness) {
+			this._disposables.push(_prAwareness.onDidChange(() => this.refresh()))
+		}
 	}
 
 	// ── Drag & drop ───────────────────────────────────────────────────────────
@@ -221,6 +227,19 @@ export class BranchStackTreeProvider
 	}
 
 	getTreeItem(element: StackTreeNode): vscode.TreeItem {
+		if (element.kind === 'branch' && this._prAwareness) {
+			const info = this._prAwareness.getForBranch(element.entry.name)
+			if (info) {
+				// Prepend a PR-state codicon to the description so the user can
+				// tell at a glance whether the branch has an open / draft /
+				// merged PR.  The tooltip carries the full PR title + number.
+				const icon = `$(${codiconForState(info.state)})`
+				const existing = typeof element.description === 'string' ? element.description : ''
+				element.description = existing ? `${icon} ${existing}` : icon
+				const baseTooltip = typeof element.tooltip === 'string' ? element.tooltip : `Branch: ${element.entry.name} (base: ${element.entry.base})`
+				element.tooltip = `${baseTooltip}\n${stateLabel(info.state)} #${String(info.number)} — ${info.title}`
+			}
+		}
 		return element
 	}
 

@@ -198,8 +198,11 @@ Annotated during execution. Checkpoint SHAs refer to the
 - T16 (walkthrough **real screenshots** — placeholder SVGs landed, real
   screenshots still pending; procedure documented in
   `resources/README.md`).
-- P3 roadmap items per `10-sequencing.md` (undo/redo, assignment
-  import/export, PR awareness, multi-root, MCP server).
+- **Multi-root workspace support** — every service still grabs
+  `workspaceFolders![0]`.  Deferred by design; needs a standalone
+  design doc before coding.
+- **MCP server** (PLAN §5.3 stretch goal) — deferred; worth an ADR
+  before starting.
 
 ### Roadmap — landed
 
@@ -212,11 +215,26 @@ Annotated during execution. Checkpoint SHAs refer to the
   the filenames.
 - **T67** — `gitbraid.pushStack` / `gitbraid.syncStack` with
   `--force-with-lease` opt-in gating and dirty-worktree skip.
+- **T69** — in-memory undo/redo for assignment operations.  Covers
+  file assign/unassign and hunk assign/unassign via the four factory
+  helpers in `src/undoStack.ts`; DnD reassignments are equally
+  undoable.  Bound to `ctrl+alt+z` / `ctrl+alt+shift+z`.
 - **T70** — rebase conflict recovery: detects mid-rebase via
   `.git/rebase-merge` / `.git/rebase-apply`, watches worktrees for
   state transitions, and exposes Open Conflicts / Abort / Continue
   commands.  `RebaseSuggestionService` hands off to the recovery path
   when its own rebase bails instead of showing a generic error.
+- **T71** — stack export / import via `.gitbraid/stack.json`.  JSON
+  format keeps the runtime dep footprint flat.  Personal state
+  (hunk anchors, mtime) is deliberately not exported; hunk indexes
+  travel as hints only.
+- **T75** — PR awareness via `GitHub.vscode-pull-request-github`.
+  Feature-detected at runtime; gated on `gitbraid.prDecorationsEnabled`.
+  Branch nodes gain a PR-state codicon ($(git-pull-request) /
+  -draft / -closed / $(git-merge)) and a tooltip with the PR number
+  and title.  60s polling + `gitbraid.refreshPRStatus` command.  The
+  adapter fails soft — unexpected API shapes disable the decoration
+  rather than throwing.
 
 ### Bus-migration + hardening — landed
 

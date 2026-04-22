@@ -295,6 +295,12 @@
 				"title": "Import Stack (from .gitbraid/stack.json)",
 				"category": "GitBraid",
 				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "gitbraid.refreshPRStatus",
+				"title": "Refresh PR Status",
+				"category": "GitBraid",
+				"icon": "$(sync)"
 			}
 		],
 		"viewsWelcome": [

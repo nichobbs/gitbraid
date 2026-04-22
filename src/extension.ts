@@ -23,6 +23,7 @@ import {
 	recordUnassignHunk,
 } from './undoStack'
 import { StackShareService, SHARED_DIR, SHARED_FILE } from './stackShareService'
+import { PRAwareness } from './prAwareness'
 import * as path from 'node:path'
 import { MbcApi } from './mbcApi'
 import { registerLmTools } from './lmTools'
@@ -96,11 +97,19 @@ export async function activate(context: vscode.ExtensionContext) {
 	await scmManager.initialize()
 	context.subscriptions.push(scmManager)
 
+	// PR awareness — feature-detects the GitHub PR extension at runtime.
+	// Absent / inactive / unexpected-API cases all fall back to "no
+	// decorations"; gated on `gitbraid.prDecorationsEnabled`.
+	const prAwareness = new PRAwareness()
+	context.subscriptions.push(prAwareness)
+	prAwareness.start()
+
 	const stackTreeProvider = new BranchStackTreeProvider(
 		configService,
 		workspaceSync,
 		(rel, newBranch, previous) => recordAssignFile(undoStack, configService, rel, newBranch, previous),
 		(rel, previous) => recordUnassignFile(undoStack, configService, rel, previous),
+		prAwareness,
 	)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
@@ -135,6 +144,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ── Phase 2 & 3 commands ──────────────────────────────────────────────────
 	commands.push(
 		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => stackTreeProvider.refresh()),
+
+		// Force a re-query of PR status without waiting for the 60s poll.
+		vscode.commands.registerCommand('gitbraid.refreshPRStatus', cmd(async () => {
+			await prAwareness.refresh()
+		})),
 
 		// T69 — undo / redo for assignment-level operations.  Session-only,
 		// in-memory.  No-ops when the corresponding stack is empty.
