@@ -301,6 +301,12 @@
 				"title": "Refresh PR Status",
 				"category": "GitBraid",
 				"icon": "$(sync)"
+			},
+			{
+				"command": "gitbraid.showActiveFolder",
+				"title": "Show Active Folder (multi-root)",
+				"category": "GitBraid",
+				"icon": "$(folder-active)"
 			}
 		],
 		"viewsWelcome": [

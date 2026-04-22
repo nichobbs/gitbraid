@@ -1,36 +1,26 @@
 import * as vscode from 'vscode'
 import { git } from './gitFunctions'
 import { log } from './channelLogger'
-import { ConfigService } from './configService'
-import { BranchStackService } from './branchStackService'
-import { WorkspaceSync } from './workspaceSync'
 import { BranchFileDecorationProvider } from './fileDecorationProvider'
-import { BranchScmProviderManager } from './branchScmProvider'
 import { BranchNode, BranchStackTreeProvider, FileNode, FloatingFileNode, FloatingStatusBarItem } from './branchStackTreeProvider'
-import { DiffEngine } from './diffEngine'
-import { HunkRouter, anchorFor } from './hunkRouter'
+import { anchorFor } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
-import { StackResolver } from './stackResolver'
 import { StackContentProvider } from './stackContentProvider'
-import { RebaseSuggestionService } from './rebaseSuggestionService'
-import { StackCommands } from './stackCommands'
-import { RebaseRecovery } from './rebaseRecovery'
 import {
-	UndoStack,
 	recordAssignFile,
 	recordUnassignFile,
 	recordAssignHunk,
 	recordUnassignHunk,
 } from './undoStack'
-import { StackShareService, SHARED_DIR, SHARED_FILE } from './stackShareService'
+import { SHARED_DIR, SHARED_FILE } from './stackShareService'
 import { PRAwareness } from './prAwareness'
 import * as path from 'node:path'
-import { GitBraidApi } from './gitBraidApi'
 import { hideAssignedFile } from './gitIndex'
 import { getDefaultGitRunner } from './gitRunner'
 import { registerLmTools } from './lmTools'
 
-import { FileChangeBus } from './fileChangeBus'
+import { FolderRegistry } from './folderRegistry'
+import { FolderContext } from './folderContext'
 import { withErrorHandler, showError } from './errorSurfacer'
 export { showError }
 
@@ -68,36 +58,65 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	log.info('activating gitbraid (version=' + context.extension.packageJSON.version + ')')
-	// ─── Phase 1: Branch-overlay services ─────────────────────────────────────
-	const workspaceRoot = vscode.workspace.workspaceFolders[0].uri
-	const configService = ConfigService.getInstance()
-	await configService.load(workspaceRoot)
+	// ─── Phase 1: Per-folder service graph ────────────────────────────────────
+	//
+	// Every git-eligible workspace folder gets its own `FolderContext`
+	// (own `.worktrees/local-config.json`, own file-change bus, own SCM
+	// manager, own rebase watcher, etc.).  The `FolderRegistry` owns the
+	// lifecycle; each context's `initialize()` wires up all the per-folder
+	// plumbing so SCM panels for every folder appear automatically.
+	//
+	// The UI singletons (tree view, decoration provider, status bar,
+	// CodeLens, overlay diagnostics) bind to the **primary** context = the
+	// first eligible folder.  Multi-folder workspaces get per-folder SCM
+	// and per-folder worktrees out of the box, but the tree view / decoration
+	// surface currently shows only the primary folder.  Commands that are
+	// clearly folder-scoped (assign, push, sync) use `registry.getActive()`
+	// to target the folder the user is editing.  See
+	// `docs/remediation/00-overview.md` and `docs/adr/` for the full story.
+	const registry = new FolderRegistry()
+	const contexts = await registry.initializeAll()
+	context.subscriptions.push(registry)
 
-	const branchStack = BranchStackService.getInstance(configService)
-	await branchStack.initStack(workspaceRoot)
+	if (contexts.length === 0) {
+		log.warn('gitbraid: no git-eligible workspace folders; activation is idle')
+		return
+	}
 
-	// Shared file-system watcher for the entire extension (T10).  Subsequent
-	// services subscribe to its domain events instead of spawning their own
-	// `**/*` watchers.
-	const bus = new FileChangeBus(workspaceRoot)
-	context.subscriptions.push(bus)
+	// Local aliases into the primary context — keeps the rest of activate()
+	// readable and minimally changed against pre-refactor history.  The
+	// `activeContext()` helper is used by commands to target the folder
+	// the user is currently editing rather than always hitting primary.
+	const primary = contexts[0]
+	const workspaceRoot = primary.root
+	const configService = primary.config
+	const branchStack = primary.branchStack
+	const workspaceSync = primary.workspaceSync
+	const undoStack = primary.undoStack
 
-	const workspaceSync = WorkspaceSync.getInstance(configService)
-	workspaceSync.init(workspaceRoot, bus)
-
-	// Undo/redo ring for assignment-level operations (T69).  Constructed
-	// early so Phase 2 providers can receive it.
-	const undoStack = new UndoStack()
-
-	context.subscriptions.push(configService, branchStack, workspaceSync, undoStack)
+	// Used by folder-aware commands (below) to target the folder the user
+	// is currently editing rather than always hitting primary.
+	const activeContext = (): FolderContext => registry.getActive() ?? primary
 
 	// ─── Phase 2: SCM Integration & UI ────────────────────────────────────────
+	//
+	// The SCM manager, rebase recovery watcher, stack resolver / content
+	// provider, rebase service, stack commands, share service, and exported
+	// API instance all live inside each `FolderContext` (so multi-folder
+	// workspaces get one of each per folder automatically).  Activation
+	// binds the UI singletons — tree provider, decoration provider, status
+	// bar, CodeLens / diagnostics — to the primary folder's services.
+	const scmManager = primary.scmManager
+	const rebaseSvc = primary.rebaseSvc
+	const stackResolver = primary.stackResolver
+	const stackCommands = primary.stackCommands
+	const rebaseRecovery = primary.rebaseRecovery
+	const stackShare = primary.stackShare
+	const diffEngine = primary.diffEngine
+	const hunkRouter = primary.hunkRouter
+
 	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync)
 	context.subscriptions.push(decorationProvider)
-
-	const scmManager = new BranchScmProviderManager(configService, workspaceSync, workspaceRoot)
-	await scmManager.initialize()
-	context.subscriptions.push(scmManager)
 
 	// PR awareness — feature-detects the GitHub PR extension at runtime.
 	// Absent / inactive / unexpected-API cases all fall back to "no
@@ -129,8 +148,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(statusBar)
 
 	// ─── Phase 3: Chunk-Level Assignment ──────────────────────────────────────
-	const diffEngine = new DiffEngine()
-	const hunkRouter = new HunkRouter(diffEngine)
+	// `diffEngine` / `hunkRouter` are per-folder (aliased into locals above
+	// from `primary`).  The CodeLens and overlay diagnostics singletons
+	// stay bound to the primary folder's diff engine + config; a
+	// registry-aware variant is future work.
 	const hunkCodeLens = new HunkCodeLensProvider(diffEngine, configService)
 	const overlayDiagnostics = new OverlayDiagnostics(diffEngine, configService)
 
@@ -146,6 +167,30 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ── Phase 2 & 3 commands ──────────────────────────────────────────────────
 	commands.push(
 		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => stackTreeProvider.refresh()),
+
+		// Multi-root: report which folder the extension is currently
+		// targeting.  No-op for single-folder workspaces.  A folder picker
+		// that actually swaps the UI binding is future work.
+		vscode.commands.registerCommand('gitbraid.showActiveFolder', cmd(async () => {
+			const all = registry.getAll()
+			if (all.length <= 1) {
+				await vscode.window.showInformationMessage(`GitBraid: single folder — ${primary.root.fsPath}`)
+				return
+			}
+			const current = activeContext()
+			const picked = await vscode.window.showQuickPick(
+				all.map((ctx) => ({
+					label: path.basename(ctx.root.fsPath),
+					description: ctx === current ? `${ctx.root.fsPath} (active)` : ctx.root.fsPath,
+				})),
+				{ placeHolder: `Active: ${path.basename(current.root.fsPath)}` },
+			)
+			if (picked) {
+				await vscode.window.showInformationMessage(
+					`GitBraid: ${picked.label} — open a file inside that folder to switch focus.`,
+				)
+			}
+		})),
 
 		// Force a re-query of PR status without waiting for the 60s poll.
 		vscode.commands.registerCommand('gitbraid.refreshPRStatus', cmd(async () => {
@@ -315,28 +360,16 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
-	const stackResolver = new StackResolver(configService, branchStack)
+	//
+	// `stackResolver`, `rebaseSvc`, `stackCommands`, `rebaseRecovery`, and
+	// `stackShare` all live inside each `FolderContext`.  The rebase
+	// watcher is wired up inside `FolderContext.initialize()`, and the
+	// stack-content scheme is a process-wide singleton bound to the
+	// primary folder's resolver (multi-folder content routing is future
+	// work; the scheme only accepts relative paths today, which implicitly
+	// belong to the primary folder).
 	const stackContentProvider = new StackContentProvider(stackResolver, workspaceRoot)
-	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
-	rebaseSvc.init(workspaceRoot)
-	const stackCommands = new StackCommands(configService, branchStack, rebaseSvc, workspaceRoot)
-	const rebaseRecovery = new RebaseRecovery()
-	const stackShare = new StackShareService(configService, workspaceRoot)
-	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider, stackCommands, rebaseRecovery)
-
-	// Watch every existing and future worktree for mid-rebase state so the
-	// "rebase paused" toast fires the moment a rebase bails (T70).
-	const watchAllWorktrees = () => {
-		for (const entry of configService.getStack()) {
-			if (branchStack.worktreeExists(entry.name)) {
-				rebaseRecovery.watch(branchStack.getWorktreePath(entry.name).fsPath)
-			}
-		}
-	}
-	watchAllWorktrees()
-	context.subscriptions.push(
-		configService.onDidChangeStack(() => watchAllWorktrees()),
-	)
+	context.subscriptions.push(stackContentProvider)
 
 	// Refresh any open gitbraid-stack: documents when assignments change.
 	context.subscriptions.push(
@@ -724,7 +757,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// ─── Phase 5: Exported API & LM tools ─────────────────────────────────────
-	const gitbraidExportedApi = new GitBraidApi(configService, branchStack, workspaceSync, workspaceRoot)
+	// The exported API delegates to the primary folder today; a future
+	// commit turns it into a facade over `activeContext()` so external
+	// callers (and LM tools) target the folder the user is editing.
+	const gitbraidExportedApi = primary.api
 	context.subscriptions.push(...registerLmTools(gitbraidExportedApi))
 
 	// ─── Phase 6: Worktree management commands ────────────────────────────────

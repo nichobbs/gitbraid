@@ -15,6 +15,12 @@ import { BranchScmProviderManager } from './branchScmProvider'
 import { UndoStack } from './undoStack'
 import { FileChangeBus } from './fileChangeBus'
 
+// `StackContentProvider` is deliberately NOT created here — it registers
+// a `vscode.workspace.registerTextDocumentContentProvider(scheme, ...)`
+// which is global to the extension host.  Activation wires up a single
+// instance bound to the primary folder's StackResolver; multi-folder
+// support for the `gitbraid-stack:` scheme is a follow-up.
+
 /**
  * All per-folder state for a single `vscode.WorkspaceFolder` that is a git
  * repository.  Multi-root workspaces get one `FolderContext` per eligible
