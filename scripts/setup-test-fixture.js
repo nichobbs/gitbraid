@@ -13,6 +13,7 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const fixture = path.join(root, 'test_projects', 'proj1')
 const settingsPath = path.join(fixture, '.vscode', 'settings.json')
+const gitkeepPath = path.join(fixture, '.gitkeep')
 
 fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
 
@@ -23,4 +24,14 @@ if (!fs.existsSync(settingsPath)) {
 		},
 	}
 	fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4) + '\n')
+}
+
+// Test suites call `git init` + `git add .gitkeep` + `git commit` in
+// `suiteSetup` to produce an initial HEAD.  The add/commit catches are
+// tolerant of failure, but without any staged files the commit is a no-op
+// and `HEAD` doesn't exist — which breaks downstream tests like
+// `getCommitsBehind('HEAD', 'HEAD')`.  Ensure `.gitkeep` exists so the
+// staged commit always succeeds.
+if (!fs.existsSync(gitkeepPath)) {
+	fs.writeFileSync(gitkeepPath, '')
 }
