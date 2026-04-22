@@ -137,7 +137,7 @@ export class WorkspaceSync implements vscode.Disposable {
 			)
 			if (vscode.workspace.getConfiguration('gitbraid').get<boolean>('bidirectionalSync', false)) {
 				this._disposables.push(
-					bus.onDidChangeWorktree((e) => this._onWorktreeChanged(e.uri)),
+					bus.onDidChangeWorktree((e) => this._onWorktreeChanged(e.uri, e.relativePath, e.deleted)),
 				)
 				log.info('WorkspaceSync: bidirectional sync enabled (via FileChangeBus)')
 			}
@@ -419,17 +419,28 @@ export class WorkspaceSync implements vscode.Disposable {
 	 * the primary workspace when they actually differ from the workspace file.
 	 * The generation counter prevents this path from looping with `_syncFile`.
 	 */
-	private _onWorktreeChanged(uri: vscode.Uri): void {
+	private _onWorktreeChanged(uri: vscode.Uri, relativePath?: string, deleted?: boolean): void {
 		if (!this._workspaceRoot) return
 		if (this._syncing) return
 
-		const rel = this._relativeInWorktree(uri)
-		if (!rel) return
-		const { branch, relativePath } = rel
+		const rel = relativePath !== undefined
+			? { branch: this._branchForWorktreeUri(uri), relativePath }
+			: this._relativeInWorktree(uri)
+		if (!rel || !rel.branch) return
+		const { branch } = rel
+		const relPath = rel.relativePath
+
+		const genKey = normalisePath(relPath)
+
+		// When a worktree file is deleted, remove from _floatingDirty so the
+		// status bar and commit warning don't reference a ghost path (F11).
+		if (deleted) {
+			this._floatingDirty.delete(genKey)
+			return
+		}
 
 		// Decrement the stored generation if this is an echo of our own write;
 		// multiple worktree events can fire per write so we tolerate that too.
-		const genKey = normalisePath(relativePath)
 		const gen = this._generations.get(genKey)
 		if (gen !== undefined && gen > 0) {
 			this._generations.set(genKey, gen - 1)
@@ -442,9 +453,21 @@ export class WorkspaceSync implements vscode.Disposable {
 		if (existing) clearTimeout(existing)
 		const timer = setTimeout(() => {
 			this._reversePending.delete(genKey)
-			void this._reverseSync(branch, relativePath)
+			void this._reverseSync(branch, relPath)
 		}, getDebounceMs())
 		this._reversePending.set(genKey, timer)
+	}
+
+	/** Extract the branch name from a URI inside `.worktrees/<dir>/...`. */
+	private _branchForWorktreeUri(uri: vscode.Uri): string | undefined {
+		if (!this._workspaceRoot) return undefined
+		const rel = this._relativePath(uri)
+		const m = /^\.worktrees\/([^/]+)\//.exec(rel ?? '')
+		if (!m) return undefined
+		const dirName = m[1]
+		return this._config.getStack().find(
+			(e) => worktreePath(this._workspaceRoot!, e.name).fsPath.endsWith(dirName),
+		)?.name
 	}
 
 	private async _reverseSync(branch: string, relativePath: string): Promise<void> {

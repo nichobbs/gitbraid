@@ -269,7 +269,7 @@ export class BranchStackService implements vscode.Disposable {
 				}
 				force = true
 			}
-			await git.worktree.remove('"' + wtPath.fsPath + '"', force)
+			await git.worktree.remove(wtPath.fsPath, force)
 		}
 		await this._config.removeBranch(name)
 
@@ -358,11 +358,11 @@ export class BranchStackService implements vscode.Disposable {
 
 		if (branchExists) {
 			// Existing branch — check it out into a new worktree.
-			await git.worktree.add(`"${absPath}" "${branchName}"`)
+			await git.worktree.add(absPath, branchName)
 			log.info(`BranchStackService: added existing branch "${branchName}" at ${absPath}`)
 		} else {
 			// New branch — create it from base and add the worktree in one step.
-			await git.worktree.add(`-b "${branchName}" "${absPath}" "${base}"`)
+			await git.worktree.addNew(branchName, absPath, base)
 			log.info(`BranchStackService: created new branch "${branchName}" at ${absPath}`)
 		}
 	}
@@ -433,7 +433,7 @@ export class BranchStackService implements vscode.Disposable {
 			}
 			log.info(`BranchStackService: pruning orphan worktree at ${orphanPath}`)
 			try {
-				await git.worktree.remove('"' + orphanPath + '"', false)
+				await git.worktree.remove(orphanPath, false)
 			} catch (e) {
 				log.warn(`BranchStackService: could not auto-prune "${orphanPath}": ${e instanceof Error ? e.message : String(e)}`)
 			}

@@ -141,6 +141,22 @@ The undo history holds the last 100 operations and is cleared when the session e
 
 ---
 
+### Park files in a scratch area
+
+A **scratch worktree** is a special branch that acts as a staging area for files
+that aren't ready to be committed to any real branch yet.
+
+**Command Palette:** `GitBraid: Add Scratch Area` (`gitbraid.addScratchWorktree`)
+
+- Creates a `gitbraid-scratch` branch and worktree automatically.
+- The scratch SCM panel hides the commit input box to make it visually distinct —
+  files parked here are not intended for commit.
+- Assign files to the scratch branch the same way as any other branch.
+- Only one scratch area per workspace is supported; the command is a no-op if one
+  already exists.
+
+---
+
 ### Import and export a stack layout
 
 **Export** (`gitbraid.exportStack`) — writes the current stack order and file

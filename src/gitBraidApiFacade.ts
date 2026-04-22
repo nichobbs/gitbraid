@@ -142,4 +142,10 @@ export class GitBraidApiFacade implements GitBraidExportedAPI, vscode.Disposable
 	async removeHunkAssignment(relativePath: string, hunkIndex: number): Promise<void> {
 		await this._api().removeHunkAssignment(relativePath, hunkIndex)
 	}
+	async pullBranch(branch: string): Promise<void> {
+		await this._api().pullBranch(branch)
+	}
+	async syncBranch(branch: string): Promise<void> {
+		await this._api().syncBranch(branch)
+	}
 }

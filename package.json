@@ -208,7 +208,7 @@
 			},
 			{
 				"command": "gitbraid.addScratchWorktree",
-				"title": "Add Scratch Area",
+				"title": "Add Scratch Area — parking worktree for uncommitted work",
 				"category": "GitBraid",
 				"icon": "$(pinned)"
 			},

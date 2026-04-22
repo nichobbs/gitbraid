@@ -3,7 +3,8 @@
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
     "ecmaVersion": 2022,
-    "sourceType": "module"
+    "sourceType": "module",
+    "project": "./tsconfig.json"
   },
   "plugins": ["@typescript-eslint"],
   "env": {
@@ -22,6 +23,15 @@
     "no-throw-literal": "error",
     "semi": ["error", "never"],
     "eqeqeq": ["warn", "smart"],
-    "no-unused-expressions": "warn"
-  }
+    "no-unused-expressions": "warn",
+    "@typescript-eslint/no-floating-promises": ["error", { "ignoreVoid": true }]
+  },
+  "overrides": [
+    {
+      "files": ["test/**/*.ts"],
+      "rules": {
+        "@typescript-eslint/no-floating-promises": "off"
+      }
+    }
+  ]
 }
