@@ -39,6 +39,10 @@ the commits it should.
   stack (branch names, bases, file counts) to the clipboard.
 - **Undo / redo** — assignment and hunk-assignment actions are reversible within
   the session (`Ctrl+Alt+Z` / `Ctrl+Alt+Shift+Z`).
+- **Scratch area** — create a `gitbraid-scratch` worktree as a parking area for files
+  that aren't ready for any branch yet. The scratch SCM panel hides the commit input
+  so it stays visually distinct. Use **GitBraid: Add Scratch Area** from the command
+  palette to create one.
 - **Import / export** — share a stack layout with teammates via `.gitbraid/stack.json`
   committed to the repository.
 - **AI / chat integration** — eight VS Code language model tools (`gitbraid_getStack`,

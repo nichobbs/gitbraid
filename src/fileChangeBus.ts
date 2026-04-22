@@ -23,6 +23,8 @@ export interface WorktreeChangeEvent {
 	worktreeDirName: string
 	/** Path relative to the worktree root — e.g. "src/foo.ts". */
 	relativePath: string
+	/** Whether the file was deleted from the worktree (vs. created or changed). */
+	deleted: boolean
 }
 
 /**
@@ -56,8 +58,13 @@ export class FileChangeBus implements IFileChangeBus {
 	 *                       into the worktree channel so downstream code can
 	 *                       distinguish "user saved a file" from "worktree
 	 *                       changed under the hood".
+	 *
+	 * Respects `files.watcherExclude` — paths matched by the user's exclusion
+	 * globs are silently discarded before reaching any subscriber, matching the
+	 * behaviour of VS Code's built-in git extension (F3).
 	 */
 	constructor(workspaceRoot: vscode.Uri) {
+		this._excludeGlobs = FileChangeBus._readWatcherExcludes()
 		const watcher = vscode.workspace.createFileSystemWatcher(
 			new vscode.RelativePattern(workspaceRoot, '**/*'),
 			false, false, false,
@@ -67,7 +74,46 @@ export class FileChangeBus implements IFileChangeBus {
 			watcher.onDidChange((uri) => this._dispatch(uri, workspaceRoot, 'change')),
 			watcher.onDidCreate((uri) => this._dispatch(uri, workspaceRoot, 'change')),
 			watcher.onDidDelete((uri) => this._dispatch(uri, workspaceRoot, 'delete')),
+			vscode.workspace.onDidChangeConfiguration((e) => {
+				if (e.affectsConfiguration('files.watcherExclude')) {
+					this._excludeGlobs = FileChangeBus._readWatcherExcludes()
+				}
+			}),
 		)
+	}
+
+	private _excludeGlobs: string[]
+
+	private static _readWatcherExcludes(): string[] {
+		const raw = vscode.workspace
+			.getConfiguration('files')
+			.get<Record<string, boolean>>('watcherExclude', {})
+		return Object.entries(raw)
+			.filter(([, enabled]) => enabled)
+			.map(([pattern]) => pattern)
+	}
+
+	private _isExcluded(rel: string): boolean {
+		if (this._excludeGlobs.length === 0) return false
+		return this._excludeGlobs.some((glob) => FileChangeBus._matchGlob(glob, rel))
+	}
+
+	/**
+	 * Minimal glob matcher covering the common `files.watcherExclude` patterns:
+	 * - `**​/node_modules/**` style double-star prefix/suffix
+	 * - `node_modules/**` leading directory
+	 * - `dist/` trailing slash (directory prefix)
+	 */
+	private static _matchGlob(glob: string, rel: string): boolean {
+		// Strip trailing slash — treat as directory prefix
+		const normalGlob = glob.endsWith('/') ? glob.slice(0, -1) : glob
+		// Convert glob to a simple regex: ** → .*  * → [^/]*  . → \.
+		const pattern = normalGlob
+			.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+			.replace(/\\\*\\\*/g, '.*')
+			.replace(/\*/g, '[^/]*')
+		const re = new RegExp(`^${pattern}(/|$)`)
+		return re.test(rel)
 	}
 
 	dispose(): void {
@@ -88,6 +134,9 @@ export class FileChangeBus implements IFileChangeBus {
 		if (rel.startsWith('.git/') || rel === '.git') {
 			return
 		}
+		if (this._isExcluded(rel)) {
+			return
+		}
 
 		this._onDidAnyFileChange.fire()
 
@@ -98,6 +147,7 @@ export class FileChangeBus implements IFileChangeBus {
 					uri,
 					worktreeDirName: worktreeMatch[1],
 					relativePath: worktreeMatch[2],
+					deleted: kind === 'delete',
 				})
 			}
 			return
