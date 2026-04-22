@@ -4,6 +4,7 @@ import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry } from './configTypes'
 import type { PRAwareness } from './prAwareness'
 import { codiconForState, stateLabel } from './prAwareness'
+import { git } from './gitFunctions'
 
 // ─── Tree node types ──────────────────────────────────────────────────────────
 
@@ -40,6 +41,21 @@ export class FileNode extends vscode.TreeItem {
 		this.command = this.resourceUri
 			? { command: 'vscode.open', title: 'Open', arguments: [this.resourceUri] }
 			: undefined
+	}
+}
+
+/**
+ * The current checkout branch — shown at the top of the stack tree if it is
+ * not already a managed stack entry.  Files can be assigned to it; no worktree
+ * sync occurs (they stay in the primary workspace).
+ */
+export class CurrentBranchNode extends BranchNode {
+	constructor(name: string) {
+		super({ name, color: '', order: 0, base: '' })
+		this.description = '(current)'
+		this.iconPath = new vscode.ThemeIcon('folder-active')
+		this.tooltip = `Current branch: ${name} — files stay in the workspace`
+		this.contextValue = 'currentBranch'
 	}
 }
 
@@ -106,6 +122,9 @@ export class BranchStackTreeProvider
 
 	private readonly _disposables: vscode.Disposable[] = []
 
+	/** The currently checked-out branch name; refreshed on HEAD change. */
+	private _currentBranch: string | undefined = undefined
+
 	constructor(
 		private readonly _config: ConfigService,
 		private readonly _sync: WorkspaceSync,
@@ -113,9 +132,24 @@ export class BranchStackTreeProvider
 		private readonly _onUnassign?: (rel: string, previous: string) => void,
 		private readonly _prAwareness?: PRAwareness,
 	) {
+		// Seed the current branch cache before the first render.
+		void this._refreshCurrentBranch()
+
+		// Watch .git/HEAD so branch switches are reflected immediately.
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
+		if (workspaceRoot) {
+			const headWatcher = vscode.workspace.createFileSystemWatcher(
+				new vscode.RelativePattern(workspaceRoot, '.git/HEAD')
+			)
+			this._disposables.push(
+				headWatcher,
+				headWatcher.onDidChange(() => void this._refreshCurrentBranch().then(() => this.refresh())),
+			)
+		}
+
 		this._disposables.push(
 			_config.onDidChangeAssignment(() => this.refresh()),
-			_config.onDidChangeStack(() => this.refresh()),
+			_config.onDidChangeStack(() => void this._refreshCurrentBranch().then(() => this.refresh())),
 			_sync.onDidFloatFile(() => this.refresh()),
 			_sync.onDidSyncFile(() => this.refresh()),
 		)
@@ -190,6 +224,9 @@ export class BranchStackTreeProvider
 			const current = this._config.getStack().map((e) => e.name)
 			const moved = branchDrags[0].name!
 			const targetName = target.entry.name
+			// Skip if either the dragged or target branch is not a managed stack entry
+			// (e.g. the CurrentBranchNode which is shown but not in the stack config).
+			if (!current.includes(moved) || !current.includes(targetName)) return
 			const without = current.filter((n) => n !== moved)
 			const insertAt = without.indexOf(targetName)
 			if (insertAt < 0) return
@@ -222,6 +259,15 @@ export class BranchStackTreeProvider
 		}
 	}
 
+	/** Fetches the current branch name from git and caches it. */
+	private async _refreshCurrentBranch(): Promise<void> {
+		try {
+			this._currentBranch = await git.branch()
+		} catch {
+			this._currentBranch = undefined
+		}
+	}
+
 	refresh(node?: StackTreeNode): void {
 		this._onDidChangeTreeData.fire(node)
 	}
@@ -245,13 +291,18 @@ export class BranchStackTreeProvider
 
 	getChildren(element?: StackTreeNode): StackTreeNode[] {
 		if (!element) {
-			// Root: one node per branch + floating group
+			// Root: current branch (if not in the managed stack) + stack entries + floating group
 			const stack = this._config.getStack()
 			const floating = this._sync.getFloatingDirty()
-			return [
-				...stack.map((e) => new BranchNode(e)),
-				new FloatingGroupNode(floating.length),
-			]
+			const nodes: StackTreeNode[] = []
+			// Show the active checkout branch so users can assign files to it
+			// without those files appearing as "floating".
+			if (this._currentBranch && !stack.some(e => e.name === this._currentBranch)) {
+				nodes.push(new CurrentBranchNode(this._currentBranch))
+			}
+			nodes.push(...stack.map((e) => new BranchNode(e)))
+			nodes.push(new FloatingGroupNode(floating.length))
+			return nodes
 		}
 
 		if (element.kind === 'branch') {

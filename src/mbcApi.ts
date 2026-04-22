@@ -91,7 +91,13 @@ export class MbcApi implements GitBraidExportedAPI {
 
 	async assignFile(relativePath: string, branch: string): Promise<void> {
 		await this._config.setAssignment(relativePath, branch)
-		await hideAssignedFile(this._runner, this._workspaceRoot.fsPath, relativePath)
+		// Only hide from main git status when the branch has a real worktree.
+		// If there is no worktree (i.e. the file is being assigned to the currently
+		// checked-out branch), the file belongs in the primary workspace and should
+		// remain visible in `git status` as normal.
+		if (this._branchStack.worktreeExists(branch)) {
+			await hideAssignedFile(this._runner, this._workspaceRoot.fsPath, relativePath)
+		}
 	}
 
 	async assignHunk(relativePath: string, hunkIndex: number, branch: string): Promise<void> {

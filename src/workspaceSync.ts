@@ -1,11 +1,13 @@
 import * as vscode from 'vscode'
 import * as path from 'node:path'
+import * as fs from 'node:fs'
 import { log } from './channelLogger'
 import { SyncError } from './errors'
 import { ConfigService } from './configService'
 import { worktreePath } from './branchStackService'
 import { showError } from './errorSurfacer'
 import type { IFileChangeBus } from './fileChangeBus'
+import { getDefaultGitRunner } from './gitRunner'
 
 const DEFAULT_DEBOUNCE_MS = 200
 /** Hard cap on `_floatingDirty` so a long-running session can't leak memory. */
@@ -239,6 +241,23 @@ export class WorkspaceSync implements vscode.Disposable {
 	}
 
 	private async _handleSave(relativePath: string, uri: vscode.Uri): Promise<void> {
+		// Skip gitignored files — they should never appear as floating or be synced.
+		if (this._workspaceRoot) {
+			try {
+				const { exitCode } = await getDefaultGitRunner().run(
+					['check-ignore', '-q', '--', relativePath],
+					{ cwd: this._workspaceRoot.fsPath },
+				)
+				if (exitCode === 0) {
+					// File is gitignored — clear any stale floating entry and bail.
+					this._floatingDirty.delete(normalisePath(relativePath))
+					return
+				}
+			} catch {
+				// check-ignore failure is non-fatal; fall through to normal handling.
+			}
+		}
+
 		const branch = this._config.getAssignment(relativePath)
 		if (!branch) {
 			const key = normalisePath(relativePath)
@@ -254,6 +273,16 @@ export class WorkspaceSync implements vscode.Disposable {
 			return
 		}
 		this._floatingDirty.delete(normalisePath(relativePath))
+		// If the assigned branch has no worktree on disk (e.g. it IS the currently
+		// checked-out branch whose files live in the primary workspace), the file is
+		// already in the right place — no copy needed.
+		if (this._workspaceRoot) {
+			const wtPath = worktreePath(this._workspaceRoot, branch)
+			if (!fs.existsSync(wtPath.fsPath)) {
+				log.info(`WorkspaceSync: branch "${branch}" has no worktree — file stays in primary workspace`)
+				return
+			}
+		}
 		try {
 			await this._syncFile(relativePath, uri, branch)
 		} catch (e) {

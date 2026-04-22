@@ -26,6 +26,8 @@ import { StackShareService, SHARED_DIR, SHARED_FILE } from './stackShareService'
 import { PRAwareness } from './prAwareness'
 import * as path from 'node:path'
 import { MbcApi } from './mbcApi'
+import { hideAssignedFile } from './gitIndex'
+import { getDefaultGitRunner } from './gitRunner'
 import { registerLmTools } from './lmTools'
 
 import { FileChangeBus } from './fileChangeBus'
@@ -409,22 +411,36 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 			const stack = configService.getStack()
-			if (stack.length === 0) {
+			// Also offer the currently checked-out branch so users can assign
+			// files to their active workspace branch without them appearing floating.
+			const currentBranch = await git.branch(workspaceRoot).catch(() => undefined)
+			const currentInStack = currentBranch ? stack.some(e => e.name === currentBranch) : true
+			const pickItems: Array<{ label: string; description?: string }> = []
+			if (currentBranch && !currentInStack) {
+				pickItems.push({ label: currentBranch, description: '(current branch — stays in workspace)' })
+			}
+			pickItems.push(...stack.map((e) => ({ label: e.name, description: e.color })))
+			if (pickItems.length === 0) {
 				await vscode.window.showWarningMessage('No branches in the stack. Add a branch first.')
 				return
 			}
 			const picked = await vscode.window.showQuickPick(
-				stack.map((e) => ({ label: e.name, description: e.color })),
+				pickItems,
 				{ placeHolder: 'Assign file to branch' }
 			)
 			if (!picked) {
 				return
 			}
+			const runner = getDefaultGitRunner()
 			for (const target of targets) {
 				const rel = vscode.workspace.asRelativePath(target)
 				const previous = configService.getAssignment(rel)
 				await configService.setAssignment(rel, picked.label)
 				recordAssignFile(undoStack, configService, rel, picked.label, previous)
+				// Hide assigned file from main git status only when a real worktree exists.
+				if (branchStack.worktreeExists(picked.label)) {
+					await hideAssignedFile(runner, workspaceRoot.fsPath, rel)
+				}
 			}
 			const msg = targets.length === 1
 				? `Assigned ${vscode.workspace.asRelativePath(targets[0])} → ${picked.label}`
