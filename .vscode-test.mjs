@@ -7,6 +7,19 @@ import { env } from 'process'
 delete env['VSCODE_IPC_HOOK_CLI']
 env['DONT_PROMPT_WSL_INSTALL'] = true
 
+// Windows GitHub Actions runners don't ship a default git identity, so
+// every `git commit` in the test fixtures fails with "Author identity
+// unknown", which in turn means `HEAD` is never created and downstream
+// tests that resolve `HEAD` or `main` refs explode.  Set author and
+// committer env vars here so they inherit into the extension host and,
+// from there, into every `child_process` git call.  Only applied when
+// the user hasn't already configured an identity via env or global
+// git config — never overwrite a real developer's setup.
+if (!env['GIT_AUTHOR_NAME']) env['GIT_AUTHOR_NAME'] = 'gitbraid-test'
+if (!env['GIT_AUTHOR_EMAIL']) env['GIT_AUTHOR_EMAIL'] = 'test@gitbraid.local'
+if (!env['GIT_COMMITTER_NAME']) env['GIT_COMMITTER_NAME'] = 'gitbraid-test'
+if (!env['GIT_COMMITTER_EMAIL']) env['GIT_COMMITTER_EMAIL'] = 'test@gitbraid.local'
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /** @type {import('mocha').MochaOptions} */

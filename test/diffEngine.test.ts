@@ -311,8 +311,15 @@ suite('DiffEngine — spawn-based invocation', () => {
 			const call = fake.calls[0]
 			// The payload must appear as a standalone argv entry, not inlined
 			// into a shell string, and must retain its original characters.
+			// Normalise backslashes on both sides — on Windows, `path.normalize`
+			// inside `DiffEngine._normalisePath` converts forward slashes to
+			// backslashes before the arg is handed to git.  The security
+			// contract (no shell interpretation, payload passed verbatim as
+			// argv) still holds — only the slash direction differs.
+			const forwardSlash = (s) => s.replaceAll('\\', '/')
+			const expected = forwardSlash(p).replace(/^(\.\.\/)+/, '')
 			assert.ok(
-				call.args.some((a) => a.includes(p.replaceAll('\\', '/').replace(/^(\.\.\/|\.\.\\)+/, ''))),
+				call.args.some((a) => forwardSlash(a).includes(expected)),
 				`expected payload to survive as argv, got ${JSON.stringify(call.args)}`,
 			)
 			// No marker file created.

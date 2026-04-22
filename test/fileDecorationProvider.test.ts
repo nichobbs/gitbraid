@@ -130,7 +130,10 @@ suite('BranchFileDecorationProvider', () => {
 
 		const firedUri = await changePromise
 		const uri = Array.isArray(firedUri) ? firedUri[0] : firedUri
-		assert.ok(uri.fsPath.endsWith('src/bar.ts'), 'Expected decoration change for assigned file')
+		// Normalise backslashes (Windows) so the suffix comparison is
+		// platform-independent.
+		const normalised = uri.fsPath.replaceAll('\\', '/')
+		assert.ok(normalised.endsWith('src/bar.ts'), `Expected decoration change for assigned file, got ${uri.fsPath}`)
 	})
 
 	test('refreshAll fires decoration change for all assigned files', async () => {

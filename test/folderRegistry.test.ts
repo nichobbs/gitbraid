@@ -78,9 +78,17 @@ suite('FolderRegistry', () => {
 	// ── getActive ────────────────────────────────────────────────────────────
 
 	test('getActive: with exactly one context and no active editor, returns that context', async () => {
-		// Drop one context so only ctxA remains.
+		// Drop one context so only ctxA remains.  The internal map is keyed
+		// by `vscode.Uri.file(...).fsPath` (not by the raw `TmpRepo.root`
+		// string) because VS Code's URI normalisation can differ from the
+		// string Node gave us — drive-letter casing on Windows, for
+		// instance.  Look up the entry via the registry's own helper so
+		// the test matches whatever key shape the registry actually uses.
 		ctxB.dispose()
-		;(registry as unknown as { _contexts: Map<string, FolderContext> })._contexts.delete(tmpB.root)
+		const ctxs = (registry as unknown as { _contexts: Map<string, FolderContext> })._contexts
+		for (const [key, ctx] of ctxs) {
+			if (ctx === ctxB) { ctxs.delete(key); break }
+		}
 		assert.strictEqual(registry.size, 1)
 		assert.strictEqual(registry.getActive(), ctxA)
 	})
