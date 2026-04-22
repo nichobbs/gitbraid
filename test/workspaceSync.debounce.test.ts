@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { ConfigService } from '../src/configService'
 import { WorkspaceSync } from '../src/workspaceSync'
+import { worktreePath } from '../src/branchStackService'
 
 // These tests drive real (not faked) timers because VS Code's filesystem
 // watcher emits via the host's event loop.  Sinon fake-timers would freeze
@@ -87,6 +88,12 @@ suite('WorkspaceSync — debounce + re-entrancy', () => {
 		await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(uri.fsPath)))
 		await vscode.workspace.fs.writeFile(uri, Buffer.from('initial'))
 		await config.setAssignment(rel, 'feature/b')
+
+		// Create the worktree directory so _handleSave doesn't bail on the
+		// no-worktree guard (the test uses ConfigService directly and never
+		// runs BranchStackService which would create the worktree on disk).
+		const wtPath = worktreePath(wsRoot(), 'feature/b')
+		fs.mkdirSync(path.join(wtPath.fsPath, 'src'), { recursive: true })
 
 		// Drain the assignment-triggered sync.
 		await sleep(500)

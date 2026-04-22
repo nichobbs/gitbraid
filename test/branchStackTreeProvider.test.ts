@@ -7,6 +7,7 @@ import { WorkspaceSync } from '../src/workspaceSync'
 import {
 	BranchStackTreeProvider,
 	BranchNode,
+	CurrentBranchNode,
 	FloatingGroupNode,
 	FileNode,
 	FloatingFileNode,
@@ -82,12 +83,13 @@ suite('BranchStackTreeProvider', () => {
 		await svc.addBranch({ name: 'feature/impl', color: '#2196F3', base: 'feature/docs' })
 
 		const children = tree.getChildren()
-		assert.strictEqual(children.length, 3)
-		assert.ok(children[0] instanceof BranchNode)
-		assert.ok(children[1] instanceof BranchNode)
-		assert.ok(children[2] instanceof FloatingGroupNode)
+		// A CurrentBranchNode may be prepended if the checkout branch isn't in the stack.
+		const stackBranches = children.filter((n) => n instanceof BranchNode && !(n instanceof CurrentBranchNode))
+		const floatingGroups = children.filter((n) => n instanceof FloatingGroupNode)
+		assert.strictEqual(stackBranches.length, 2)
+		assert.strictEqual(floatingGroups.length, 1)
 
-		const names = children.slice(0, 2).map((n) => (n as BranchNode).entry.name)
+		const names = stackBranches.map((n) => (n as BranchNode).entry.name)
 		assert.deepStrictEqual(names, ['feature/docs', 'feature/impl'])
 	})
 
