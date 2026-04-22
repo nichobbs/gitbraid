@@ -357,6 +357,64 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 		})),
 
+		vscode.commands.registerCommand('gitbraid.copyStackDiagram', cmd(async () => {
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to diagram.')
+				return
+			}
+			// Gather ahead counts and PR info for each branch
+			const runner = getDefaultGitRunner()
+			const lines: string[] = []
+			// Find the root base (the branch at the bottom of the stack's base)
+			const rootBase = stack[0].base
+			lines.push(rootBase)
+			// Build parent→children map for tree rendering
+			const childrenOf = new Map<string, string[]>()
+			childrenOf.set(rootBase, [])
+			for (const entry of stack) {
+				if (!childrenOf.has(entry.base)) childrenOf.set(entry.base, [])
+				childrenOf.get(entry.base)!.push(entry.name)
+				childrenOf.set(entry.name, [])
+			}
+			// Collect ahead counts
+			const aheadCounts = new Map<string, number>()
+			for (const entry of stack) {
+				try {
+					const { stdout } = await runner.run(
+						['rev-list', '--count', `${entry.base}..${entry.name}`],
+						{ cwd: ctx.root.fsPath },
+					)
+					aheadCounts.set(entry.name, parseInt(stdout.trim(), 10) || 0)
+				} catch {
+					aheadCounts.set(entry.name, 0)
+				}
+			}
+			// Render tree recursively
+			const renderChildren = (parent: string, prefix: string): void => {
+				const children = childrenOf.get(parent) ?? []
+				for (let i = 0; i < children.length; i++) {
+					const branch = children[i]
+					const isLast = i === children.length - 1
+					const connector = isLast ? '└── ' : '├── '
+					const childPrefix = isLast ? '    ' : '│   '
+					const ahead = aheadCounts.get(branch)
+					const aheadStr = ahead !== undefined && ahead > 0 ? ` [↑${ahead}]` : ''
+					const prInfo = prAwareness.getForBranch(branch)
+					const prStr = prInfo
+						? ` PR #${String(prInfo.number)} ${prInfo.state === 'open' ? '✓' : prInfo.state === 'draft' ? '(draft)' : prInfo.state === 'merged' ? '(merged)' : '(closed)'}`
+						: ' (no PR)'
+					lines.push(`${prefix}${connector}${branch}${aheadStr}${prStr}`)
+					renderChildren(branch, prefix + childPrefix)
+				}
+			}
+			renderChildren(rootBase, '')
+			const diagram = lines.join('\n')
+			await vscode.env.clipboard.writeText(diagram)
+			await vscode.window.showInformationMessage('GitBraid: stack diagram copied to clipboard.')
+		})),
+
 		vscode.commands.registerCommand('gitbraid.focusStackView', () => {
 			stackView.reveal(undefined as never, { focus: true }).then(undefined, (e: unknown) => {
 				log.error('focusStackView: ' + e)
@@ -461,6 +519,34 @@ export async function activate(context: vscode.ExtensionContext) {
 				}
 				const doc = await vscode.workspace.openTextDocument({ language: 'diff', content: diff })
 				await vscode.window.showTextDocument(doc, { preview: true })
+			}),
+		),
+
+		vscode.commands.registerCommand(
+			'gitbraid.openStackDiff',
+			cmd(async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('Open a file first to see its PR-ready stack diff.')
+					return
+				}
+				const ctx = contextForUri(target)
+				const rel = relativePathIn(ctx, target)
+				const stack = ctx.config.getStack()
+				if (stack.length === 0) {
+					await vscode.window.showWarningMessage('No branches in the stack.')
+					return
+				}
+				const base = stack[0].base
+				const top = stack.at(-1)!.name
+				const baseUri = StackContentProvider.baseUriFor(rel, base, ctx.root)
+				const stackUri = StackContentProvider.uriFor(rel, ctx.root)
+				await vscode.commands.executeCommand(
+					'vscode.diff',
+					baseUri,
+					stackUri,
+					`${rel} (${base} ↔ ${top})`,
+				)
 			}),
 		),
 

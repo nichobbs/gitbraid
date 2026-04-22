@@ -104,19 +104,58 @@ export class FloatingGroupNode extends vscode.TreeItem {
 /** A floating file — child of FloatingGroupNode. */
 export class FloatingFileNode extends vscode.TreeItem {
 	readonly kind = 'floatingFile' as const
-	constructor(public readonly relativePath: string) {
+	constructor(
+		public readonly relativePath: string,
+		floatingSince?: number,
+	) {
 		const label = relativePath.split('/').pop() ?? relativePath
 		super(label, vscode.TreeItemCollapsibleState.None)
 		this.contextValue = 'floatingFile'
 		this.description = relativePath
-		this.tooltip = `${relativePath} — not yet assigned to a branch`
-		this.iconPath = new vscode.ThemeIcon('question')
 		this.resourceUri = vscode.workspace.workspaceFolders?.[0]
 			? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, relativePath)
 			: undefined
 		this.command = this.resourceUri
 			? { command: 'vscode.open', title: 'Open', arguments: [this.resourceUri] }
 			: undefined
+
+		const { icon, tooltip } = _floatingAgeDecoration(relativePath, floatingSince)
+		this.iconPath = icon
+		this.tooltip = tooltip
+	}
+}
+
+function _floatingAgeDecoration(
+	relativePath: string,
+	floatingSince: number | undefined,
+): { icon: vscode.ThemeIcon, tooltip: string } {
+	const base = `${relativePath} — not yet assigned to a branch`
+	if (floatingSince === undefined) {
+		return { icon: new vscode.ThemeIcon('question'), tooltip: base }
+	}
+	const elapsed = Date.now() - floatingSince
+	const HOUR = 60 * 60 * 1000
+	const DAY = 24 * HOUR
+	if (elapsed < HOUR) {
+		return { icon: new vscode.ThemeIcon('question'), tooltip: `${base}\nFloating for less than an hour` }
+	}
+	if (elapsed < DAY) {
+		const h = Math.round(elapsed / HOUR)
+		return {
+			icon: new vscode.ThemeIcon('question', new vscode.ThemeColor('editorWarning.foreground')),
+			tooltip: `${base}\nFloating for ${h} hour${h !== 1 ? 's' : ''}`,
+		}
+	}
+	const days = Math.round(elapsed / DAY)
+	if (elapsed < 7 * DAY) {
+		return {
+			icon: new vscode.ThemeIcon('question', new vscode.ThemeColor('list.warningForeground')),
+			tooltip: `${base}\nFloating for ${days} day${days !== 1 ? 's' : ''}`,
+		}
+	}
+	return {
+		icon: new vscode.ThemeIcon('question', new vscode.ThemeColor('editorError.foreground')),
+		tooltip: `${base}\nFloating for ${days} day${days !== 1 ? 's' : ''}`,
 	}
 }
 
@@ -395,7 +434,7 @@ export class BranchStackTreeProvider
 		}
 
 		if (element.kind === 'floatingGroup') {
-			return this._sync.getFloatingDirty().map((rel) => new FloatingFileNode(rel))
+			return this._sync.getFloatingDirty().map((rel) => new FloatingFileNode(rel, this._sync.getFloatingSince(rel)))
 		}
 
 		return []

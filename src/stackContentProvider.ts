@@ -2,9 +2,15 @@ import * as vscode from 'vscode'
 import { log } from './channelLogger'
 import type { FolderRegistry } from './folderRegistry'
 import type { StackResolver } from './stackResolver'
-
 /** URI scheme that the provider is registered under. */
 export const STACK_SCHEME = 'gitbraid-stack'
+
+/**
+ * URI scheme for the "base" side of the cumulative stack diff view.
+ * Content is `git show <commit>:<file>` where the commit ref is encoded
+ * in the `commit=` query parameter.
+ */
+export const STACK_BASE_SCHEME = 'gitbraid-base'
 
 /**
  * Exposes {@link StackResolver.getResolvedContent} as a
@@ -39,6 +45,7 @@ export class StackContentProvider implements vscode.TextDocumentContentProvider,
 		this._disposables.push(
 			this._onDidChange,
 			vscode.workspace.registerTextDocumentContentProvider(STACK_SCHEME, this),
+			vscode.workspace.registerTextDocumentContentProvider(STACK_BASE_SCHEME, this),
 		)
 	}
 
@@ -49,10 +56,24 @@ export class StackContentProvider implements vscode.TextDocumentContentProvider,
 	}
 
 	async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
-		if (uri.scheme !== STACK_SCHEME) {
+		if (uri.scheme !== STACK_SCHEME && uri.scheme !== STACK_BASE_SCHEME) {
 			return ''
 		}
+
 		const { resolver, root, relativePath } = this._resolve(uri)
+
+		if (uri.scheme === STACK_BASE_SCHEME) {
+			const commit = parseCommitQuery(uri.query)
+			if (!commit) return ''
+			try {
+				const content = await resolver.getCommittedContent(root.fsPath, commit, relativePath)
+				return content ? new TextDecoder().decode(content) : ''
+			} catch (e) {
+				log.warn(`StackContentProvider: failed to resolve base ${commit}:${relativePath}: ${e instanceof Error ? e.message : String(e)}`)
+				return ''
+			}
+		}
+
 		try {
 			const content = await resolver.getResolvedContent(root, relativePath)
 			if (!content) {
@@ -81,6 +102,17 @@ export class StackContentProvider implements vscode.TextDocumentContentProvider,
 		return base.with({ query: `folder=${encodeURIComponent(folderRoot.fsPath)}` })
 	}
 
+	/**
+	 * Build a `gitbraid-base:` URI for the given path at a specific commit ref.
+	 * Used as the "before" side of the cumulative stack diff view.
+	 */
+	static baseUriFor(relativePath: string, commit: string, folderRoot?: vscode.Uri): vscode.Uri {
+		const base = vscode.Uri.parse(`${STACK_BASE_SCHEME}:${relativePath}`)
+		const params: string[] = [`commit=${encodeURIComponent(commit)}`]
+		if (folderRoot) params.push(`folder=${encodeURIComponent(folderRoot.fsPath)}`)
+		return base.with({ query: params.join('&') })
+	}
+
 	/** Map a URI to the owning folder's resolver / root. */
 	private _resolve(uri: vscode.Uri): { resolver: StackResolver, root: vscode.Uri, relativePath: string } {
 		const relativePath = uri.path.replace(/^\/+/, '')
@@ -100,6 +132,17 @@ function parseFolderQuery(query: string): string | undefined {
 	for (const pair of query.split('&')) {
 		const [key, value] = pair.split('=')
 		if (key === 'folder' && value) {
+			try { return decodeURIComponent(value) } catch { return undefined }
+		}
+	}
+	return undefined
+}
+
+function parseCommitQuery(query: string): string | undefined {
+	if (!query) return undefined
+	for (const pair of query.split('&')) {
+		const [key, value] = pair.split('=')
+		if (key === 'commit' && value) {
 			try { return decodeURIComponent(value) } catch { return undefined }
 		}
 	}

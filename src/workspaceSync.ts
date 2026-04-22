@@ -46,6 +46,8 @@ export class WorkspaceSync implements vscode.Disposable {
 	 * case is a lost notification, not a sync error (T51).
 	 */
 	private readonly _floatingDirty = new Set<string>()
+	/** Timestamp (ms epoch) when each path first became floating this session. */
+	private readonly _floatingSince = new Map<string, number>()
 	private readonly _disposables: vscode.Disposable[] = []
 
 	/** Pending debounce timer handles keyed by workspace-relative path. */
@@ -223,9 +225,13 @@ export class WorkspaceSync implements vscode.Disposable {
 				if (!this._floatingDirty.has(key)) {
 					if (this._floatingDirty.size >= FLOATING_DIRTY_CAP) {
 						const oldest = this._floatingDirty.values().next().value
-						if (oldest !== undefined) this._floatingDirty.delete(oldest)
+						if (oldest !== undefined) {
+							this._floatingDirty.delete(oldest)
+							this._floatingSince.delete(oldest)
+						}
 					}
 					this._floatingDirty.add(key)
+					this._floatingSince.set(key, Date.now())
 					this._onDidFloatFile.fire({ relativePath: key })
 					seeded++
 				}
@@ -248,6 +254,11 @@ export class WorkspaceSync implements vscode.Disposable {
 	/** Returns a snapshot of all currently floating dirty paths. */
 	getFloatingDirty(): ReadonlyArray<string> {
 		return [...this._floatingDirty]
+	}
+
+	/** Returns the ms-epoch timestamp when a path first became floating, or undefined. */
+	getFloatingSince(relativePath: string): number | undefined {
+		return this._floatingSince.get(normalisePath(relativePath))
 	}
 
 	// ─── Private event handlers ───────────────────────────────────────────────
@@ -296,7 +307,9 @@ export class WorkspaceSync implements vscode.Disposable {
 		}
 		const branch = this._config.getAssignment(rel)
 		if (!branch) {
-			this._floatingDirty.delete(normalisePath(rel))
+			const key = normalisePath(rel)
+			this._floatingDirty.delete(key)
+			this._floatingSince.delete(key)
 			return
 		}
 		void this._propagateDeletion(rel, branch)
@@ -328,13 +341,21 @@ export class WorkspaceSync implements vscode.Disposable {
 			// the oldest key.
 			if (!this._floatingDirty.has(key) && this._floatingDirty.size >= FLOATING_DIRTY_CAP) {
 				const oldest = this._floatingDirty.values().next().value
-				if (oldest !== undefined) this._floatingDirty.delete(oldest)
+				if (oldest !== undefined) {
+					this._floatingDirty.delete(oldest)
+					this._floatingSince.delete(oldest)
+				}
+			}
+			if (!this._floatingDirty.has(key)) {
+				this._floatingSince.set(key, Date.now())
 			}
 			this._floatingDirty.add(key)
 			this._onDidFloatFile.fire({ relativePath: key })
 			return
 		}
-		this._floatingDirty.delete(normalisePath(relativePath))
+		const normKey = normalisePath(relativePath)
+		this._floatingDirty.delete(normKey)
+		this._floatingSince.delete(normKey)
 		// If the assigned branch has no worktree on disk (e.g. it IS the currently
 		// checked-out branch whose files live in the primary workspace), the file is
 		// already in the right place — no copy needed.
@@ -361,7 +382,9 @@ export class WorkspaceSync implements vscode.Disposable {
 			return
 		}
 		// Clear floating status — file is now assigned to a branch
-		this._floatingDirty.delete(normalisePath(relativePath))
+		const normKey = normalisePath(relativePath)
+		this._floatingDirty.delete(normKey)
+		this._floatingSince.delete(normKey)
 		const wtPath = worktreePath(this._workspaceRoot, branch)
 		const destUri = vscode.Uri.joinPath(wtPath, relativePath)
 

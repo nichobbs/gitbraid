@@ -243,6 +243,18 @@
 				"icon": "$(diff-multiple)"
 			},
 			{
+				"command": "gitbraid.openStackDiff",
+				"title": "Open PR-Ready Stack Diff",
+				"category": "GitBraid",
+				"icon": "$(git-pull-request)"
+			},
+			{
+				"command": "gitbraid.copyStackDiagram",
+				"title": "Copy Stack Diagram to Clipboard",
+				"category": "GitBraid",
+				"icon": "$(clippy)"
+			},
+			{
 				"command": "gitbraid.assignHunk",
 				"title": "Assign Hunk to Branch",
 				"category": "GitBraid",
@@ -412,6 +424,11 @@
 					"group": "navigation"
 				},
 				{
+					"command": "gitbraid.copyStackDiagram",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
+				},
+				{
 					"command": "gitbraid.rehideAssignedFiles",
 					"when": "view == gitbraid.stackView",
 					"group": "navigation"
@@ -437,6 +454,11 @@
 					"command": "gitbraid.unassignFolder",
 					"when": "explorerResourceIsFolder",
 					"group": "gitbraid@2"
+				},
+				{
+					"command": "gitbraid.openStackDiff",
+					"when": "!explorerResourceIsFolder",
+					"group": "gitbraid@3"
 				}
 			],
 			"scm/resourceState/context": [
@@ -750,6 +772,20 @@
 						"hunkIndex",
 						"branch"
 					],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_getStackDiagram",
+				"displayName": "GitBraid: Get Stack Diagram",
+				"modelDescription": "Returns an ASCII tree diagram of the current branch stack, showing parent-child relationships. Useful for including in PR descriptions.",
+				"userDescription": "Get an ASCII diagram of the branch stack.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetStackDiagram",
+				"icon": "$(type-hierarchy)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {},
 					"additionalProperties": false
 				}
 			},
