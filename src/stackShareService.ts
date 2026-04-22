@@ -32,6 +32,10 @@ export interface SharedStackFile {
 	hunkAssignments?: Record<string, Record<string, string>>
 	/** ISO-8601 timestamp (UTC) the file was exported at.  Informational. */
 	exportedAt?: string
+	/** When true, this file is a team template offered to new stack members. */
+	template?: boolean
+	/** Human-readable instructions shown in the onboarding prompt. */
+	instructions?: string
 }
 
 export interface SharedBranchEntry {
@@ -102,6 +106,52 @@ export class StackShareService {
 			shared.hunkAssignments = hunkAssignments
 		}
 		return shared
+	}
+
+	/**
+	 * Export the stack as a team template (sets `template: true` and optional
+	 * `instructions`).  Writes to the same `.gitbraid/stack.json` path as a
+	 * normal export so teammates can commit it alongside the code.
+	 */
+	async exportAsTemplate(instructions?: string): Promise<string> {
+		const shared = this.toSharedFile()
+		shared.template = true
+		if (instructions) shared.instructions = instructions
+		const dir = path.join(this._workspaceRoot.fsPath, SHARED_DIR)
+		await fsp.mkdir(dir, { recursive: true })
+		const filePath = this.sharedFilePath()
+		const body = JSON.stringify(shared, null, 2) + '\n'
+		const tmp = filePath + '.tmp'
+		await fsp.writeFile(tmp, body, 'utf-8')
+		await fsp.rename(tmp, filePath)
+		log.info(`StackShareService: exported template to ${filePath}`)
+		return filePath
+	}
+
+	/**
+	 * If the workspace has no stack yet but `.gitbraid/stack.json` exists with
+	 * `template: true`, offer to apply it.  Call once after config is loaded.
+	 */
+	async detectAndOfferTemplate(): Promise<void> {
+		if (this._config.getStack().length > 0) return
+		let shared: SharedStackFile | undefined
+		try {
+			shared = await this.readSharedFile()
+		} catch {
+			return
+		}
+		if (!shared?.template) return
+
+		const msg = shared.instructions
+			? `GitBraid: team stack template found — ${shared.instructions}`
+			: 'GitBraid: a team stack template was found. Apply it to get started?'
+		const pick = await vscode.window.showInformationMessage(msg, 'Apply Template', 'Dismiss')
+		if (pick === 'Apply Template') {
+			await this.applyImport(shared, { branches: 'theirs', assignments: 'theirs' })
+			await vscode.window.showInformationMessage(
+				`Applied template: ${String(shared.stack.length)} branch(es) added.`,
+			)
+		}
 	}
 
 	async exportToDisk(): Promise<string> {

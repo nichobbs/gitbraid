@@ -352,6 +352,54 @@ class GetStackDiagramTool implements vscode.LanguageModelTool<Record<string, nev
 	}
 }
 
+// ─── assignGlob ───────────────────────────────────────────────────────────────
+
+interface AssignGlobInput {
+	pattern: string
+	branch: string
+}
+
+class AssignGlobTool implements vscode.LanguageModelTool<AssignGlobInput> {
+	readonly name = 'gitbraid_assignGlob'
+
+	constructor(private readonly _api: GitBraidApi) {}
+
+	async invoke(
+		options: vscode.LanguageModelToolInvocationOptions<AssignGlobInput>,
+		_token: vscode.CancellationToken,
+	): Promise<vscode.LanguageModelToolResult> {
+		const { pattern, branch } = options.input
+		const uris = await vscode.workspace.findFiles(
+			pattern,
+			'{.worktrees/**,.git/**,node_modules/**}',
+		)
+		if (uris.length === 0) {
+			return textResult(`No files matched pattern "${pattern}".`)
+		}
+		const paths = uris.map((u) => vscode.workspace.asRelativePath(u, false))
+		for (const rel of paths) {
+			await this._api.assignFile(rel, branch)
+		}
+		return textResult(`Assigned ${String(paths.length)} file(s) matching "${pattern}" to branch "${branch}":\n${paths.join('\n')}`)
+	}
+
+	prepareInvocation(
+		options: vscode.LanguageModelToolInvocationPrepareOptions<AssignGlobInput>,
+		_token: vscode.CancellationToken,
+	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+		const { pattern, branch } = options.input
+		return {
+			invocationMessage: `Assigning files matching "${pattern}" to "${branch}"…`,
+			confirmationMessages: {
+				title: 'Assign Files by Glob to Branch',
+				message: new vscode.MarkdownString(
+					`Assign all files matching \`${pattern}\` to branch **${branch}**?`,
+				),
+			},
+		}
+	}
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 /**
@@ -370,6 +418,7 @@ export function registerLmTools(api: GitBraidApi): vscode.Disposable[] {
 		new PullBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new SyncBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new GetStackDiagramTool(api) as unknown as vscode.LanguageModelTool<never>,
+		new AssignGlobTool(api) as unknown as vscode.LanguageModelTool<never>,
 	]
 
 	const disposables: vscode.Disposable[] = []

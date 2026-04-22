@@ -26,6 +26,12 @@ export interface BranchStackEntry {
 	 * entries hides the commit/push controls.
 	 */
 	scratch?: boolean
+	/**
+	 * Optional commit-message template for this branch's SCM input box.
+	 * Variables: `{branch}` (full name), `{issue}` (first JIRA-style token),
+	 * `{scope}` (last path segment after `/`).
+	 */
+	commitTemplate?: string
 }
 
 /**

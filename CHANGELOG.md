@@ -85,6 +85,24 @@
   the same chart colour can still be visually distinguished.
 
 ### Added
+- **Assign by glob** (`gitbraid.assignGlob`): enter a glob pattern, pick a
+  branch, preview matched files in a checkbox QuickPick, and assign them all
+  in one undoable operation. Also exposed as `gitbraid_assignGlob` LM tool so
+  AI assistants can bulk-assign related files.
+- **Named stack checkpoints** (`gitbraid.saveCheckpoint` /
+  `gitbraid.restoreCheckpoint`): snapshot the current stack and assignments to
+  `.worktrees/checkpoints/<timestamp>.json`; restore via a QuickPick that
+  previews branch count and assignment count per checkpoint.
+- **Commit message templates** (`gitbraid.setCommitTemplate`): set a per-branch
+  template that pre-populates the SCM input box. Variables: `{branch}` (full
+  name), `{issue}` (first JIRA-style token e.g. `PROJ-123`), `{scope}` (last
+  path segment after `/`). Template is stored in `local-config.json` and
+  survives rebuilds.
+- **Team stack templates** (`gitbraid.exportStackTemplate`): export the stack
+  with `template: true` and optional `instructions` to `.gitbraid/stack.json`.
+  New teammates who open the repo with no local config are offered a one-click
+  "Apply Template" prompt. Detection runs once at activation via
+  `StackShareService.detectAndOfferTemplate()`.
 - **Worktree health dashboard** (`WorktreeHealthService`): ahead/behind
   commit counts, dirty-worktree indicator (⦿), and mid-rebase warning icon
   are now shown live in the Branch Stack tree view for every branch.
