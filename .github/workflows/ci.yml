@@ -74,7 +74,20 @@ jobs:
             --functions 55 \
             coverage/lcov.info
 
-      - name: Package VSIX
+      # `vsce package` invokes the `vscode:prepublish` script, which
+      # includes `npm test` — and vscode-test launches Electron.  On
+      # Linux runners there's no display server available by default,
+      # so wrap with `xvfb-run` the same way the test step does.
+      # macOS / Windows have a real display (or don't need one), so
+      # they run `vsce` directly.
+      - name: Package VSIX (Linux, headless)
+        if: matrix.os == 'ubuntu-latest'
+        run: xvfb-run -a npx vsce package --no-dependencies
+        env:
+          DISPLAY: ':99.0'
+
+      - name: Package VSIX (macOS / Windows)
+        if: matrix.os != 'ubuntu-latest'
         run: npx vsce package --no-dependencies
 
       - name: Upload VSIX artefact
