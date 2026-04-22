@@ -24,6 +24,18 @@ The **Branch Stack** view lives in its own **GitBraid** activity-bar icon (the b
 icon on the left sidebar). It shows the ordered stack: each branch lists its assigned
 files; floating (unassigned) files appear at the bottom under **Floating (unassigned)**.
 
+Each branch node displays live health indicators:
+
+| Indicator | Meaning |
+|-----------|---------|
+| `↑N` | N commits ahead of the branch's base |
+| `↓N` | N commits behind the branch's base |
+| `⦿` | Worktree has uncommitted changes |
+| Warning icon | A rebase is currently in progress |
+
+Unassigned (floating) files are colour-coded by age: grey (<1 h), yellow (1–24 h),
+orange (1–7 days), red (>7 days).
+
 A status-bar item shows the count of floating files so you always know when something
 is unassigned. It hides automatically when the stack is empty or all files are assigned.
 
@@ -125,8 +137,34 @@ When a parent branch advances, GitBraid detects the gap and shows a notification
 - Run `GitBraid: Rebase Branch onto Parent` (`gitbraid.rebaseBranch`) and pick the branch.
 
 If the rebase pauses on a conflict, a dialog appears with **Open conflicts**,
-**Abort**, and **Continue** options. Resolve the conflicts in VS Code's merge editor,
-then click **Continue**.
+**Abort**, and **Continue** options. **Open conflicts** launches VS Code's built-in
+three-way merge editor for each conflicted file (falls back to a plain text tab on
+older VS Code versions). Once all conflicts are resolved and staged, click **Continue**.
+
+---
+
+### Preview hunk routing (dry run)
+
+Before routing hunks to worktrees, you can validate assignments without touching any
+files on disk:
+
+1. Run `GitBraid: Preview Hunk Routing (Dry Run)` from the Command Palette.
+2. GitBraid runs `git apply --check` for each branch's patch inside the corresponding
+   worktree — no changes are made.
+3. Results (pass / fail per branch, plus any error output) appear in the **GitBraid**
+   Output channel.
+
+---
+
+### Smart auto-assign
+
+When you save a **new** file in a directory where every other assigned file already
+belongs to a single branch, GitBraid displays a toast notification:
+
+> *New file `src/feature/foo.ts` — assign to `feature/impl`?*
+
+Click **Assign** to route the file immediately, or **Later** to handle it yourself.
+The suggestion fires once per file per session so it will not repeat.
 
 ---
 
@@ -150,6 +188,24 @@ teammates.
 **Import** (`gitbraid.importStack`) — reads `.gitbraid/stack.json` and merges it into
 your local config. When a file is assigned to a different branch locally, a QuickPick
 lets you choose which assignment wins.
+
+---
+
+### Stack diagram and PR-ready diff
+
+**Copy Stack Diagram** (`gitbraid.copyStackDiagram`) — copies an ASCII representation
+of the full stack to the clipboard, e.g.:
+
+```
+main
+└── feature/base  [3 files]
+    └── feature/impl  [5 files]
+        └── feature/docs  [2 files]
+```
+
+**Open Stack Diff** (`gitbraid.openStackDiff`) — opens a diff editor comparing the
+current file against the version at the base of the stack. Useful for reviewing
+everything that will go into a PR before pushing.
 
 ---
 
@@ -184,7 +240,7 @@ Settings are under `gitbraid.*` in VS Code preferences.
 
 ## AI / chat integration
 
-Seven language model tools allow AI assistants (e.g. GitHub Copilot Chat) to
+Eight language model tools allow AI assistants (e.g. GitHub Copilot Chat) to
 interact with the stack programmatically. Reference them with `#gitbraid_*` in chat.
 
 | Tool | What it does |
@@ -196,6 +252,7 @@ interact with the stack programmatically. Reference them with `#gitbraid_*` in c
 | `gitbraid_getFloatingFiles` | Lists files not yet assigned to any branch. |
 | `gitbraid_commitBranch` | Commits assigned files on a branch. |
 | `gitbraid_getBranchStatus` | Returns staged/unstaged/untracked counts for a branch. |
+| `gitbraid_getStackDiagram` | Returns an ASCII tree diagram of the stack. |
 
 Example prompt: *"Assign src/auth.ts to the feature/auth branch and commit it with
 the message 'feat: add auth module'."*

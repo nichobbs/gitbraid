@@ -307,6 +307,51 @@ class SyncBranchTool implements vscode.LanguageModelTool<SyncBranchInput> {
 	}
 }
 
+// ─── getStackDiagram ─────────────────────────────────────────────────────────
+
+class GetStackDiagramTool implements vscode.LanguageModelTool<Record<string, never>> {
+	readonly name = 'gitbraid_getStackDiagram'
+
+	constructor(private readonly _api: GitBraidApi) {}
+
+	async invoke(
+		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
+		_token: vscode.CancellationToken,
+	): Promise<vscode.LanguageModelToolResult> {
+		const stack = this._api.getStack()
+		if (stack.length === 0) {
+			return textResult('Stack is empty.')
+		}
+		const rootBase = stack[0].base
+		const lines: string[] = [rootBase]
+		const childrenOf = new Map<string, string[]>()
+		childrenOf.set(rootBase, [])
+		for (const entry of stack) {
+			if (!childrenOf.has(entry.base)) childrenOf.set(entry.base, [])
+			childrenOf.get(entry.base)!.push(entry.name)
+			childrenOf.set(entry.name, [])
+		}
+		const render = (parent: string, prefix: string): void => {
+			const children = childrenOf.get(parent) ?? []
+			for (let i = 0; i < children.length; i++) {
+				const branch = children[i]
+				const isLast = i === children.length - 1
+				lines.push(`${prefix}${isLast ? '└── ' : '├── '}${branch}`)
+				render(branch, prefix + (isLast ? '    ' : '│   '))
+			}
+		}
+		render(rootBase, '')
+		return textResult(lines.join('\n'))
+	}
+
+	prepareInvocation(
+		_options: vscode.LanguageModelToolInvocationPrepareOptions<Record<string, never>>,
+		_token: vscode.CancellationToken,
+	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+		return { invocationMessage: 'Building stack diagram…' }
+	}
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 /**
@@ -324,6 +369,7 @@ export function registerLmTools(api: GitBraidApi): vscode.Disposable[] {
 		new AddBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new PullBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new SyncBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
+		new GetStackDiagramTool(api) as unknown as vscode.LanguageModelTool<never>,
 	]
 
 	const disposables: vscode.Disposable[] = []

@@ -157,6 +157,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		},
 		prAwareness,
 		primary.root,
+		primary.healthSvc,
 	)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
@@ -173,6 +174,49 @@ export async function activate(context: vscode.ExtensionContext) {
 	const statusBar = new FloatingStatusBarItem(workspaceSync, configService)
 	context.subscriptions.push(statusBar)
 
+	// ── Smart auto-assign on new floating file ────────────────────────────
+	// When a file first becomes floating, check if all sibling files in the
+	// same directory belong to a single branch — if so, offer to assign it
+	// there too.  Shown once per session per path to avoid repeat prompts.
+	const _wireAutoAssign = (ctx: FolderContext) => {
+		const suggestedPaths = new Set<string>()
+		ctx.workspaceSync.onDidFloatFile(async ({ relativePath }) => {
+			if (suggestedPaths.has(relativePath)) return
+			suggestedPaths.add(relativePath)
+
+			const dir = path.dirname(relativePath.replaceAll('\\', '/'))
+			if (!dir || dir === '.') return  // root-level file — no siblings to look at
+
+			const assignments = ctx.config.getAllAssignments()
+			const siblingBranches = new Set(
+				Object.entries(assignments)
+					.filter(([p]) => {
+						const pd = path.dirname(p.replaceAll('\\', '/'))
+						return pd === dir && p !== relativePath
+					})
+					.map(([, b]) => b),
+			)
+			if (siblingBranches.size !== 1) return
+
+			const [branch] = siblingBranches
+			const choice = await vscode.window.showInformationMessage(
+				`New file \`${relativePath}\` — assign to \`${branch}\`?`,
+				'Assign',
+				'Later',
+			)
+			if (choice === 'Assign') {
+				await ctx.config.setAssignment(relativePath, branch)
+				recordAssignFile(ctx.undoStack, ctx.config, relativePath, branch, undefined)
+			}
+		})
+	}
+	for (const ctx of contexts) _wireAutoAssign(ctx)
+	context.subscriptions.push(
+		registry.onDidChangeFolders((e) => {
+			for (const addedCtx of e.added) _wireAutoAssign(addedCtx)
+		}),
+	)
+
 	// ── Multi-root phase 2: re-source UI on active-folder switch ──────────
 	// Tree provider + status bar hold references to the primary folder's
 	// services.  When the user moves focus to an editor inside a different
@@ -181,7 +225,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// registry-aware per-URI so they need no rebinding.
 	const updateActive = () => {
 		const ctx = registry.getActive() ?? primary
-		stackTreeProvider.setContext(ctx.config, ctx.workspaceSync, ctx.root)
+		stackTreeProvider.setContext(ctx.config, ctx.workspaceSync, ctx.root, ctx.healthSvc)
 		statusBar.setContext(ctx.workspaceSync, ctx.config)
 	}
 	context.subscriptions.push(
@@ -322,7 +366,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			// hand-off.  The active-editor heuristic will pick it up when
 			// they open a file; `setContext` is also called directly so the
 			// tree view and status bar update immediately.
-			stackTreeProvider.setContext(picked.ctx.config, picked.ctx.workspaceSync, picked.ctx.root)
+			stackTreeProvider.setContext(picked.ctx.config, picked.ctx.workspaceSync, picked.ctx.root, picked.ctx.healthSvc)
 			statusBar.setContext(picked.ctx.workspaceSync, picked.ctx.config)
 			await vscode.commands.executeCommand('revealInExplorer', picked.ctx.root)
 		})),
@@ -355,6 +399,64 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (op) {
 				await vscode.window.setStatusBarMessage(`GitBraid: redid — ${op.label}`, 3000)
 			}
+		})),
+
+		vscode.commands.registerCommand('gitbraid.copyStackDiagram', cmd(async () => {
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('Stack is empty — nothing to diagram.')
+				return
+			}
+			// Gather ahead counts and PR info for each branch
+			const runner = getDefaultGitRunner()
+			const lines: string[] = []
+			// Find the root base (the branch at the bottom of the stack's base)
+			const rootBase = stack[0].base
+			lines.push(rootBase)
+			// Build parent→children map for tree rendering
+			const childrenOf = new Map<string, string[]>()
+			childrenOf.set(rootBase, [])
+			for (const entry of stack) {
+				if (!childrenOf.has(entry.base)) childrenOf.set(entry.base, [])
+				childrenOf.get(entry.base)!.push(entry.name)
+				childrenOf.set(entry.name, [])
+			}
+			// Collect ahead counts
+			const aheadCounts = new Map<string, number>()
+			for (const entry of stack) {
+				try {
+					const { stdout } = await runner.run(
+						['rev-list', '--count', `${entry.base}..${entry.name}`],
+						{ cwd: ctx.root.fsPath },
+					)
+					aheadCounts.set(entry.name, parseInt(stdout.trim(), 10) || 0)
+				} catch {
+					aheadCounts.set(entry.name, 0)
+				}
+			}
+			// Render tree recursively
+			const renderChildren = (parent: string, prefix: string): void => {
+				const children = childrenOf.get(parent) ?? []
+				for (let i = 0; i < children.length; i++) {
+					const branch = children[i]
+					const isLast = i === children.length - 1
+					const connector = isLast ? '└── ' : '├── '
+					const childPrefix = isLast ? '    ' : '│   '
+					const ahead = aheadCounts.get(branch)
+					const aheadStr = ahead !== undefined && ahead > 0 ? ` [↑${ahead}]` : ''
+					const prInfo = prAwareness.getForBranch(branch)
+					const prStr = prInfo
+						? ` PR #${String(prInfo.number)} ${prInfo.state === 'open' ? '✓' : prInfo.state === 'draft' ? '(draft)' : prInfo.state === 'merged' ? '(merged)' : '(closed)'}`
+						: ' (no PR)'
+					lines.push(`${prefix}${connector}${branch}${aheadStr}${prStr}`)
+					renderChildren(branch, prefix + childPrefix)
+				}
+			}
+			renderChildren(rootBase, '')
+			const diagram = lines.join('\n')
+			await vscode.env.clipboard.writeText(diagram)
+			await vscode.window.showInformationMessage('GitBraid: stack diagram copied to clipboard.')
 		})),
 
 		vscode.commands.registerCommand('gitbraid.focusStackView', () => {
@@ -461,6 +563,119 @@ export async function activate(context: vscode.ExtensionContext) {
 				}
 				const doc = await vscode.workspace.openTextDocument({ language: 'diff', content: diff })
 				await vscode.window.showTextDocument(doc, { preview: true })
+			}),
+		),
+
+		vscode.commands.registerCommand(
+			'gitbraid.openStackDiff',
+			cmd(async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('Open a file first to see its PR-ready stack diff.')
+					return
+				}
+				const ctx = contextForUri(target)
+				const rel = relativePathIn(ctx, target)
+				const stack = ctx.config.getStack()
+				if (stack.length === 0) {
+					await vscode.window.showWarningMessage('No branches in the stack.')
+					return
+				}
+				const base = stack[0].base
+				const top = stack.at(-1)!.name
+				const baseUri = StackContentProvider.baseUriFor(rel, base, ctx.root)
+				const stackUri = StackContentProvider.uriFor(rel, ctx.root)
+				await vscode.commands.executeCommand(
+					'vscode.diff',
+					baseUri,
+					stackUri,
+					`${rel} (${base} ↔ ${top})`,
+				)
+			}),
+		),
+
+		vscode.commands.registerCommand(
+			'gitbraid.previewRouting',
+			cmd(async (uri?: vscode.Uri) => {
+				const target = uri ?? vscode.window.activeTextEditor?.document.uri
+				if (!target) {
+					await vscode.window.showWarningMessage('No file active to preview routing for.')
+					return
+				}
+				const ctx = contextForUri(target)
+				const rel = relativePathIn(ctx, target)
+				const assignments = ctx.config.getHunkAssignments(rel)
+				if (!assignments || assignments.size === 0) {
+					await vscode.window.showInformationMessage('No hunk assignments found for this file.')
+					return
+				}
+				const hunks = await ctx.diffEngine.getHunksForFile(ctx.root.fsPath, rel)
+				if (hunks.length === 0) {
+					await vscode.window.showInformationMessage(`No diff hunks found for ${rel}.`)
+					return
+				}
+
+				// Collect patches per branch
+				const byBranch = new Map<string, typeof hunks>()
+				for (const [idx, branch] of assignments) {
+					const hunk = hunks[idx]
+					if (!hunk) continue
+					const list = byBranch.get(branch) ?? []
+					list.push(hunk)
+					byBranch.set(branch, list)
+				}
+				if (byBranch.size === 0) {
+					await vscode.window.showInformationMessage('No routable hunk assignments found.')
+					return
+				}
+
+				// Dry-run each branch's patch via `git apply --check`
+				const runner = getDefaultGitRunner()
+				const results: Array<{ branch: string, hunkCount: number, ok: boolean }> = []
+				for (const [branch, branchHunks] of byBranch) {
+					const patch = ctx.hunkRouter.buildPatch(branchHunks)
+					const worktreeUri = ctx.branchStack.worktreeExists(branch)
+						? ctx.branchStack.getWorktreePath(branch)
+						: ctx.root
+					const { exitCode } = await runner.run(
+						['apply', '--check', '-'],
+						{ cwd: worktreeUri.fsPath, input: patch },
+					)
+					results.push({ branch, hunkCount: branchHunks.length, ok: exitCode === 0 })
+				}
+
+				const allOk = results.every((r) => r.ok)
+				const lines = results.map((r) =>
+					`${r.ok ? '✓' : '✗'} ${r.branch}: ${String(r.hunkCount)} hunk(s)${r.ok ? '' : ' — would fail to apply'}`,
+				)
+				const summary = lines.join('\n')
+
+				const actions = allOk
+					? ['Apply Routing', 'Show Patches', 'Cancel']
+					: ['Show Patches', 'Try Anyway', 'Cancel']
+				const title = allOk
+					? `Routing preview for ${rel} — all patches apply cleanly`
+					: `Routing preview for ${rel} — some patches would fail`
+
+				const choice = await vscode.window.showInformationMessage(
+					`${title}\n\n${summary}`,
+					...actions,
+				)
+
+				if (choice === 'Apply Routing' || choice === 'Try Anyway') {
+					await vscode.commands.executeCommand('gitbraid.routeHunks', target)
+				} else if (choice === 'Show Patches') {
+					const sections: string[] = [`// Routing preview: ${rel}\n`]
+					for (const [branch, branchHunks] of byBranch) {
+						sections.push(`// ── ${branch} ──────────────────\n`)
+						sections.push(ctx.hunkRouter.buildPatch(branchHunks))
+					}
+					const doc = await vscode.workspace.openTextDocument({
+						language: 'diff',
+						content: sections.join('\n'),
+					})
+					await vscode.window.showTextDocument(doc, { preview: true })
+				}
 			}),
 		),
 
@@ -1101,11 +1316,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			const resolved = await resolveActiveBranchWorktree(arg, 'Abort rebase in branch')
 			if (!resolved) return
 			await resolved.ctx.rebaseRecovery.abort(resolved.worktreeDir)
+			void resolved.ctx.healthSvc.refresh()
 		})),
 		vscode.commands.registerCommand('gitbraid.rebaseContinue', cmd(async (arg?: string | BranchNode) => {
 			const resolved = await resolveActiveBranchWorktree(arg, 'Continue rebase in branch')
 			if (!resolved) return
 			await resolved.ctx.rebaseRecovery.continue(resolved.worktreeDir)
+			void resolved.ctx.healthSvc.refresh()
 		})),
 		vscode.commands.registerCommand('gitbraid.openRebaseConflicts', cmd(async (arg?: string | BranchNode) => {
 			const resolved = await resolveActiveBranchWorktree(arg, 'Open conflicts for branch')
