@@ -67,13 +67,15 @@ export async function activate(context: vscode.ExtensionContext) {
 	// lifecycle; each context's `initialize()` wires up all the per-folder
 	// plumbing so SCM panels for every folder appear automatically.
 	//
-	// The UI singletons (tree view, decoration provider, status bar,
-	// CodeLens, overlay diagnostics) bind to the **primary** context = the
-	// first eligible folder.  Multi-folder workspaces get per-folder SCM
-	// and per-folder worktrees out of the box, but the tree view / decoration
-	// surface currently shows only the primary folder.  Commands that are
-	// clearly folder-scoped (assign, push, sync) use `registry.getActive()`
-	// to target the folder the user is editing.  See
+	// Multi-root phase 2 (merged): all user-facing surfaces follow the
+	// active folder.  Tree view + status bar bind to the primary folder at
+	// activation and re-source via `setContext(...)` on editor-focus
+	// changes.  Decoration provider, CodeLens, and overlay diagnostics
+	// resolve per-URI via the registry.  The `gitbraid-stack:` content
+	// provider is a process-wide scheme singleton but registry-aware — URIs
+	// carry a `?folder=` query that selects the target folder's resolver.
+	// Commands route through `activeContext()` / `contextForUri()` so
+	// operations land in the folder the user is editing.  See
 	// `docs/remediation/00-overview.md` and `docs/adr/` for the full story.
 	const registry = new FolderRegistry()
 	const contexts = await registry.initializeAll()
@@ -293,9 +295,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			await vscode.window.showInformationMessage(`GitBraid: ${msg}`)
 		})),
 
-		// Multi-root: report which folder the extension is currently
-		// targeting.  No-op for single-folder workspaces.  A folder picker
-		// that actually swaps the UI binding is future work.
+		// Multi-root: show which folder the extension is targeting.  In
+		// multi-folder workspaces the picker doubles as a switcher — picking
+		// a folder opens one of its README/package.json/first-level file so
+		// the active-editor heuristic follows the selection.  Focus swaps
+		// happen automatically when the user opens any file in another
+		// folder; this command just surfaces the current choice and offers
+		// an explicit switch.
 		vscode.commands.registerCommand('gitbraid.showActiveFolder', cmd(async () => {
 			const all = registry.getAll()
 			if (all.length <= 1) {
@@ -307,14 +313,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				all.map((ctx) => ({
 					label: path.basename(ctx.root.fsPath),
 					description: ctx === current ? `${ctx.root.fsPath} (active)` : ctx.root.fsPath,
+					ctx,
 				})),
 				{ placeHolder: `Active: ${path.basename(current.root.fsPath)}` },
 			)
-			if (picked) {
-				await vscode.window.showInformationMessage(
-					`GitBraid: ${picked.label} — open a file inside that folder to switch focus.`,
-				)
-			}
+			if (!picked || picked.ctx === current) return
+			// Reveal the folder in the Explorer to give the user a concrete
+			// hand-off.  The active-editor heuristic will pick it up when
+			// they open a file; `setContext` is also called directly so the
+			// tree view and status bar update immediately.
+			stackTreeProvider.setContext(picked.ctx.config, picked.ctx.workspaceSync, picked.ctx.root)
+			statusBar.setContext(picked.ctx.workspaceSync, picked.ctx.config)
+			await vscode.commands.executeCommand('revealInExplorer', picked.ctx.root)
 		})),
 
 		// Force a re-query of PR status without waiting for the 60s poll.
@@ -417,13 +427,12 @@ export async function activate(context: vscode.ExtensionContext) {
 					await vscode.window.showWarningMessage('Open a file first to see its resolved stack view.')
 					return
 				}
-				// `gitbraid-stack:` URIs are relative to the primary folder
-				// (the StackContentProvider is process-global).  Using the
-				// owning folder's relative path keeps the diff labels
-				// accurate across folders.
+				// `gitbraid-stack:` URIs carry the target folder in the query
+				// string so the scheme singleton dispatches to the right
+				// folder's `StackResolver` in multi-root workspaces.
 				const ctx = contextForUri(target)
 				const rel = relativePathIn(ctx, target)
-				const stackUri = StackContentProvider.uriFor(rel)
+				const stackUri = StackContentProvider.uriFor(rel, ctx.root)
 				// Side-by-side diff against the on-disk file so the user sees
 				// exactly which hunks are layered by branches above.
 				await vscode.commands.executeCommand(
@@ -500,19 +509,39 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
 	//
 	// `stackResolver`, `rebaseSvc`, `stackCommands`, `rebaseRecovery`, and
-	// `stackShare` all live inside each `FolderContext`.  The rebase
-	// watcher is wired up inside `FolderContext.initialize()`, and the
-	// stack-content scheme is a process-wide singleton bound to the
-	// primary folder's resolver (multi-folder content routing is future
-	// work; the scheme only accepts relative paths today, which implicitly
-	// belong to the primary folder).
-	const stackContentProvider = new StackContentProvider(stackResolver, workspaceRoot)
+	// `stackShare` all live inside each `FolderContext`.  The rebase watcher
+	// is wired up inside `FolderContext.initialize()`.  The stack-content
+	// provider is a process-wide scheme singleton, but is registry-aware: it
+	// reads the target folder from the URI's `?folder=` query and dispatches
+	// to the owning folder's `StackResolver`.  Callers of `uriFor(...)` must
+	// pass the target folder's root in multi-root workspaces; the primary
+	// root serves as a fallback for URIs with no folder query.
+	const stackContentProvider = new StackContentProvider(registry, workspaceRoot, stackResolver)
 	context.subscriptions.push(stackContentProvider)
 
 	// Refresh any open gitbraid-stack: documents when assignments change.
+	// Subscribe to every folder's config so refreshes fire with the right
+	// folder root for each URI.
+	const contentRefreshSubs = new Map<string, vscode.Disposable>()
+	const wireContentRefresh = (ctx: FolderContext) => {
+		contentRefreshSubs.set(ctx.root.fsPath, ctx.config.onDidChangeAssignment((e) => {
+			if (e.relativePath) stackContentProvider.refresh(e.relativePath, ctx.root)
+		}))
+	}
+	for (const ctx of registry.getAll()) {
+		wireContentRefresh(ctx)
+	}
 	context.subscriptions.push(
-		configService.onDidChangeAssignment((e) => {
-			if (e.relativePath) stackContentProvider.refresh(e.relativePath)
+		registry.onDidChangeFolders((e) => {
+			for (const ctx of e.added) wireContentRefresh(ctx)
+			for (const ctx of e.removed) {
+				contentRefreshSubs.get(ctx.root.fsPath)?.dispose()
+				contentRefreshSubs.delete(ctx.root.fsPath)
+			}
+		}),
+		new vscode.Disposable(() => {
+			for (const d of contentRefreshSubs.values()) d.dispose()
+			contentRefreshSubs.clear()
 		}),
 	)
 

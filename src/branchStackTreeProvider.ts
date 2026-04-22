@@ -179,24 +179,6 @@ export class BranchStackTreeProvider
 		this._rootUri = rootUri
 		this._wireContext()
 
-		// Seed the current branch cache before the first render.
-		void this._refreshCurrentBranch()
-
-		// Watch .git/HEAD so branch switches are reflected immediately.
-		// Uses the first workspace folder for the primary binding; multi-root
-		// tree re-sourcing swaps `_config`/`_sync` via `setContext(...)` but
-		// the HEAD watcher stays on the initial folder.  A per-folder watcher
-		// would be ideal — deferred as future work.
-		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
-		if (workspaceRoot) {
-			const headWatcher = vscode.workspace.createFileSystemWatcher(
-				new vscode.RelativePattern(workspaceRoot, '.git/HEAD')
-			)
-			this._disposables.push(
-				headWatcher,
-				headWatcher.onDidChange(() => void this._refreshCurrentBranch().then(() => this.refresh())),
-			)
-		}
 		if (_prAwareness) {
 			this._disposables.push(_prAwareness.onDidChange(() => this.refresh()))
 		}
@@ -209,14 +191,22 @@ export class BranchStackTreeProvider
 	 * Swap the bound context.  Used by the extension activation to follow
 	 * the active folder in multi-root workspaces (multi-root phase 2).
 	 * Idempotent — passing the same services is a no-op.
+	 *
+	 * The `root` parameter is optional for back-compat; when omitted, the
+	 * previously-bound root is retained.  Production callers should pass the
+	 * new folder's root so the HEAD watcher + `git.branch` lookup follow the
+	 * active folder.
 	 */
 	setContext(config: ConfigService, sync: WorkspaceSync, rootUri?: vscode.Uri): void {
-		if (config === this._config && sync === this._sync && (rootUri === undefined || rootUri === this._rootUri)) return
+		const nextRoot = rootUri ?? this._rootUri
+		const rootUnchanged = nextRoot === this._rootUri
+			|| (nextRoot !== undefined && this._rootUri !== undefined && nextRoot.fsPath === this._rootUri.fsPath)
+		if (config === this._config && sync === this._sync && rootUnchanged) return
 		for (const d of this._contextDisposables) d.dispose()
 		this._contextDisposables = []
 		this._config = config
 		this._sync = sync
-		if (rootUri !== undefined) this._rootUri = rootUri
+		this._rootUri = nextRoot
 		this._wireContext()
 		this.refresh()
 	}
@@ -228,6 +218,22 @@ export class BranchStackTreeProvider
 			this._sync.onDidFloatFile(() => this.refresh()),
 			this._sync.onDidSyncFile(() => this.refresh()),
 		)
+
+		// Per-folder `.git/HEAD` watcher — rebuilt when `setContext(...)`
+		// swaps the root so branch switches in the active folder drive the
+		// tree's CurrentBranchNode, even in multi-root workspaces.  Test
+		// contexts that construct the provider without a root skip this.
+		if (this._rootUri) {
+			const headWatcher = vscode.workspace.createFileSystemWatcher(
+				new vscode.RelativePattern(this._rootUri, '.git/HEAD'),
+			)
+			this._contextDisposables.push(
+				headWatcher,
+				headWatcher.onDidChange(() => void this._refreshCurrentBranch().then(() => this.refresh())),
+			)
+		}
+		// Seed the cache for the newly bound root before the first render.
+		void this._refreshCurrentBranch()
 	}
 
 	// ── Drag & drop ───────────────────────────────────────────────────────────
@@ -334,7 +340,7 @@ export class BranchStackTreeProvider
 	/** Fetches the current branch name from git and caches it. */
 	private async _refreshCurrentBranch(): Promise<void> {
 		try {
-			this._currentBranch = await git.branch()
+			this._currentBranch = await git.branch(this._rootUri)
 		} catch {
 			this._currentBranch = undefined
 		}

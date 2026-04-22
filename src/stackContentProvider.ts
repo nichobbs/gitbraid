@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
-import { StackResolver } from './stackResolver'
+import type { FolderRegistry } from './folderRegistry'
+import type { StackResolver } from './stackResolver'
 
 /** URI scheme that the provider is registered under. */
 export const STACK_SCHEME = 'gitbraid-stack'
@@ -10,11 +11,15 @@ export const STACK_SCHEME = 'gitbraid-stack'
  * `TextDocumentContentProvider` so users can open any file through the
  * `gitbraid-stack:` scheme and see the cumulative state through the stack.
  *
- * URI shape: `gitbraid-stack:<workspace-relative-path>`
+ * URI shape: `gitbraid-stack:<workspace-relative-path>?folder=<encoded-fspath>`
  *
- *   vscode.window.showTextDocument(
- *     vscode.Uri.parse('gitbraid-stack:src/foo.ts'),
- *   )
+ *   StackContentProvider.uriFor('src/foo.ts', folderRoot)
+ *
+ * The `folder` query parameter routes the request to the owning folder's
+ * `StackResolver` in multi-root workspaces.  When the parameter is missing
+ * (legacy URIs, single-folder workspaces) the provider falls back to the
+ * primary folder.  Including the folder in the query also makes URIs unique
+ * across folders so VS Code's document cache doesn't collide across them.
  *
  * The resolved document is read-only (the provider never implements write);
  * edits should go through the normal on-disk file.
@@ -27,8 +32,9 @@ export class StackContentProvider implements vscode.TextDocumentContentProvider,
 	private readonly _disposables: vscode.Disposable[] = []
 
 	constructor(
-		private readonly _resolver: StackResolver,
-		private readonly _workspaceRoot: vscode.Uri,
+		private readonly _registry: FolderRegistry | undefined,
+		private readonly _primaryRoot: vscode.Uri,
+		private readonly _primaryResolver: StackResolver,
 	) {
 		this._disposables.push(
 			this._onDidChange,
@@ -46,9 +52,9 @@ export class StackContentProvider implements vscode.TextDocumentContentProvider,
 		if (uri.scheme !== STACK_SCHEME) {
 			return ''
 		}
-		const relativePath = uri.path.replace(/^\/+/, '')
+		const { resolver, root, relativePath } = this._resolve(uri)
 		try {
-			const content = await this._resolver.getResolvedContent(this._workspaceRoot, relativePath)
+			const content = await resolver.getResolvedContent(root, relativePath)
 			if (!content) {
 				return ''
 			}
@@ -60,12 +66,42 @@ export class StackContentProvider implements vscode.TextDocumentContentProvider,
 	}
 
 	/** Tell VS Code that a given file's resolved content has changed. */
-	refresh(relativePath: string): void {
-		this._onDidChange.fire(vscode.Uri.parse(`${STACK_SCHEME}:${relativePath}`))
+	refresh(relativePath: string, folderRoot?: vscode.Uri): void {
+		this._onDidChange.fire(StackContentProvider.uriFor(relativePath, folderRoot))
 	}
 
-	/** Build a `gitbraid-stack:` URI for the given workspace-relative path. */
-	static uriFor(relativePath: string): vscode.Uri {
-		return vscode.Uri.parse(`${STACK_SCHEME}:${relativePath}`)
+	/**
+	 * Build a `gitbraid-stack:` URI for the given workspace-relative path.
+	 * Pass `folderRoot` in multi-root workspaces so the provider routes the
+	 * request to the right folder's `StackResolver`.
+	 */
+	static uriFor(relativePath: string, folderRoot?: vscode.Uri): vscode.Uri {
+		const base = vscode.Uri.parse(`${STACK_SCHEME}:${relativePath}`)
+		if (!folderRoot) return base
+		return base.with({ query: `folder=${encodeURIComponent(folderRoot.fsPath)}` })
 	}
+
+	/** Map a URI to the owning folder's resolver / root. */
+	private _resolve(uri: vscode.Uri): { resolver: StackResolver, root: vscode.Uri, relativePath: string } {
+		const relativePath = uri.path.replace(/^\/+/, '')
+		const folderFsPath = parseFolderQuery(uri.query)
+		if (folderFsPath && this._registry) {
+			const ctx = this._registry.getAll().find((c) => c.root.fsPath === folderFsPath)
+			if (ctx) {
+				return { resolver: ctx.stackResolver, root: ctx.root, relativePath }
+			}
+		}
+		return { resolver: this._primaryResolver, root: this._primaryRoot, relativePath }
+	}
+}
+
+function parseFolderQuery(query: string): string | undefined {
+	if (!query) return undefined
+	for (const pair of query.split('&')) {
+		const [key, value] = pair.split('=')
+		if (key === 'folder' && value) {
+			try { return decodeURIComponent(value) } catch { return undefined }
+		}
+	}
+	return undefined
 }

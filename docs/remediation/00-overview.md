@@ -198,11 +198,6 @@ Annotated during execution. Checkpoint SHAs refer to the
 - T16 (walkthrough **real screenshots** — placeholder SVGs landed, real
   screenshots still pending; procedure documented in
   `resources/README.md`).
-- **Multi-root (phase 2)** — foundation landed (FolderContext /
-  FolderRegistry / per-folder state).  UI singletons (tree, decoration,
-  code-lens, overlay, status bar) still bind to the primary folder;
-  re-sourcing them from the registry's active context on folder switch
-  is the next iteration.
 - **MCP server** (PLAN §5.3 stretch goal) — `docs/adr/0001-mcp-server.md`
   captures the design direction; implementation deferred.
 
@@ -214,9 +209,17 @@ Annotated during execution. Checkpoint SHAs refer to the
   `activate()` refactor.  Each git-eligible workspace folder gets its
   own `.worktrees/local-config.json`, own file-change bus, own SCM
   manager, own rebase-recovery watcher — so SCM panels for every
-  folder appear automatically.  UI remains primary-focused;
-  `gitbraid.showActiveFolder` surfaces the active folder for
-  debugging in multi-root workspaces.
+  folder appear automatically.
+- **Multi-root (phase 2)** — user-facing surfaces follow the active
+  folder.  Tree view + status bar re-source via `setContext(...)` on
+  editor-focus changes; decoration provider, CodeLens, and overlay
+  diagnostics resolve per-URI via the registry; `gitbraid-stack:` URIs
+  carry a `?folder=` query so the process-wide scheme singleton
+  dispatches to the owning folder's `StackResolver`; the tree's
+  `.git/HEAD` watcher rebinds with `setContext` so branch-switch
+  refreshes target the active folder.  Commands route through
+  `activeContext()` / `contextForUri()`.  `gitbraid.showActiveFolder`
+  is a picker that switches the active folder explicitly.
 - **Rename `MbcApi` → `GitBraidApi`** — internal rename; LM tool names
   stay `mbc_*` for back-compat.
 - **ADR 0001: MCP server** — design direction captured at
