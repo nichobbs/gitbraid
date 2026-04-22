@@ -126,8 +126,14 @@ export class BranchStackService implements vscode.Disposable {
 	private _workspaceRoot: vscode.Uri | undefined
 	private readonly _disposables: vscode.Disposable[] = []
 
-	private constructor(private readonly _config: ConfigService) {}
+	/**
+	 * Public constructor — each `FolderContext` creates its own instance
+	 * paired with that folder's `ConfigService`.  The `getInstance()` /
+	 * `resetInstance()` pair below remains for the test suite.
+	 */
+	constructor(private readonly _config: ConfigService) {}
 
+	/** Legacy singleton, retained for tests (see class header). */
 	static getInstance(config?: ConfigService): BranchStackService {
 		if (!BranchStackService._instance) {
 			config ??= ConfigService.getInstance()
