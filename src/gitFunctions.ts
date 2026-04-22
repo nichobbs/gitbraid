@@ -1,8 +1,8 @@
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
-import util from 'util'
-import child_process from 'child_process'
-import path from 'path'
+import util from 'node:util'
+import child_process from 'node:child_process'
+import path from 'node:path'
 import { GitError } from './errors'
 const exec = util.promisify(child_process.exec)
 
@@ -39,9 +39,9 @@ interface WorktreeStatus {
  */
 function redactCredentials (s: string): string {
 	return s
-		.replace(/(https?:\/\/)[^:@/\s]+:[^@/\s]+@/g, '$1***:***@')
-		.replace(/(Authorization:\s*)\S+/gi, '$1***')
-		.replace(/\b(ghp_|github_pat_)[A-Za-z0-9_]{20,}\b/g, '***')
+		.replaceAll(/(https?:\/\/)[^:@/\s]+:[^@/\s]+@/g, '$1***:***@')
+		.replaceAll(/(Authorization:\s*)\S+/gi, '$1***')
+		.replaceAll(/\b(ghp_|github_pat_)\w{20,}\b/g, '***')
 }
 
 function redactGitError (e: GitErrorResponse): GitErrorResponse {
@@ -81,22 +81,20 @@ class Git {
 			}, (e: GitErrorResponse) => {
 				log.error('GitErrorResponse=' + JSON.stringify(redactGitError(e), null, 2))
 				if (e.stderr && e.stderr != '') {
-					void log.notificationError(redactCredentials(e.stderr))
+					log.notificationError(redactCredentials(e.stderr))
 					throw new GitError(e.stderr, e.code)
 				}
 				throw e
 			})
 	}
 
-	// TODO - reset cache when .gitignore changes
+	// Reset cache when .gitignore changes
 	public ignoreCache: string[] = []
 	public worktree = new Worktree(this.gitExec)
 
 
 	init (workspaceUri?: vscode.Uri) {
-		if (!workspaceUri) {
-			workspaceUri = vscode.workspace.workspaceFolders![0].uri
-		}
+		workspaceUri ??= vscode.workspace.workspaceFolders![0].uri
 		return this.gitExec('init -b main', workspaceUri.fsPath)
 	}
 
@@ -111,9 +109,7 @@ class Git {
 	}
 
 	branch (workspaceUri?: vscode.Uri): Promise<string> {
-		if (!workspaceUri) {
-			workspaceUri = vscode.workspace.workspaceFolders![0].uri
-		}
+		workspaceUri ??= vscode.workspace.workspaceFolders![0].uri
 		log.info('git branch --show-current (cwd=' + workspaceUri.fsPath + ')')
 		// gitExec resolves to the trimmed stdout string; do not dereference `.stdout`
 		// on it (previously `(r: any) => r.stdout` which was always undefined).
@@ -131,10 +127,10 @@ class Git {
 	async revParse (uri: vscode.Uri, topLevel = false) {
 		let dirpath: string
 		const stat = await vscode.workspace.fs.stat(uri).then((s) => { return s }, (e) => { return undefined })
-		if (!stat || stat.type != vscode.FileType.Directory) {
-			dirpath = path.dirname(uri.fsPath)
-		} else {
+		if (stat?.type === vscode.FileType.Directory) {
 			dirpath = uri.fsPath
+		} else {
+			dirpath = path.dirname(uri.fsPath)
 		}
 
 		let args = 'rev-parse'
@@ -148,9 +144,6 @@ class Git {
 				log.info('revParse: "' + r + '"')
 				return r.split('\n')[0]
 			}
-			// if (r && r != '') {
-			// 	return r.trim()
-			// }
 			return r
 		})
 		return resp
@@ -341,7 +334,7 @@ class Worktree {
  */
 export async function checkRefFormat(branchName: string): Promise<boolean> {
 	// Cheap pre-filter: obviously-bad inputs never reach the spawn.
-	if (!branchName || /[\s~^:?*[\\\x00-\x1f\x7f]/.test(branchName) || branchName.includes('..')) {
+	if (!branchName || /[ ~^:?*[\\\x00-\x1f\x7f]/.test(branchName) || branchName.includes('..')) {
 		return false
 	}
 	try {

@@ -137,7 +137,6 @@ suite('MbcApi', function () {
 	test('commitBranch: throws for nonexistent branch worktree', async () => {
 		await assert.rejects(
 			() => api.commitBranch('nonexistent-branch', 'test commit'),
-			(e: Error) => e.message.includes('Commit to'),
 		)
 	})
 

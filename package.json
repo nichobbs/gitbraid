@@ -559,11 +559,11 @@
 		"build": "node esbuild.js",
 		"compile": "node esbuild.js",
 		"package": "npx vsce package --no-dependencies",
-		"install-vsix": "npm run package && code --install-extension gitbraid-$(node -p \"require('./package.json').version\").vsix",
+		"install-vsix": "npm run package && code --install-extension gitbraid-$(npm pkg get version | tr -d '\"').vsix",
 		"watch": "npm run build -- --watch",
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
-		"refresh": "npm run compile && npm run package && npm run install-vsix"
+		"refresh": "npm run install-vsix"
 	},
 	"devDependencies": {
 		"@stylistic/eslint-plugin": "^2.11.0",

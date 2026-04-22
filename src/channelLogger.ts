@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 import { LogLevel, window } from 'vscode'
-import path from 'path'
+import path from 'node:path'
 
 enum NotificationType {
 	Info = 'Info',
@@ -185,7 +185,7 @@ class Logger {
 
 	private getCallerSourceLine () {
 		const prepareStackTraceOrg = Error.prepareStackTrace
-		const err = new Error()
+		const err = new Error('getCallerSourceLine')
 		Error.prepareStackTrace = (_, stack) => stack
 		const stack = err.stack as unknown as NodeJS.CallSite[]
 		Error.prepareStackTrace = prepareStackTraceOrg
@@ -206,7 +206,7 @@ class Logger {
 					funcname == 'error') {
 					continue
 				}
-				let ret = path.relative(this.extensionCodeDir, filename).replace(/\\/g, '/') + ':' + s.getLineNumber()
+				let ret = path.relative(this.extensionCodeDir, filename).replaceAll('\\', '/') + ':' + s.getLineNumber()
 				ret = ret.replace(/^gitbraid\//, '')
 				if (funcname) {
 					if (classname) {

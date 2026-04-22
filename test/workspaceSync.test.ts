@@ -1,10 +1,11 @@
-import * as assert from 'assert'
+import * as assert from 'node:assert'
 import * as vscode from 'vscode'
-import * as fs from 'fs'
-import * as path from 'path'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { ConfigService } from '../src/configService'
 import { WorkspaceSync } from '../src/workspaceSync'
 import { git } from '../src/gitFunctions'
+import { branchToWorktreeDirName } from '../src/branchStackService'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -65,12 +66,10 @@ suite('WorkspaceSync', () => {
 	let config: ConfigService
 	let sync: WorkspaceSync
 
-	/** Fake worktree dir for branch 'feature-docs' (branch name 'feature/docs'). */
 	const branchName = 'feature/docs'
-	const wtDirName = 'feature-docs'
 
 	function worktreeRoot(): string {
-		return path.join(wsRoot().fsPath, '.worktrees', wtDirName)
+		return path.join(wsRoot().fsPath, '.worktrees', branchToWorktreeDirName(branchName))
 	}
 
 	suiteSetup(async () => {

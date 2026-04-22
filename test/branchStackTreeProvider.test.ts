@@ -217,8 +217,8 @@ suite('BranchStackTreeProvider', () => {
 		assert.strictEqual(node.label, 'feature/impl')
 		assert.strictEqual(node.contextValue, 'branch')
 		assert.strictEqual(node.description, 'feature/docs')
-		assert.ok(node.tooltip?.toString().includes('feature/impl'))
-		assert.ok(node.tooltip?.toString().includes('feature/docs'))
+		assert.ok((node.tooltip as string).includes('feature/impl'))
+		assert.ok((node.tooltip as string).includes('feature/docs'))
 	})
 
 	// ── FileNode properties ───────────────────────────────────────────────────
@@ -228,7 +228,7 @@ suite('BranchStackTreeProvider', () => {
 		assert.strictEqual(node.label, 'Button.tsx')
 		assert.strictEqual(node.description, 'src/components/Button.tsx')
 		assert.strictEqual(node.contextValue, 'assignedFile')
-		assert.ok(node.tooltip?.toString().includes('feature/ui'))
+		assert.ok((node.tooltip as string).includes('feature/ui'))
 	})
 
 	// ── FloatingGroupNode properties ──────────────────────────────────────────

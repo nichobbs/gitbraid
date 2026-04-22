@@ -153,8 +153,6 @@ class BranchScmEntry implements vscode.Disposable {
 
 /**
  * Creates and manages one `BranchScmEntry` per branch in the stack.
- * Also manages the top-level `Floating` resource group showing unassigned
- * dirty files.
  *
  * Refreshes SCM state on file saves (via `WorkspaceSync.onDidSyncFile`) and
  * when the stack changes (via `ConfigService.onDidChangeStack`).
@@ -162,8 +160,6 @@ class BranchScmEntry implements vscode.Disposable {
 export class BranchScmProviderManager implements vscode.Disposable {
 
 	private readonly _entries = new Map<string, BranchScmEntry>()
-	private readonly _floatingSc: vscode.SourceControl
-	private readonly _floatingGroup: vscode.SourceControlResourceGroup
 	private readonly _disposables: vscode.Disposable[] = []
 
 	constructor(
@@ -172,25 +168,12 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		private readonly _workspaceRoot: vscode.Uri,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {
-		// Top-level "Floating" source control — unassigned dirty files
-		this._floatingSc = vscode.scm.createSourceControl(
-			'gitbraid-floating',
-			'GitBraid: Floating (unassigned)',
-			_workspaceRoot,
-		)
-		this._floatingSc.inputBox.visible = false
-		this._floatingGroup = this._floatingSc.createResourceGroup('floating', 'Unassigned (floating)')
-		this._floatingGroup.hideWhenEmpty = true
-
 		this._disposables.push(
-			this._floatingSc,
-			this._floatingGroup,
 			_config.onDidChangeStack(() => void this._rebuild()),
 			// Targeted per-branch refresh (T47) — only the branch whose
 			// worktree received the sync needs to re-run `git status`.  The
 			// old `_refreshAll()` fired N forks per save.
 			_sync.onDidSyncFile((e) => void this._refreshBranch(e.branch)),
-			_sync.onDidFloatFile(() => this._refreshFloating()),
 		)
 	}
 
@@ -203,7 +186,6 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		} catch (e) {
 			log.warn(`[BranchScmProvider] refresh "${branchName}" failed: ${e instanceof Error ? e.message : String(e)}`)
 		}
-		this._refreshFloating()
 	}
 
 	/**
@@ -259,22 +241,6 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		if (failed > 0) {
 			log.warn(`[BranchScmProvider] ${failed} of ${results.length} SCM refreshes failed`)
 		}
-		this._refreshFloating()
-	}
-
-	private _refreshFloating(): void {
-		const wsf = vscode.workspace.workspaceFolders?.[0]
-		if (!wsf) { return }
-
-		const floatingDirty = this._sync.getFloatingDirty()
-		this._floatingGroup.resourceStates = floatingDirty.map((rel) => ({
-			resourceUri: vscode.Uri.joinPath(wsf.uri, rel),
-			command: {
-				command: 'vscode.open',
-				title: 'Open',
-				arguments: [vscode.Uri.joinPath(wsf.uri, rel)],
-			},
-		}))
 	}
 
 	/**

@@ -85,19 +85,21 @@ export class FileChangeBus implements IFileChangeBus {
 		if (!rel) {
 			return
 		}
-		if (rel.startsWith('.git/')) {
+		if (rel.startsWith('.git/') || rel === '.git') {
 			return
 		}
 
 		this._onDidAnyFileChange.fire()
 
-		const worktreeMatch = /^\.worktrees\/([^/]+)\/(.+)$/.exec(rel)
-		if (worktreeMatch) {
-			this._onDidChangeWorktree.fire({
-				uri,
-				worktreeDirName: worktreeMatch[1],
-				relativePath: worktreeMatch[2],
-			})
+		if (rel === '.worktrees' || rel.startsWith('.worktrees/')) {
+			const worktreeMatch = /^\.worktrees\/([^/]+)\/(.+)$/.exec(rel)
+			if (worktreeMatch) {
+				this._onDidChangeWorktree.fire({
+					uri,
+					worktreeDirName: worktreeMatch[1],
+					relativePath: worktreeMatch[2],
+				})
+			}
 			return
 		}
 

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import * as path from 'path'
+import * as path from 'node:path'
 import { log } from './channelLogger'
 import { SyncError } from './errors'
 import { ConfigService } from './configService'
@@ -68,9 +68,7 @@ export class WorkspaceSync implements vscode.Disposable {
 
 	static getInstance(config?: ConfigService): WorkspaceSync {
 		if (!WorkspaceSync._instance) {
-			if (!config) {
-				config = ConfigService.getInstance()
-			}
+			config ??= ConfigService.getInstance()
 			WorkspaceSync._instance = new WorkspaceSync(config)
 		}
 		return WorkspaceSync._instance
@@ -131,10 +129,10 @@ export class WorkspaceSync implements vscode.Disposable {
 			primary.onDidChange((uri) => this._onChanged(uri)),
 			primary.onDidCreate((uri) => this._onChanged(uri)),
 			primary.onDidDelete((uri) => this._onDeleted(uri)),
-			this._config.onDidChangeAssignment(async (ev) => {
+			this._config.onDidChangeAssignment((ev) => {
 				if (ev.branch && ev.relativePath) {
 					const uri = vscode.Uri.joinPath(workspaceRoot, ev.relativePath)
-					await this._syncFile(ev.relativePath, uri, ev.branch)
+					this._onChanged(uri)
 				}
 			}),
 		)
@@ -178,9 +176,17 @@ export class WorkspaceSync implements vscode.Disposable {
 		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/')) {
 			return
 		}
-		// A sync is in progress — re-queue so this save isn't silently dropped
+		// A sync is in progress — re-queue so this save isn't silently dropped.
+		// Track in _pending so a subsequent write for the same file can cancel
+		// this retry (prevents ghost sync events after the syncing path).
 		if (this._syncing) {
-			setTimeout(() => this._onChanged(uri), getDebounceMs())
+			const existing = this._pending.get(rel)
+			if (existing) { clearTimeout(existing) }
+			const retryTimer = setTimeout(() => {
+				this._pending.delete(rel)
+				this._onChanged(uri)
+			}, getDebounceMs())
+			this._pending.set(rel, retryTimer)
 			return
 		}
 

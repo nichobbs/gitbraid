@@ -15,15 +15,21 @@ interface WorktreeFileStatus {
 }
 
 async function _gitStatus(runner: IGitRunner, worktreeDir: string): Promise<WorktreeFileStatus[]> {
-	const { stdout, exitCode } = await runner.run(
-		['status', '--porcelain=v1', '-z'],
-		{ cwd: worktreeDir },
-	)
-	if (exitCode !== 0) {
+	let result: { stdout: string; exitCode: number }
+	try {
+		result = await runner.run(
+			['status', '--porcelain=v1', '-z'],
+			{ cwd: worktreeDir },
+		)
+	} catch {
+		// Worktree directory may not exist yet — treat as empty
+		return []
+	}
+	if (result.exitCode !== 0) {
 		return []
 	}
 	const results: WorktreeFileStatus[] = []
-	const entries = stdout.split('\0').filter((s) => s.length > 0)
+	const entries = result.stdout.split('\0').filter((s) => s.length > 0)
 	for (const entry of entries) {
 		const xy = entry.slice(0, 2)
 		if (entry.length > 3) {

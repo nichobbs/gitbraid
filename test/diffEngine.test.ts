@@ -147,9 +147,11 @@ suite('DiffEngine', function () {
 		if (!wsRoot) {
 			return
 		}
-		// Path traversal should be stripped, not throw
-		const hunks = await engine.getHunksForFile(wsRoot, '../../etc/passwd')
-		assert.deepStrictEqual(hunks, [])
+		// Path traversal throws a ConfigError to prevent accessing files outside workspace
+		await assert.rejects(
+			() => engine.getHunksForFile(wsRoot, '../../etc/passwd'),
+			/Path escapes workspace root/,
+		)
 	})
 
 	test('getHunksAgainstBranch: falls back to getHunksForFile when merge-base not found', async () => {
@@ -167,8 +169,11 @@ suite('DiffEngine', function () {
 		if (!wsRoot) {
 			return
 		}
-		const hunks = await engine.getHunksAgainstBranch(wsRoot, '../../etc/passwd', 'main')
-		assert.ok(Array.isArray(hunks))
+		// Path traversal throws a ConfigError to prevent accessing files outside workspace
+		await assert.rejects(
+			() => engine.getHunksAgainstBranch(wsRoot, '../../etc/passwd', 'main'),
+			/Path escapes workspace root/,
+		)
 	})
 
 	test('getMergeBase: returns a string SHA for valid related refs', async () => {
@@ -307,7 +312,7 @@ suite('DiffEngine — spawn-based invocation', () => {
 			// The payload must appear as a standalone argv entry, not inlined
 			// into a shell string, and must retain its original characters.
 			assert.ok(
-				call.args.some((a) => a.includes(p.replace(/\\/g, '/').replace(/^(\.\.\/|\.\.\\)+/, ''))),
+				call.args.some((a) => a.includes(p.replaceAll('\\', '/').replace(/^(\.\.\/|\.\.\\)+/, ''))),
 				`expected payload to survive as argv, got ${JSON.stringify(call.args)}`,
 			)
 			// No marker file created.

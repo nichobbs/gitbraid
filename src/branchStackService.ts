@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
-import * as fs from 'fs'
-import * as path from 'path'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { log } from './channelLogger'
 import { BranchStackError } from './errors'
@@ -130,9 +130,7 @@ export class BranchStackService implements vscode.Disposable {
 
 	static getInstance(config?: ConfigService): BranchStackService {
 		if (!BranchStackService._instance) {
-			if (!config) {
-				config = ConfigService.getInstance()
-			}
+			config ??= ConfigService.getInstance()
 			BranchStackService._instance = new BranchStackService(config)
 		}
 		return BranchStackService._instance

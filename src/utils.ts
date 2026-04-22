@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import * as fs from 'fs'
+import * as fs from 'node:fs'
 import { log } from './channelLogger'
 import { ConfigError } from './errors'
 
@@ -16,8 +16,7 @@ export function fileExists (uri: vscode.Uri) {
 	try {
 		const r = fs.statSync(uri.fsPath)
 		return r.isFile()
-	}
-	catch (e) {
+	} catch {
 		return false
 	}
 }
@@ -26,7 +25,7 @@ export function dirExists (uri: vscode.Uri) {
 	try {
 		const r = fs.statSync(uri.fsPath)
 		return r.isDirectory()
-	} catch (e) {
+	} catch {
 		return false
 	}
 }
@@ -57,7 +56,7 @@ export function deleteFile(uri: vscode.Uri | string) {
 		} else {
 			fs.rmSync(uri.fsPath, { recursive: true })
 		}
-	} catch (e) {
+	} catch {
 		log.info('File not found: ' + uri.fsPath)
 		return false
 	}

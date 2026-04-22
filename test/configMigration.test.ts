@@ -13,7 +13,7 @@ import {
 // and produce a v-current config via `migrateConfig` that preserves the
 // user's stack / assignments / hunk assignments intact.
 
-const FIXTURE_DIR = path.resolve(__dirname, '..', '..', 'test', 'fixtures')
+const FIXTURE_DIR = path.resolve(__dirname, 'fixtures')
 
 function loadFixture(name: string): unknown {
 	const p = path.join(FIXTURE_DIR, name)

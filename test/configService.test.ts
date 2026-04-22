@@ -1,10 +1,9 @@
-import * as assert from 'assert'
+import * as assert from 'node:assert'
 import * as vscode from 'vscode'
-import * as fs from 'fs'
-import * as path from 'path'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { ConfigService } from '../src/configService'
 import { ConfigError } from '../src/errors'
-import { emptyConfig } from '../src/configTypes'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -163,7 +162,7 @@ suite('ConfigService', () => {
 	test('setAssignment: normalises Windows-style path separators', async () => {
 		await svc.load(wsRoot())
 		await svc.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
-		await svc.setAssignment('src\\foo.ts', 'feature/docs')
+		await svc.setAssignment(String.raw`src\foo.ts`, 'feature/docs')
 		assert.strictEqual(svc.getAssignment('src/foo.ts'), 'feature/docs')
 	})
 

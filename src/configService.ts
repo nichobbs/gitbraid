@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
-import * as fs from 'fs'
-import * as path from 'path'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { log } from './channelLogger'
 import { ConfigError } from './errors'
 import {
@@ -82,9 +82,7 @@ export class ConfigService implements vscode.Disposable {
 	private constructor() {}
 
 	static getInstance(): ConfigService {
-		if (!ConfigService._instance) {
-			ConfigService._instance = new ConfigService()
-		}
+		ConfigService._instance ??= new ConfigService()
 		return ConfigService._instance
 	}
 
@@ -194,18 +192,14 @@ export class ConfigService implements vscode.Disposable {
 		if (!this._config.stack.some((e) => e.name === branch)) {
 			throw new ConfigError(`Branch "${branch}" is not in the stack`)
 		}
-		if (!this._config.hunkAssignments) {
-			this._config.hunkAssignments = {}
-		}
+		this._config.hunkAssignments ??= {}
 		if (!this._config.hunkAssignments[key]) {
 			this._config.hunkAssignments[key] = {}
 		}
 		this._config.hunkAssignments[key][String(hunkIndex)] = branch
 
 		if (anchor) {
-			if (!this._config.hunkAnchors) {
-				this._config.hunkAnchors = {}
-			}
+			this._config.hunkAnchors ??= {}
 			if (!this._config.hunkAnchors[key]) {
 				this._config.hunkAnchors[key] = {}
 			}
@@ -519,7 +513,7 @@ export class ConfigService implements vscode.Disposable {
 }
 
 function normalisePath(p: string): string {
-	return p.replace(/\\/g, '/')
+	return p.replaceAll('\\', '/')
 }
 
 function isNodeError(e: unknown): e is NodeJS.ErrnoException {
