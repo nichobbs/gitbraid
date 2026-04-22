@@ -255,6 +255,12 @@
 				"icon": "$(clippy)"
 			},
 			{
+				"command": "gitbraid.previewRouting",
+				"title": "Preview Hunk Routing (Dry Run)",
+				"category": "GitBraid",
+				"icon": "$(eye)"
+			},
+			{
 				"command": "gitbraid.assignHunk",
 				"title": "Assign Hunk to Branch",
 				"category": "GitBraid",

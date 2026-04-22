@@ -123,7 +123,7 @@ export class HunkRouter {
 				continue
 			}
 
-			const patch = this._buildPatch(branchHunks)
+			const patch = this.buildPatch(branchHunks)
 			const success = await this._applyPatch(patch, worktreeDir)
 			if (!success) {
 				allSucceeded = false
@@ -237,8 +237,9 @@ export class HunkRouter {
 	 *
 	 * Each {@link DiffHunk.patch} already includes the file header, so we
 	 * de-duplicate the header and concatenate only the hunk bodies.
+	 * Public so the routing-preview command can inspect patches before applying.
 	 */
-	private _buildPatch(hunks: DiffHunk[]): string {
+	buildPatch(hunks: DiffHunk[]): string {
 		if (hunks.length === 0) {
 			return ''
 		}

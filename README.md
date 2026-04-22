@@ -20,15 +20,32 @@ the commits it should.
 - **Push / sync stack** — push all branches to origin in one command, or rebase
   each branch onto its parent to keep the whole stack up-to-date.
 - **Rebase assistance** — GitBraid watches for parent-branch advances, offers
-  one-click rebase, and presents a conflict recovery UI when rebases pause.
+  one-click rebase, and presents a conflict recovery UI (including VS Code's
+  built-in three-way merge editor) when rebases pause.
+- **Worktree health** — the Branch Stack tree view shows live ahead/behind
+  commit counts, dirty indicators, and rebase-in-progress warnings for every
+  branch without leaving the editor.
+- **Floating-file aging** — unassigned files are colour-coded in the tree view
+  by how long they have gone unassigned (grey → yellow → orange → red).
+- **Smart auto-assign** — when you save a new file in a directory where every
+  other file already belongs to a single branch, GitBraid offers to assign it
+  automatically.
+- **Routing preview** (`gitbraid.previewRouting`) — dry-run all hunk
+  assignments with `git apply --check`; see per-branch pass/fail in the Output
+  panel before committing anything.
+- **PR-ready diff** (`gitbraid.openStackDiff`) — diff the current workspace
+  against the base of the stack in a dedicated editor tab.
+- **Stack diagram** (`gitbraid.copyStackDiagram`) — copy an ASCII tree of the
+  stack (branch names, bases, file counts) to the clipboard.
 - **Undo / redo** — assignment and hunk-assignment actions are reversible within
   the session (`Ctrl+Alt+Z` / `Ctrl+Alt+Shift+Z`).
 - **Import / export** — share a stack layout with teammates via `.gitbraid/stack.json`
   committed to the repository.
-- **AI / chat integration** — seven VS Code language model tools (`gitbraid_getStack`,
+- **AI / chat integration** — eight VS Code language model tools (`gitbraid_getStack`,
   `gitbraid_assignFile`, `gitbraid_assignHunk`, `gitbraid_getFloatingFiles`,
-  `gitbraid_commitBranch`, `gitbraid_getBranchStatus`, `gitbraid_addBranch`) let AI
-  assistants interact with the stack programmatically.
+  `gitbraid_commitBranch`, `gitbraid_getBranchStatus`, `gitbraid_addBranch`,
+  `gitbraid_getStackDiagram`) let AI assistants interact with the stack
+  programmatically.
 
 ## Quick Start
 

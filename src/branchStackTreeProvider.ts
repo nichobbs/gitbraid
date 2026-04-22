@@ -5,6 +5,7 @@ import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry } from './configTypes'
 import type { PRAwareness } from './prAwareness'
 import { codiconForState, stateLabel } from './prAwareness'
+import type { WorktreeHealthService } from './worktreeHealthService'
 import { git } from './gitFunctions'
 
 // ─── Tree node types ──────────────────────────────────────────────────────────
@@ -201,6 +202,8 @@ export class BranchStackTreeProvider
 	private _config: ConfigService
 	private _sync: WorkspaceSync
 	private _rootUri: vscode.Uri | undefined
+	private _healthSvc: WorktreeHealthService | undefined
+	private _healthDisposable: vscode.Disposable | undefined
 
 	/** The currently checked-out branch name; refreshed on HEAD change. */
 	private _currentBranch: string | undefined = undefined
@@ -212,14 +215,25 @@ export class BranchStackTreeProvider
 		private readonly _onUnassign?: (rel: string, previous: string) => void,
 		private readonly _prAwareness?: PRAwareness,
 		rootUri?: vscode.Uri,
+		healthSvc?: WorktreeHealthService,
 	) {
 		this._config = config
 		this._sync = sync
 		this._rootUri = rootUri
+		this._setHealthSvc(healthSvc)
 		this._wireContext()
 
 		if (_prAwareness) {
 			this._disposables.push(_prAwareness.onDidChange(() => this.refresh()))
+		}
+	}
+
+	private _setHealthSvc(healthSvc: WorktreeHealthService | undefined): void {
+		this._healthDisposable?.dispose()
+		this._healthDisposable = undefined
+		this._healthSvc = healthSvc
+		if (healthSvc) {
+			this._healthDisposable = healthSvc.onDidChange(() => this.refresh())
 		}
 	}
 
@@ -236,16 +250,17 @@ export class BranchStackTreeProvider
 	 * new folder's root so the HEAD watcher + `git.branch` lookup follow the
 	 * active folder.
 	 */
-	setContext(config: ConfigService, sync: WorkspaceSync, rootUri?: vscode.Uri): void {
+	setContext(config: ConfigService, sync: WorkspaceSync, rootUri?: vscode.Uri, healthSvc?: WorktreeHealthService): void {
 		const nextRoot = rootUri ?? this._rootUri
 		const rootUnchanged = nextRoot === this._rootUri
 			|| (nextRoot !== undefined && this._rootUri !== undefined && nextRoot.fsPath === this._rootUri.fsPath)
-		if (config === this._config && sync === this._sync && rootUnchanged) return
+		if (config === this._config && sync === this._sync && rootUnchanged && healthSvc === this._healthSvc) return
 		for (const d of this._contextDisposables) d.dispose()
 		this._contextDisposables = []
 		this._config = config
 		this._sync = sync
 		this._rootUri = nextRoot
+		this._setHealthSvc(healthSvc)
 		this._wireContext()
 		this.refresh()
 	}
@@ -391,17 +406,37 @@ export class BranchStackTreeProvider
 
 	getTreeItem(element: StackTreeNode): vscode.TreeItem {
 		if (element.kind === 'project') return element
-		if (element.kind === 'branch' && this._prAwareness) {
-			const info = this._prAwareness.getForBranch(element.entry.name)
-			if (info) {
-				// Prepend a PR-state codicon to the description so the user can
-				// tell at a glance whether the branch has an open / draft /
-				// merged PR.  The tooltip carries the full PR title + number.
-				const icon = `$(${codiconForState(info.state)})`
-				const existing = typeof element.description === 'string' ? element.description : ''
-				element.description = existing ? `${icon} ${existing}` : icon
-				const baseTooltip = typeof element.tooltip === 'string' ? element.tooltip : `Branch: ${element.entry.name} (base: ${element.entry.base})`
-				element.tooltip = `${baseTooltip}\n${stateLabel(info.state)} #${String(info.number)} — ${info.title}`
+		if (element.kind === 'branch') {
+			// ── Health dashboard ────────────────────────────────────────────────
+			if (this._healthSvc) {
+				const health = this._healthSvc.getHealth(element.entry.name)
+				if (health) {
+					const indicators: string[] = []
+					if (health.aheadCount > 0) indicators.push(`↑${String(health.aheadCount)}`)
+					if (health.behindCount > 0) indicators.push(`↓${String(health.behindCount)}`)
+					if (health.dirty) indicators.push('⦿')
+					const healthStr = indicators.join(' ')
+					const base = element.entry.base
+					element.description = healthStr ? `${base}  ${healthStr}` : base
+
+					if (health.rebasing) {
+						element.iconPath = new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
+						const tip = typeof element.tooltip === 'string' ? element.tooltip : `Branch: ${element.entry.name} (base: ${element.entry.base})`
+						element.tooltip = `${tip}\n⚠ Rebase in progress`
+					}
+				}
+			}
+
+			// ── PR awareness ────────────────────────────────────────────────────
+			if (this._prAwareness) {
+				const info = this._prAwareness.getForBranch(element.entry.name)
+				if (info) {
+					const icon = `$(${codiconForState(info.state)})`
+					const existing = typeof element.description === 'string' ? element.description : ''
+					element.description = existing ? `${icon} ${existing}` : icon
+					const baseTooltip = typeof element.tooltip === 'string' ? element.tooltip : `Branch: ${element.entry.name} (base: ${element.entry.base})`
+					element.tooltip = `${baseTooltip}\n${stateLabel(info.state)} #${String(info.number)} — ${info.title}`
+				}
 			}
 		}
 		return element
@@ -479,6 +514,7 @@ export class BranchStackTreeProvider
 
 	dispose(): void {
 		this._onDidChangeTreeData.dispose()
+		this._healthDisposable?.dispose()
 		for (const d of this._contextDisposables) d.dispose()
 		this._contextDisposables = []
 		for (const d of this._disposables) {

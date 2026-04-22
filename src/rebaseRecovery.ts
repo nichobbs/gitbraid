@@ -135,7 +135,7 @@ export class RebaseRecovery implements vscode.Disposable {
 		}
 	}
 
-	/** Open every conflicted file in a group of tabs for side-by-side resolution. */
+	/** Open every conflicted file in VS Code's built-in merge editor (with plain-editor fallback). */
 	async openConflicts(worktreeDir: string): Promise<void> {
 		const files = await this._listConflicts(worktreeDir)
 		if (files.length === 0) {
@@ -148,14 +148,24 @@ export class RebaseRecovery implements vscode.Disposable {
 		for (const rel of toOpen) {
 			const uri = vscode.Uri.file(path.join(worktreeDir, rel))
 			try {
-				await vscode.window.showTextDocument(uri, { preview: false })
-			} catch (e) {
-				log.warn(`RebaseRecovery: failed to open ${rel}: ${e instanceof Error ? e.message : String(e)}`)
+				await vscode.commands.executeCommand('git.openMergeEditor', uri)
+			} catch {
+				// Merge editor unavailable (older VS Code / extension disabled) — fall back.
+				try {
+					await vscode.window.showTextDocument(uri, { preview: false })
+				} catch (e) {
+					log.warn(`RebaseRecovery: failed to open ${rel}: ${e instanceof Error ? e.message : String(e)}`)
+				}
 			}
 		}
-		if (files.length > toOpen.length) {
+		const opened = toOpen.length
+		if (files.length > opened) {
 			await vscode.window.showInformationMessage(
-				`Opened ${String(toOpen.length)} of ${String(files.length)} conflicted files.`,
+				`Opened ${String(opened)} of ${String(files.length)} conflicted files. Run "Open Rebase Conflicts" again for the rest.`,
+			)
+		} else if (opened > 0) {
+			await vscode.window.showInformationMessage(
+				`Opened ${String(opened)} conflicted file${opened !== 1 ? 's' : ''} in the merge editor. Resolve conflicts, then run "Continue Rebase".`,
 			)
 		}
 	}

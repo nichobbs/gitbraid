@@ -85,6 +85,27 @@
   the same chart colour can still be visually distinguished.
 
 ### Added
+- **Worktree health dashboard** (`WorktreeHealthService`): ahead/behind
+  commit counts, dirty-worktree indicator (⦿), and mid-rebase warning icon
+  are now shown live in the Branch Stack tree view for every branch.
+- **Floating-file aging**: unassigned files in the Branch Stack tree view
+  are now colour-coded by how long they have been floating — grey (<1 h),
+  yellow (1–24 h), orange (1–7 days), red (>7 days).
+- **Stack diagram copy** (`gitbraid.copyStackDiagram`): copies an ASCII tree
+  of the full stack (branch names, bases, assigned-file counts) to the
+  clipboard. Also exposed as `gitbraid_getStackDiagram` LM tool.
+- **PR-ready diff** (`gitbraid.openStackDiff`): opens a VS Code diff editor
+  comparing the current working tree to the base of the stack using the
+  `gitbraid-base:` virtual scheme.
+- **Smart auto-assign**: when a new file is saved in a directory where all
+  other assigned files belong to a single branch, a toast offers to auto-
+  assign the new file to that branch.
+- **Routing preview / dry-run** (`gitbraid.previewRouting`): validates all
+  current hunk assignments with `git apply --check` (no worktree changes)
+  and reports per-branch pass/fail in the Output panel.
+- **Merge editor integration**: `openConflicts` now opens conflicted files
+  in VS Code's built-in three-way merge editor (`git.openMergeEditor`) with
+  a plain-editor fallback for older VS Code versions.
 - `gitbraid.unassignHunk` command + a second CodeLens entry per assigned
   hunk so users can remove an assignment in one click.
 - `MbcApi.reorderStack`, `getHunkAssignments`, `removeHunkAssignment`,
