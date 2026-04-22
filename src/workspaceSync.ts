@@ -204,8 +204,9 @@ export class WorkspaceSync implements vscode.Disposable {
 			)
 			if (exitCode !== 0) return
 
+			// First pass: collect candidates, applying cheap structural filters.
 			const entries = stdout.split('\0').filter((s) => s.length > 0)
-			let seeded = 0
+			const candidates: string[] = []
 			for (const entry of entries) {
 				// Valid porcelain v1 format: "XY path" — 2 status chars + space + path.
 				// Rename/copy entries produce a second NUL-delimited token that is
@@ -218,7 +219,31 @@ export class WorkspaceSync implements vscode.Disposable {
 				if (relativePath === '.git' || relativePath.endsWith('/.git')) continue
 				// Skip files already assigned — rehideAssignedFiles handles those.
 				if (this._config.getAssignment(relativePath)) continue
+				candidates.push(relativePath)
+			}
 
+			// Second pass: batch-check all candidates against every .gitignore file
+			// in the repository tree.  --no-index ensures tracked-but-gitignored
+			// files (added to .gitignore after their first commit) are also excluded.
+			let ignoredPaths = new Set<string>()
+			if (candidates.length > 0) {
+				try {
+					const { stdout: ignOut, exitCode: ignExit } = await runner.run(
+						['check-ignore', '--no-index', '-z', '--', ...candidates],
+						{ cwd: workspaceRoot.fsPath },
+					)
+					// exit 0 = at least one ignored (output lists them); exit 1 = none ignored
+					if (ignExit === 0) {
+						ignoredPaths = new Set(ignOut.split('\0').filter(Boolean))
+					}
+				} catch {
+					// check-ignore failure is non-fatal; seed all candidates.
+				}
+			}
+
+			let seeded = 0
+			for (const relativePath of candidates) {
+				if (ignoredPaths.has(relativePath)) continue
 				const key = normalisePath(relativePath)
 				if (!this._floatingDirty.has(key)) {
 					if (this._floatingDirty.size >= FLOATING_DIRTY_CAP) {
@@ -304,10 +329,13 @@ export class WorkspaceSync implements vscode.Disposable {
 
 	private async _handleSave(relativePath: string, uri: vscode.Uri): Promise<void> {
 		// Skip gitignored files — they should never appear as floating or be synced.
+		// --no-index checks patterns regardless of whether the file is tracked,
+		// so tracked-but-gitignored files (e.g. added to .gitignore after commit)
+		// are filtered correctly.
 		if (this._workspaceRoot) {
 			try {
 				const { exitCode } = await getDefaultGitRunner().run(
-					['check-ignore', '-q', '--', relativePath],
+					['check-ignore', '--no-index', '-q', '--', relativePath],
 					{ cwd: this._workspaceRoot.fsPath },
 				)
 				if (exitCode === 0) {

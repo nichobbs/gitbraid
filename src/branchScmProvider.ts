@@ -89,7 +89,9 @@ function makeStatusIcon(letter: string, color: string): vscode.Uri {
 	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">` +
 		`<text x="8" y="12.5" text-anchor="middle" font-family="monospace,sans-serif" ` +
 		`font-size="12" font-weight="700" fill="${color}">${letter}</text></svg>`
-	return vscode.Uri.parse(`data:image/svg+xml,${encodeURIComponent(svg)}`)
+	// Base64-encoded data URIs are more reliably rendered in VS Code's SCM panel
+	// than percent-encoded variants, which some Electron builds mishandle.
+	return vscode.Uri.parse(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
 }
 
 interface StatusMeta { letter: string; color: string; tooltip: string; strikeThrough?: boolean }
