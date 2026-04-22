@@ -1,6 +1,7 @@
 import * as assert from 'node:assert'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import * as vscode from 'vscode'
 import { TmpRepo } from './helpers/tmpRepo'
 import { FakeGitRunner } from './helpers/fakeGitRunner'
 import { RebaseRecovery } from '../src/rebaseRecovery'
@@ -14,13 +15,32 @@ suite('RebaseRecovery (T70)', () => {
 	let recovery: RebaseRecovery
 	let runner: FakeGitRunner
 
+	// VS Code notifications block in the headless test host until dismissed.
+	type WinAny = Record<string, (...args: unknown[]) => Promise<unknown>>
+	let origWarn: WinAny['showWarningMessage']
+	let origErr: WinAny['showErrorMessage']
+	let origInfo: WinAny['showInformationMessage']
+
 	setup(() => {
+		const win = vscode.window as unknown as WinAny
+		origWarn = win.showWarningMessage
+		origErr = win.showErrorMessage
+		origInfo = win.showInformationMessage
+		win.showWarningMessage = async () => undefined
+		win.showErrorMessage = async () => undefined
+		win.showInformationMessage = async () => undefined
+
 		repo = TmpRepo.create('rebase-recovery')
 		runner = new FakeGitRunner()
 		recovery = new RebaseRecovery(runner)
 	})
 
 	teardown(() => {
+		const win = vscode.window as unknown as WinAny
+		win.showWarningMessage = origWarn
+		win.showErrorMessage = origErr
+		win.showInformationMessage = origInfo
+
 		recovery.dispose()
 		repo.dispose()
 	})

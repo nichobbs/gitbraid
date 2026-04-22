@@ -33,7 +33,21 @@ suite('StackCommands (T67)', () => {
 	let runner: FakeGitRunner
 	let cmds: StackCommands
 
+	// VS Code notifications block in the headless test host until dismissed.
+	type WinAny = Record<string, (...args: unknown[]) => Promise<unknown>>
+	let origWarn: WinAny['showWarningMessage']
+	let origErr: WinAny['showErrorMessage']
+	let origInfo: WinAny['showInformationMessage']
+
 	setup(async () => {
+		const win = vscode.window as unknown as WinAny
+		origWarn = win.showWarningMessage
+		origErr = win.showErrorMessage
+		origInfo = win.showInformationMessage
+		win.showWarningMessage = async () => undefined
+		win.showErrorMessage = async () => undefined
+		win.showInformationMessage = async () => undefined
+
 		cleanup()
 		ConfigService.resetInstance()
 		BranchStackService.resetInstance()
@@ -47,6 +61,11 @@ suite('StackCommands (T67)', () => {
 	})
 
 	teardown(async () => {
+		const win = vscode.window as unknown as WinAny
+		win.showWarningMessage = origWarn
+		win.showErrorMessage = origErr
+		win.showInformationMessage = origInfo
+
 		cleanup()
 		BranchStackService.resetInstance()
 		ConfigService.resetInstance()
