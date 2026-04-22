@@ -21,6 +21,7 @@ import { registerLmTools } from './lmTools'
 
 import { FolderRegistry } from './folderRegistry'
 import { FolderContext } from './folderContext'
+import { GitBraidApiFacade } from './gitBraidApiFacade'
 import { withErrorHandler, showError } from './errorSurfacer'
 export { showError }
 
@@ -115,7 +116,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	const diffEngine = primary.diffEngine
 	const hunkRouter = primary.hunkRouter
 
-	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync)
+	// Decoration provider is multi-root-aware: it resolves the owning
+	// folder per-URI via the registry, so decorations render correctly
+	// for files in any folder regardless of which is "primary".
+	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync, registry)
 	context.subscriptions.push(decorationProvider)
 
 	// PR awareness — feature-detects the GitHub PR extension at runtime.
@@ -146,6 +150,23 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const statusBar = new FloatingStatusBarItem(workspaceSync, configService)
 	context.subscriptions.push(statusBar)
+
+	// ── Multi-root phase 2: re-source UI on active-folder switch ──────────
+	// Tree provider + status bar hold references to the primary folder's
+	// services.  When the user moves focus to an editor inside a different
+	// folder, swap their bindings so the UI reflects the folder being
+	// edited.  Decoration provider is registry-aware per-URI so needs no
+	// rebinding.  CodeLens / overlay diagnostics are still primary-bound
+	// (future work).
+	const updateActive = () => {
+		const ctx = registry.getActive() ?? primary
+		stackTreeProvider.setContext(ctx.config, ctx.workspaceSync)
+		statusBar.setContext(ctx.workspaceSync, ctx.config)
+	}
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(() => updateActive()),
+		registry.onDidChangeFolders(() => updateActive()),
+	)
 
 	// ─── Phase 3: Chunk-Level Assignment ──────────────────────────────────────
 	// `diffEngine` / `hunkRouter` are per-folder (aliased into locals above
@@ -757,11 +778,13 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// ─── Phase 5: Exported API & LM tools ─────────────────────────────────────
-	// The exported API delegates to the primary folder today; a future
-	// commit turns it into a facade over `activeContext()` so external
-	// callers (and LM tools) target the folder the user is editing.
-	const gitbraidExportedApi = primary.api
-	context.subscriptions.push(...registerLmTools(gitbraidExportedApi))
+	// The exported API is a facade over `FolderRegistry` that delegates to
+	// whichever folder's `GitBraidApi` is active.  Downstream consumers —
+	// `vscode.extensions.getExtension(...).exports`, language-model tools,
+	// future MCP clients — see a single API object whose operations target
+	// the folder the user is currently editing.
+	const gitbraidExportedApi = new GitBraidApiFacade(registry)
+	context.subscriptions.push(gitbraidExportedApi, ...registerLmTools(gitbraidExportedApi))
 
 	// ─── Phase 6: Worktree management commands ────────────────────────────────
 	commands.push(

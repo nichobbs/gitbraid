@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
-import type { GitBraidApi } from './gitBraidApi'
+import type { GitBraidExportedAPI } from './@types/GitBraidAPI'
+type GitBraidApi = GitBraidExportedAPI
 
 // ─── Tool result helpers ──────────────────────────────────────────────────────
 
