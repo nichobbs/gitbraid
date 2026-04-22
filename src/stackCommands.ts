@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import * as fs from 'node:fs'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
@@ -106,7 +107,7 @@ export class StackCommands implements vscode.Disposable {
 		skipMissing: boolean,
 	): Promise<StackOpResult> {
 		const wtPath = worktreePath(this._workspaceRoot, branch)
-		const hasWorktree = this._branchStack.worktreeExists(branch)
+		const hasWorktree = fs.existsSync(wtPath.fsPath)
 		if (!hasWorktree) {
 			if (skipMissing) {
 				return { branch, ok: true, message: 'skipped (no worktree)' }
@@ -177,7 +178,7 @@ export class StackCommands implements vscode.Disposable {
 						results.push({ branch: entry.name, ok: true, message: 'skipped (no base)' })
 						continue
 					}
-					if (!this._branchStack.worktreeExists(entry.name)) {
+					if (!fs.existsSync(worktreePath(this._workspaceRoot, entry.name).fsPath)) {
 						results.push({ branch: entry.name, ok: true, message: 'skipped (no worktree)' })
 						continue
 					}

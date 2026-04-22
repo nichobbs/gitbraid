@@ -476,7 +476,9 @@
 							"description": "The branch name to query."
 						}
 					},
-					"required": ["branch"],
+					"required": [
+						"branch"
+					],
 					"additionalProperties": false
 				}
 			},
@@ -505,7 +507,10 @@
 							"pattern": "^#[0-9a-fA-F]{6}$"
 						}
 					},
-					"required": ["name", "base"],
+					"required": [
+						"name",
+						"base"
+					],
 					"additionalProperties": false
 				}
 			},
@@ -529,7 +534,10 @@
 							"description": "The branch to assign the file to."
 						}
 					},
-					"required": ["relativePath", "branch"],
+					"required": [
+						"relativePath",
+						"branch"
+					],
 					"additionalProperties": false
 				}
 			},
@@ -558,7 +566,11 @@
 							"description": "The branch to assign the hunk to."
 						}
 					},
-					"required": ["relativePath", "hunkIndex", "branch"],
+					"required": [
+						"relativePath",
+						"hunkIndex",
+						"branch"
+					],
 					"additionalProperties": false
 				}
 			},
@@ -583,7 +595,10 @@
 							"description": "The commit message."
 						}
 					},
-					"required": ["branch", "message"],
+					"required": [
+						"branch",
+						"message"
+					],
 					"additionalProperties": false
 				}
 			}
@@ -643,6 +658,7 @@
 		"@types/vscode": "^1.95.0",
 		"@typescript-eslint/eslint-plugin": "^7.18.0",
 		"@typescript-eslint/parser": "^7.18.0",
+		"@typescript-eslint/typescript-estree": "^8.59.0",
 		"@vscode/test-cli": "^0.0.11",
 		"@vscode/test-electron": "^2.4.1",
 		"@vscode/vsce": "^3.9.1",

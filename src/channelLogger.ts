@@ -128,7 +128,7 @@ class Logger {
 	}
 
 	private writeMessage (messageLevel: LogLevel, message: string, includeStack = false) {
-		if (message == undefined) {
+		if (message === undefined) {
 			return
 		}
 		const datetime = new Date().toISOString()
@@ -140,7 +140,7 @@ class Logger {
 	}
 
 	private writeToChannel (messageLevel: LogLevel, message: string, includeStack: boolean) {
-		if (message == undefined) {
+		if (message === undefined) {
 			return
 		}
 		// Only compute the caller line for debug/trace — the stack-capture is ~20µs/call
@@ -195,15 +195,15 @@ class Logger {
 			if (filename && !filename.endsWith('extensionHostProcess.js')) {
 				const classname = s.getTypeName()
 				const funcname = s.getFunctionName()
-				if (funcname == 'processTicksAndRejections' ||
-					funcname == 'runNextTicks' ||
-					funcname == 'getCallerSourceLine' ||
-					funcname == 'decorateMessage' ||
-					funcname == 'writeToConsole' ||
-					funcname == 'writeMessage' ||
-					funcname == 'info' ||
-					funcname == 'warn' ||
-					funcname == 'error') {
+				if (funcname === 'processTicksAndRejections' ||
+					funcname === 'runNextTicks' ||
+					funcname === 'getCallerSourceLine' ||
+					funcname === 'decorateMessage' ||
+					funcname === 'writeToConsole' ||
+					funcname === 'writeMessage' ||
+					funcname === 'info' ||
+					funcname === 'warn' ||
+					funcname === 'error') {
 					continue
 				}
 				let ret = path.relative(this.extensionCodeDir, filename).replaceAll('\\', '/') + ':' + s.getLineNumber()

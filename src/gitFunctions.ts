@@ -80,7 +80,7 @@ class Git {
 				return r.stdout
 			}, (e: GitErrorResponse) => {
 				log.error('GitErrorResponse=' + JSON.stringify(redactGitError(e), null, 2))
-				if (e.stderr && e.stderr != '') {
+				if (e.stderr && e.stderr !== '') {
 					log.notificationError(redactCredentials(e.stderr))
 					throw new GitError(e.stderr, e.code)
 				}
@@ -221,12 +221,12 @@ class Git {
 			const lines: string[] = r.split('\0')
 			const ignoredFiles = []
 			for (const l of lines) {
-				if (l == '') {
+				if (l === '') {
 					continue
 				}
 				const status = l.substring(0, 1)
 				const path = l.substring(3)
-				if (status == '!') {
+				if (status === '!') {
 					ignoredFiles.push(path)
 				}
 			}
@@ -245,7 +245,7 @@ class Git {
 		}
 
 		let cwd: vscode.Uri
-		if (rootUri == undefined) {
+		if (rootUri === undefined) {
 			cwd = vscode.workspace.workspaceFolders![0].uri
 		} else {
 			cwd = rootUri
@@ -269,7 +269,7 @@ class Worktree {
 			const trees: WorktreeStatus[] = []
 			const lines = stdout.split('\0\0')
 			for (const line of lines) {
-				if (line == '') {
+				if (line === '') {
 					continue
 				}
 				const tree = line.split('\0')
