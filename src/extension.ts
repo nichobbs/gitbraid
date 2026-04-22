@@ -25,7 +25,7 @@ import {
 import { StackShareService, SHARED_DIR, SHARED_FILE } from './stackShareService'
 import { PRAwareness } from './prAwareness'
 import * as path from 'node:path'
-import { MbcApi } from './mbcApi'
+import { GitBraidApi } from './gitBraidApi'
 import { hideAssignedFile } from './gitIndex'
 import { getDefaultGitRunner } from './gitRunner'
 import { registerLmTools } from './lmTools'
@@ -724,8 +724,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// ─── Phase 5: Exported API & LM tools ─────────────────────────────────────
-	const mbcExportedApi = new MbcApi(configService, branchStack, workspaceSync, workspaceRoot)
-	context.subscriptions.push(...registerLmTools(mbcExportedApi))
+	const gitbraidExportedApi = new GitBraidApi(configService, branchStack, workspaceSync, workspaceRoot)
+	context.subscriptions.push(...registerLmTools(gitbraidExportedApi))
 
 	// ─── Phase 6: Worktree management commands ────────────────────────────────
 	commands.push(
@@ -783,7 +783,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// it and occasionally double-append; consolidated in T24.
 
 	log.info('extension activation complete')
-	return mbcExportedApi
+	return gitbraidExportedApi
 
 }
 

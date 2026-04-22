@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
-import type { MbcApi } from './mbcApi'
+import type { GitBraidApi } from './gitBraidApi'
 
 // ─── Tool result helpers ──────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ function jsonResult(value: unknown): vscode.LanguageModelToolResult {
 class GetStackTool implements vscode.LanguageModelTool<Record<string, never>> {
 	readonly name = 'mbc_getStack'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
@@ -45,7 +45,7 @@ interface AssignFileInput {
 class AssignFileTool implements vscode.LanguageModelTool<AssignFileInput> {
 	readonly name = 'mbc_assignFile'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<AssignFileInput>,
@@ -84,7 +84,7 @@ interface AssignHunkInput {
 class AssignHunkTool implements vscode.LanguageModelTool<AssignHunkInput> {
 	readonly name = 'mbc_assignHunk'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<AssignHunkInput>,
@@ -117,7 +117,7 @@ class AssignHunkTool implements vscode.LanguageModelTool<AssignHunkInput> {
 class GetFloatingFilesTool implements vscode.LanguageModelTool<Record<string, never>> {
 	readonly name = 'mbc_getFloatingFiles'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
@@ -148,7 +148,7 @@ interface CommitBranchInput {
 class CommitBranchTool implements vscode.LanguageModelTool<CommitBranchInput> {
 	readonly name = 'mbc_commitBranch'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<CommitBranchInput>,
@@ -185,7 +185,7 @@ interface GetBranchStatusInput {
 class GetBranchStatusTool implements vscode.LanguageModelTool<GetBranchStatusInput> {
 	readonly name = 'mbc_getBranchStatus'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<GetBranchStatusInput>,
@@ -214,7 +214,7 @@ interface AddBranchInput {
 class AddBranchTool implements vscode.LanguageModelTool<AddBranchInput> {
 	readonly name = 'mbc_addBranch'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<AddBranchInput>,
@@ -248,7 +248,7 @@ class AddBranchTool implements vscode.LanguageModelTool<AddBranchInput> {
  * Registers all MBC language model tools with VS Code.
  * Returns disposables that unregister the tools when disposed.
  */
-export function registerLmTools(api: MbcApi): vscode.Disposable[] {
+export function registerLmTools(api: GitBraidApi): vscode.Disposable[] {
 	const tools: Array<vscode.LanguageModelTool<never>> = [
 		new GetStackTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new AssignFileTool(api) as unknown as vscode.LanguageModelTool<never>,
