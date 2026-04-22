@@ -40,7 +40,7 @@ async function _gitStatus(runner: IGitRunner, worktreeDir: string): Promise<Work
 	return results
 }
 
-// ─── MbcApi ───────────────────────────────────────────────────────────────────
+// ─── GitBraidApi ───────────────────────────────────────────────────────────────────
 
 /**
  * Implements the full exported `GitBraidExportedAPI`.
@@ -48,7 +48,7 @@ async function _gitStatus(runner: IGitRunner, worktreeDir: string): Promise<Work
  * This object is returned by `activate()` and can be obtained by other
  * extensions via `vscode.extensions.getExtension(...).exports`.
  */
-export class MbcApi implements GitBraidExportedAPI {
+export class GitBraidApi implements GitBraidExportedAPI {
 
 	constructor(
 		private readonly _config: ConfigService,
@@ -170,10 +170,10 @@ export class MbcApi implements GitBraidExportedAPI {
 		commitArgs.push('-m', message)
 		const { exitCode, stderr } = await this._runner.run(commitArgs, { cwd: wtDir })
 		if (exitCode !== 0) {
-			log.error(`MbcApi.commitBranch: failed for "${branch}": ${stderr}`)
+			log.error(`GitBraidApi.commitBranch: failed for "${branch}": ${stderr}`)
 			throw new GitError(`Commit to "${branch}" failed: ${stderr}`, exitCode)
 		}
-		log.info(`MbcApi.commitBranch: committed to "${branch}"`)
+		log.info(`GitBraidApi.commitBranch: committed to "${branch}"`)
 	}
 
 	async stageBranch(branch: string, files?: string[]): Promise<void> {
@@ -202,7 +202,7 @@ export class MbcApi implements GitBraidExportedAPI {
 				throw new GitError(`git add -u failed in "${branch}": ${stderr}`, exitCode)
 			}
 		}
-		log.info(`MbcApi.stageBranch: staged in "${branch}"`)
+		log.info(`GitBraidApi.stageBranch: staged in "${branch}"`)
 	}
 
 	// ── API parity with internal services ─────────────────────────────────────

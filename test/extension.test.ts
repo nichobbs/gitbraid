@@ -42,7 +42,7 @@ suite('extension: activate', function () {
 		try { await git.commit('initial commit', '--no-gpg-sign') } catch {}
 	})
 
-	test('activate: returns MbcApi with expected methods', async () => {
+	test('activate: returns GitBraidApi with expected methods', async () => {
 		const api = await getExt()
 		assert.ok(api, 'activate() should return the exported API')
 		assert.strictEqual(typeof api.getStack, 'function')

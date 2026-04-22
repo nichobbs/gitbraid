@@ -116,8 +116,8 @@ suite('rebaseSuggestionService', () => {
 	})
 })
 
-// ─── MbcApi / LmTools integration check ──────────────────────────────────────
-suite('mbcApi and lmTools', () => {
+// ─── GitBraidApi / LmTools integration check ────────────────────────────────
+suite('gitBraidApi and lmTools', () => {
 	test('mt.1 - extension exports GitBraidExportedAPI', async () => {
 		const ext = vscode.extensions.getExtension('nichobbs.gitbraid')
 		assert.ok(ext, 'extension should be present')

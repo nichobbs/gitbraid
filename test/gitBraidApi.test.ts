@@ -5,7 +5,7 @@ import * as vscode from 'vscode'
 import { ConfigService } from '../src/configService'
 import { BranchStackService } from '../src/branchStackService'
 import { WorkspaceSync } from '../src/workspaceSync'
-import { MbcApi } from '../src/mbcApi'
+import { GitBraidApi } from '../src/gitBraidApi'
 import { git } from '../src/gitFunctions'
 
 function wsRoot(): vscode.Uri {
@@ -17,13 +17,13 @@ function cleanup() {
 	try { fs.rmSync(path.join(wsRoot().fsPath, '.gitignore')) } catch {}
 }
 
-suite('MbcApi', function () {
+suite('GitBraidApi', function () {
 	this.timeout(15_000)
 
 	let config: ConfigService
 	let branchStack: BranchStackService
 	let sync: WorkspaceSync
-	let api: MbcApi
+	let api: GitBraidApi
 
 	suiteSetup(async () => {
 		await git.init()
@@ -40,7 +40,7 @@ suite('MbcApi', function () {
 		await config.load(wsRoot())
 		branchStack = BranchStackService.getInstance(config)
 		sync = WorkspaceSync.getInstance(config)
-		api = new MbcApi(config, branchStack, sync, wsRoot())
+		api = new GitBraidApi(config, branchStack, sync, wsRoot())
 	})
 
 	teardown(() => {

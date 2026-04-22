@@ -301,6 +301,12 @@
 				"title": "Refresh PR Status",
 				"category": "GitBraid",
 				"icon": "$(sync)"
+			},
+			{
+				"command": "gitbraid.showActiveFolder",
+				"title": "Show Active Folder (multi-root)",
+				"category": "GitBraid",
+				"icon": "$(folder-active)"
 			}
 		],
 		"viewsWelcome": [
@@ -433,7 +439,7 @@
 		},
 		"languageModelTools": [
 			{
-				"name": "mbc_getStack",
+				"name": "gitbraid_getStack",
 				"displayName": "GitBraid: Get Branch Stack",
 				"modelDescription": "Returns the current GitBraid branch stack and its entries, ordered from base to top.",
 				"userDescription": "Read the current GitBraid branch stack.",
@@ -447,7 +453,7 @@
 				}
 			},
 			{
-				"name": "mbc_getFloatingFiles",
+				"name": "gitbraid_getFloatingFiles",
 				"displayName": "GitBraid: Get Floating Files",
 				"modelDescription": "Returns workspace-relative paths for files that are modified but not yet assigned to any branch in the stack.",
 				"userDescription": "List floating (unassigned) files.",
@@ -461,7 +467,7 @@
 				}
 			},
 			{
-				"name": "mbc_getBranchStatus",
+				"name": "gitbraid_getBranchStatus",
 				"displayName": "GitBraid: Get Branch Status",
 				"modelDescription": "Returns staged / unstaged / untracked counts for a branch's worktree.",
 				"userDescription": "Inspect the status of a branch in the stack.",
@@ -483,7 +489,7 @@
 				}
 			},
 			{
-				"name": "mbc_addBranch",
+				"name": "gitbraid_addBranch",
 				"displayName": "GitBraid: Add Branch to Stack",
 				"modelDescription": "Creates a new branch in the stack, parented on the provided base branch, and adds a worktree for it.",
 				"userDescription": "Add a branch to the GitBraid stack.",
@@ -515,7 +521,7 @@
 				}
 			},
 			{
-				"name": "mbc_assignFile",
+				"name": "gitbraid_assignFile",
 				"displayName": "GitBraid: Assign File to Branch",
 				"modelDescription": "Assigns a workspace-relative file path to a branch in the stack. Subsequent saves of the file are copied to that branch's worktree.",
 				"userDescription": "Assign a file to a GitBraid branch.",
@@ -542,7 +548,7 @@
 				}
 			},
 			{
-				"name": "mbc_assignHunk",
+				"name": "gitbraid_assignHunk",
 				"displayName": "GitBraid: Assign Hunk to Branch",
 				"modelDescription": "Assigns a specific diff hunk within a file to a branch, identified by its 0-based index in the unified diff output.",
 				"userDescription": "Assign a specific hunk to a GitBraid branch.",
@@ -575,7 +581,7 @@
 				}
 			},
 			{
-				"name": "mbc_commitBranch",
+				"name": "gitbraid_commitBranch",
 				"displayName": "GitBraid: Commit Branch",
 				"modelDescription": "Stages all tracked changes in a branch's worktree and creates a commit. Fails if the branch's worktree has no changes.",
 				"userDescription": "Commit the current changes on a GitBraid branch.",
@@ -646,6 +652,7 @@
 		"package": "npx vsce package --no-dependencies",
 		"install-vsix": "npm run package && code --install-extension gitbraid-$(npm pkg get version | tr -d '\"').vsix",
 		"watch": "npm run build -- --watch",
+		"pretest": "node scripts/setup-test-fixture.js",
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
 		"refresh": "npm run install-vsix"

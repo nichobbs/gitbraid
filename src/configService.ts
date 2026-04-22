@@ -79,8 +79,19 @@ export class ConfigService implements vscode.Disposable {
 	readonly onDidChangeAssignment: vscode.Event<AssignmentChangeEvent> = this._onDidChangeAssignment.event
 	readonly onDidChangeStack: vscode.Event<StackChangeEvent> = this._onDidChangeStack.event
 
-	private constructor() {}
+	/**
+	 * Public constructor — each `FolderContext` creates its own instance.
+	 * The `getInstance()` / `resetInstance()` static methods retained below
+	 * are test-only helpers; production code should hold an instance
+	 * owned by a `FolderContext` and not mix the two.
+	 */
+	constructor() { /* nothing — load() performs the async init */ }
 
+	/**
+	 * Shared legacy singleton.  Kept for the test suite, which leans on
+	 * `resetInstance()` across scopes.  Not used by production activation
+	 * anymore — each `FolderContext` owns its own instance directly.
+	 */
 	static getInstance(): ConfigService {
 		ConfigService._instance ??= new ConfigService()
 		return ConfigService._instance

@@ -121,21 +121,38 @@ export class BranchStackTreeProvider
 	readonly dragMimeTypes: readonly string[] = [INTERNAL_MIME, URI_LIST_MIME]
 
 	private readonly _disposables: vscode.Disposable[] = []
+	/**
+	 * Event subscriptions scoped to the current folder context.  On
+	 * `setContext(...)` these get torn down and re-created against the new
+	 * context's services so the tree reflects the active folder's state.
+	 */
+	private _contextDisposables: vscode.Disposable[] = []
+
+	private _config: ConfigService
+	private _sync: WorkspaceSync
 
 	/** The currently checked-out branch name; refreshed on HEAD change. */
 	private _currentBranch: string | undefined = undefined
 
 	constructor(
-		private readonly _config: ConfigService,
-		private readonly _sync: WorkspaceSync,
+		config: ConfigService,
+		sync: WorkspaceSync,
 		private readonly _onAssign?: (rel: string, newBranch: string, previous: string | undefined) => void,
 		private readonly _onUnassign?: (rel: string, previous: string) => void,
 		private readonly _prAwareness?: PRAwareness,
 	) {
+		this._config = config
+		this._sync = sync
+		this._wireContext()
+
 		// Seed the current branch cache before the first render.
 		void this._refreshCurrentBranch()
 
 		// Watch .git/HEAD so branch switches are reflected immediately.
+		// Uses the first workspace folder for the primary binding; multi-root
+		// tree re-sourcing swaps `_config`/`_sync` via `setContext(...)` but
+		// the HEAD watcher stays on the initial folder.  A per-folder watcher
+		// would be ideal — deferred as future work.
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
 		if (workspaceRoot) {
 			const headWatcher = vscode.workspace.createFileSystemWatcher(
@@ -146,16 +163,36 @@ export class BranchStackTreeProvider
 				headWatcher.onDidChange(() => void this._refreshCurrentBranch().then(() => this.refresh())),
 			)
 		}
-
-		this._disposables.push(
-			_config.onDidChangeAssignment(() => this.refresh()),
-			_config.onDidChangeStack(() => void this._refreshCurrentBranch().then(() => this.refresh())),
-			_sync.onDidFloatFile(() => this.refresh()),
-			_sync.onDidSyncFile(() => this.refresh()),
-		)
 		if (_prAwareness) {
 			this._disposables.push(_prAwareness.onDidChange(() => this.refresh()))
 		}
+	}
+
+	/** Expose the currently-bound config — used by `_onAssign` closures. */
+	get config(): ConfigService { return this._config }
+
+	/**
+	 * Swap the bound context.  Used by the extension activation to follow
+	 * the active folder in multi-root workspaces (multi-root phase 2).
+	 * Idempotent — passing the same services is a no-op.
+	 */
+	setContext(config: ConfigService, sync: WorkspaceSync): void {
+		if (config === this._config && sync === this._sync) return
+		for (const d of this._contextDisposables) d.dispose()
+		this._contextDisposables = []
+		this._config = config
+		this._sync = sync
+		this._wireContext()
+		this.refresh()
+	}
+
+	private _wireContext(): void {
+		this._contextDisposables.push(
+			this._config.onDidChangeAssignment(() => this.refresh()),
+			this._config.onDidChangeStack(() => void this._refreshCurrentBranch().then(() => this.refresh())),
+			this._sync.onDidFloatFile(() => this.refresh()),
+			this._sync.onDidSyncFile(() => this.refresh()),
+		)
 	}
 
 	// ── Drag & drop ───────────────────────────────────────────────────────────
@@ -336,6 +373,8 @@ export class BranchStackTreeProvider
 
 	dispose(): void {
 		this._onDidChangeTreeData.dispose()
+		for (const d of this._contextDisposables) d.dispose()
+		this._contextDisposables = []
 		for (const d of this._disposables) {
 			d.dispose()
 		}
@@ -352,26 +391,42 @@ export class FloatingStatusBarItem implements vscode.Disposable {
 
 	private readonly _item: vscode.StatusBarItem
 	private readonly _disposables: vscode.Disposable[] = []
+	private _contextDisposables: vscode.Disposable[] = []
 
-	constructor(
-		private readonly _sync: WorkspaceSync,
-		private readonly _config: ConfigService,
-	) {
+	private _sync: WorkspaceSync
+	private _config: ConfigService
+
+	constructor(sync: WorkspaceSync, config: ConfigService) {
+		this._sync = sync
+		this._config = config
 		this._item = vscode.window.createStatusBarItem(
-			'mbc-floating',
+			'gitbraid-floating',
 			vscode.StatusBarAlignment.Left,
 			100,
 		)
 		this._item.command = 'gitbraid.focusStackView'
-		this._item.name = 'MBC Floating Files'
-
-		this._disposables.push(
-			_sync.onDidFloatFile(() => this._update()),
-			_config.onDidChangeAssignment(() => this._update()),
-			this._item,
-		)
-
+		this._item.name = 'GitBraid Floating Files'
+		this._disposables.push(this._item)
+		this._wireContext()
 		this._update()
+	}
+
+	/** Swap bound services on active-folder switch (multi-root phase 2). */
+	setContext(sync: WorkspaceSync, config: ConfigService): void {
+		if (sync === this._sync && config === this._config) return
+		for (const d of this._contextDisposables) d.dispose()
+		this._contextDisposables = []
+		this._sync = sync
+		this._config = config
+		this._wireContext()
+		this._update()
+	}
+
+	private _wireContext(): void {
+		this._contextDisposables.push(
+			this._sync.onDidFloatFile(() => this._update()),
+			this._config.onDidChangeAssignment(() => this._update()),
+		)
 	}
 
 	private _update(): void {
@@ -390,6 +445,8 @@ export class FloatingStatusBarItem implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		for (const d of this._contextDisposables) d.dispose()
+		this._contextDisposables = []
 		for (const d of this._disposables) {
 			d.dispose()
 		}

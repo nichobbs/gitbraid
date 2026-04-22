@@ -1,36 +1,27 @@
 import * as vscode from 'vscode'
 import { git } from './gitFunctions'
 import { log } from './channelLogger'
-import { ConfigService } from './configService'
-import { BranchStackService } from './branchStackService'
-import { WorkspaceSync } from './workspaceSync'
 import { BranchFileDecorationProvider } from './fileDecorationProvider'
-import { BranchScmProviderManager } from './branchScmProvider'
 import { BranchNode, BranchStackTreeProvider, FileNode, FloatingFileNode, FloatingStatusBarItem } from './branchStackTreeProvider'
-import { DiffEngine } from './diffEngine'
-import { HunkRouter, anchorFor } from './hunkRouter'
+import { anchorFor } from './hunkRouter'
 import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider'
-import { StackResolver } from './stackResolver'
 import { StackContentProvider } from './stackContentProvider'
-import { RebaseSuggestionService } from './rebaseSuggestionService'
-import { StackCommands } from './stackCommands'
-import { RebaseRecovery } from './rebaseRecovery'
 import {
-	UndoStack,
 	recordAssignFile,
 	recordUnassignFile,
 	recordAssignHunk,
 	recordUnassignHunk,
 } from './undoStack'
-import { StackShareService, SHARED_DIR, SHARED_FILE } from './stackShareService'
+import { SHARED_DIR, SHARED_FILE } from './stackShareService'
 import { PRAwareness } from './prAwareness'
 import * as path from 'node:path'
-import { MbcApi } from './mbcApi'
-import { hideAssignedFile } from './gitIndex'
+import { hideAssignedFile, unhideAssignedFile } from './gitIndex'
 import { getDefaultGitRunner } from './gitRunner'
 import { registerLmTools } from './lmTools'
 
-import { FileChangeBus } from './fileChangeBus'
+import { FolderRegistry } from './folderRegistry'
+import { FolderContext } from './folderContext'
+import { GitBraidApiFacade } from './gitBraidApiFacade'
 import { withErrorHandler, showError } from './errorSurfacer'
 export { showError }
 
@@ -68,36 +59,81 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	log.info('activating gitbraid (version=' + context.extension.packageJSON.version + ')')
-	// ─── Phase 1: Branch-overlay services ─────────────────────────────────────
-	const workspaceRoot = vscode.workspace.workspaceFolders[0].uri
-	const configService = ConfigService.getInstance()
-	await configService.load(workspaceRoot)
+	// ─── Phase 1: Per-folder service graph ────────────────────────────────────
+	//
+	// Every git-eligible workspace folder gets its own `FolderContext`
+	// (own `.worktrees/local-config.json`, own file-change bus, own SCM
+	// manager, own rebase watcher, etc.).  The `FolderRegistry` owns the
+	// lifecycle; each context's `initialize()` wires up all the per-folder
+	// plumbing so SCM panels for every folder appear automatically.
+	//
+	// The UI singletons (tree view, decoration provider, status bar,
+	// CodeLens, overlay diagnostics) bind to the **primary** context = the
+	// first eligible folder.  Multi-folder workspaces get per-folder SCM
+	// and per-folder worktrees out of the box, but the tree view / decoration
+	// surface currently shows only the primary folder.  Commands that are
+	// clearly folder-scoped (assign, push, sync) use `registry.getActive()`
+	// to target the folder the user is editing.  See
+	// `docs/remediation/00-overview.md` and `docs/adr/` for the full story.
+	const registry = new FolderRegistry()
+	const contexts = await registry.initializeAll()
+	context.subscriptions.push(registry)
 
-	const branchStack = BranchStackService.getInstance(configService)
-	await branchStack.initStack(workspaceRoot)
+	if (contexts.length === 0) {
+		log.warn('gitbraid: no git-eligible workspace folders; activation is idle')
+		return
+	}
 
-	// Shared file-system watcher for the entire extension (T10).  Subsequent
-	// services subscribe to its domain events instead of spawning their own
-	// `**/*` watchers.
-	const bus = new FileChangeBus(workspaceRoot)
-	context.subscriptions.push(bus)
+	// Local aliases into the primary context — keeps the rest of activate()
+	// readable and minimally changed against pre-refactor history.  The
+	// `activeContext()` helper is used by commands to target the folder
+	// the user is currently editing rather than always hitting primary.
+	const primary = contexts[0]
+	const workspaceRoot = primary.root
+	const configService = primary.config
+	const workspaceSync = primary.workspaceSync
 
-	const workspaceSync = WorkspaceSync.getInstance(configService)
-	workspaceSync.init(workspaceRoot, bus)
+	// Used by folder-aware commands (below) to target the folder the user
+	// is currently editing rather than always hitting primary.
+	const activeContext = (): FolderContext => registry.getActive() ?? primary
 
-	// Undo/redo ring for assignment-level operations (T69).  Constructed
-	// early so Phase 2 providers can receive it.
-	const undoStack = new UndoStack()
+	/**
+	 * Resolve the folder context that owns a given URI.  Falls back to the
+	 * active folder (which falls back to primary) when the URI doesn't belong
+	 * to any registered folder — e.g. an editor argument that came from a
+	 * non-file scheme or a URI outside the workspace altogether.
+	 */
+	const contextForUri = (uri: vscode.Uri | undefined): FolderContext => {
+		if (uri) {
+			const ctx = registry.getForUri(uri)
+			if (ctx) return ctx
+		}
+		return activeContext()
+	}
 
-	context.subscriptions.push(configService, branchStack, workspaceSync, undoStack)
+	/** Relative path for a URI within its owning folder. */
+	const relativePathIn = (ctx: FolderContext, uri: vscode.Uri): string => {
+		return path.relative(ctx.root.fsPath, uri.fsPath).replaceAll('\\', '/')
+	}
 
 	// ─── Phase 2: SCM Integration & UI ────────────────────────────────────────
-	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync)
-	context.subscriptions.push(decorationProvider)
+	//
+	// The SCM manager, rebase recovery watcher, stack resolver / content
+	// provider, rebase service, stack commands, share service, and exported
+	// API instance all live inside each `FolderContext` (so multi-folder
+	// workspaces get one of each per folder automatically).  Commands route
+	// through `activeContext()` / `contextForUri()` so operations land in the
+	// folder the user is editing.  UI singletons (tree provider, status bar)
+	// bind to the primary folder at activation and follow the active folder
+	// via `setContext(...)` on editor-focus changes.
+	const stackResolver = primary.stackResolver
+	const diffEngine = primary.diffEngine
 
-	const scmManager = new BranchScmProviderManager(configService, workspaceSync, workspaceRoot)
-	await scmManager.initialize()
-	context.subscriptions.push(scmManager)
+	// Decoration provider is multi-root-aware: it resolves the owning
+	// folder per-URI via the registry, so decorations render correctly
+	// for files in any folder regardless of which is "primary".
+	const decorationProvider = new BranchFileDecorationProvider(configService, workspaceSync, registry)
+	context.subscriptions.push(decorationProvider)
 
 	// PR awareness — feature-detects the GitHub PR extension at runtime.
 	// Absent / inactive / unexpected-API cases all fall back to "no
@@ -109,8 +145,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	const stackTreeProvider = new BranchStackTreeProvider(
 		configService,
 		workspaceSync,
-		(rel, newBranch, previous) => recordAssignFile(undoStack, configService, rel, newBranch, previous),
-		(rel, previous) => recordUnassignFile(undoStack, configService, rel, previous),
+		(rel, newBranch, previous) => {
+			const ctx = activeContext()
+			recordAssignFile(ctx.undoStack, ctx.config, rel, newBranch, previous)
+		},
+		(rel, previous) => {
+			const ctx = activeContext()
+			recordUnassignFile(ctx.undoStack, ctx.config, rel, previous)
+		},
 		prAwareness,
 	)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
@@ -128,11 +170,31 @@ export async function activate(context: vscode.ExtensionContext) {
 	const statusBar = new FloatingStatusBarItem(workspaceSync, configService)
 	context.subscriptions.push(statusBar)
 
+	// ── Multi-root phase 2: re-source UI on active-folder switch ──────────
+	// Tree provider + status bar hold references to the primary folder's
+	// services.  When the user moves focus to an editor inside a different
+	// folder, swap their bindings so the UI reflects the folder being
+	// edited.  Decoration provider, CodeLens, and overlay diagnostics are
+	// registry-aware per-URI so they need no rebinding.
+	const updateActive = () => {
+		const ctx = registry.getActive() ?? primary
+		stackTreeProvider.setContext(ctx.config, ctx.workspaceSync)
+		statusBar.setContext(ctx.workspaceSync, ctx.config)
+	}
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(() => updateActive()),
+		registry.onDidChangeFolders(() => updateActive()),
+	)
+
 	// ─── Phase 3: Chunk-Level Assignment ──────────────────────────────────────
-	const diffEngine = new DiffEngine()
-	const hunkRouter = new HunkRouter(diffEngine)
-	const hunkCodeLens = new HunkCodeLensProvider(diffEngine, configService)
-	const overlayDiagnostics = new OverlayDiagnostics(diffEngine, configService)
+	// `diffEngine` / `hunkRouter` are per-folder.  The CodeLens and overlay
+	// diagnostics singletons route per-URI via the registry so lenses /
+	// Problems entries for files in any folder use that folder's diff
+	// engine + config.  The fallback pair (primary's diff engine + config)
+	// services URIs outside every known folder, which is how tests that
+	// construct these without a registry continue to work.
+	const hunkCodeLens = new HunkCodeLensProvider(diffEngine, configService, registry)
+	const overlayDiagnostics = new OverlayDiagnostics(diffEngine, configService, registry)
 
 	context.subscriptions.push(
 		hunkCodeLens,
@@ -147,6 +209,30 @@ export async function activate(context: vscode.ExtensionContext) {
 	commands.push(
 		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => stackTreeProvider.refresh()),
 
+		// Multi-root: report which folder the extension is currently
+		// targeting.  No-op for single-folder workspaces.  A folder picker
+		// that actually swaps the UI binding is future work.
+		vscode.commands.registerCommand('gitbraid.showActiveFolder', cmd(async () => {
+			const all = registry.getAll()
+			if (all.length <= 1) {
+				await vscode.window.showInformationMessage(`GitBraid: single folder — ${primary.root.fsPath}`)
+				return
+			}
+			const current = activeContext()
+			const picked = await vscode.window.showQuickPick(
+				all.map((ctx) => ({
+					label: path.basename(ctx.root.fsPath),
+					description: ctx === current ? `${ctx.root.fsPath} (active)` : ctx.root.fsPath,
+				})),
+				{ placeHolder: `Active: ${path.basename(current.root.fsPath)}` },
+			)
+			if (picked) {
+				await vscode.window.showInformationMessage(
+					`GitBraid: ${picked.label} — open a file inside that folder to switch focus.`,
+				)
+			}
+		})),
+
 		// Force a re-query of PR status without waiting for the 60s poll.
 		vscode.commands.registerCommand('gitbraid.refreshPRStatus', cmd(async () => {
 			await prAwareness.refresh()
@@ -155,21 +241,23 @@ export async function activate(context: vscode.ExtensionContext) {
 		// T69 — undo / redo for assignment-level operations.  Session-only,
 		// in-memory.  No-ops when the corresponding stack is empty.
 		vscode.commands.registerCommand('gitbraid.undoLastAssignment', cmd(async () => {
-			if (!undoStack.canUndo()) {
+			const stack = activeContext().undoStack
+			if (!stack.canUndo()) {
 				await vscode.window.showInformationMessage('GitBraid: nothing to undo.')
 				return
 			}
-			const op = await undoStack.undo()
+			const op = await stack.undo()
 			if (op) {
 				await vscode.window.setStatusBarMessage(`GitBraid: undid — ${op.label}`, 3000)
 			}
 		})),
 		vscode.commands.registerCommand('gitbraid.redoLastAssignment', cmd(async () => {
-			if (!undoStack.canRedo()) {
+			const stack = activeContext().undoStack
+			if (!stack.canRedo()) {
 				await vscode.window.showInformationMessage('GitBraid: nothing to redo.')
 				return
 			}
-			const op = await undoStack.redo()
+			const op = await stack.redo()
 			if (op) {
 				await vscode.window.setStatusBarMessage(`GitBraid: redid — ${op.label}`, 3000)
 			}
@@ -183,18 +271,21 @@ export async function activate(context: vscode.ExtensionContext) {
 
 		vscode.commands.registerCommand('gitbraid.scm.commitBranch', cmd(async (arg: string | BranchNode) => {
 			const name = arg instanceof BranchNode ? arg.entry.name : arg
-			await scmManager.commitBranch(name)
+			await activeContext().scmManager.commitBranch(name)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.scm.refreshAll', cmd(async () => {
-			await scmManager.refreshAll()
+			await activeContext().scmManager.refreshAll()
 		})),
 
 		vscode.commands.registerCommand(
 			'gitbraid.assignHunk',
 			cmd(async (uri: vscode.Uri, hunkIndex: number) => {
-				const rel = vscode.workspace.asRelativePath(uri, false)
-				const stack = configService.getStack()
+				// Resolve to the folder that owns this file — hunk assignments
+				// live in the URI's folder's config, not primary's.
+				const ctx = contextForUri(uri)
+				const rel = relativePathIn(ctx, uri)
+				const stack = ctx.config.getStack()
 				if (stack.length === 0) {
 					await vscode.window.showWarningMessage('No branches in the stack. Add a branch first.')
 					return
@@ -209,11 +300,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				// Capture a stable anchor for this hunk so later edits that
 				// renumber the hunks don't silently apply the assignment to a
 				// different line range (T8).
-				const hunks = await diffEngine.getHunksForFile(workspaceRoot.fsPath, rel)
+				const hunks = await ctx.diffEngine.getHunksForFile(ctx.root.fsPath, rel)
 				const anchor = hunks[hunkIndex] ? anchorFor(hunks[hunkIndex]) : undefined
-				const previousBranch = configService.getHunkAssignments(rel)?.get(hunkIndex)
-				await configService.setHunkAssignment(rel, hunkIndex, picked.label, anchor)
-				recordAssignHunk(undoStack, configService, rel, hunkIndex, picked.label, previousBranch, anchor)
+				const previousBranch = ctx.config.getHunkAssignments(rel)?.get(hunkIndex)
+				await ctx.config.setHunkAssignment(rel, hunkIndex, picked.label, anchor)
+				recordAssignHunk(ctx.undoStack, ctx.config, rel, hunkIndex, picked.label, previousBranch, anchor)
 				await vscode.window.showInformationMessage(`Hunk ${String(hunkIndex)} → ${picked.label}`)
 				await overlayDiagnostics.refreshForUri(uri)
 			}),
@@ -222,12 +313,13 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand(
 			'gitbraid.unassignHunk',
 			cmd(async (uri: vscode.Uri, hunkIndex: number) => {
-				const rel = vscode.workspace.asRelativePath(uri, false)
-				const previousBranch = configService.getHunkAssignments(rel)?.get(hunkIndex)
-				const previousAnchor = configService.getHunkAnchor(rel, hunkIndex)
-				await configService.removeHunkAssignment(rel, hunkIndex)
+				const ctx = contextForUri(uri)
+				const rel = relativePathIn(ctx, uri)
+				const previousBranch = ctx.config.getHunkAssignments(rel)?.get(hunkIndex)
+				const previousAnchor = ctx.config.getHunkAnchor(rel, hunkIndex)
+				await ctx.config.removeHunkAssignment(rel, hunkIndex)
 				if (previousBranch !== undefined) {
-					recordUnassignHunk(undoStack, configService, rel, hunkIndex, previousBranch, previousAnchor)
+					recordUnassignHunk(ctx.undoStack, ctx.config, rel, hunkIndex, previousBranch, previousAnchor)
 				}
 				await overlayDiagnostics.refreshForUri(uri)
 			}),
@@ -241,7 +333,12 @@ export async function activate(context: vscode.ExtensionContext) {
 					await vscode.window.showWarningMessage('Open a file first to see its resolved stack view.')
 					return
 				}
-				const rel = vscode.workspace.asRelativePath(target, false)
+				// `gitbraid-stack:` URIs are relative to the primary folder
+				// (the StackContentProvider is process-global).  Using the
+				// owning folder's relative path keeps the diff labels
+				// accurate across folders.
+				const ctx = contextForUri(target)
+				const rel = relativePathIn(ctx, target)
 				const stackUri = StackContentProvider.uriFor(rel)
 				// Side-by-side diff against the on-disk file so the user sees
 				// exactly which hunks are layered by branches above.
@@ -262,8 +359,9 @@ export async function activate(context: vscode.ExtensionContext) {
 					await vscode.window.showWarningMessage('Open a file first to see its stack diff.')
 					return
 				}
-				const rel = vscode.workspace.asRelativePath(target, false)
-				const diff = await stackResolver.getStackDiff(workspaceRoot.fsPath, rel)
+				const ctx = contextForUri(target)
+				const rel = relativePathIn(ctx, target)
+				const diff = await ctx.stackResolver.getStackDiff(ctx.root.fsPath, rel)
 				if (!diff) {
 					await vscode.window.showInformationMessage(`No stack diff for ${rel}.`)
 					return
@@ -281,33 +379,34 @@ export async function activate(context: vscode.ExtensionContext) {
 					await vscode.window.showWarningMessage('No file active to route hunks for.')
 					return
 				}
-				const rel = vscode.workspace.asRelativePath(target, false)
-				const assignments = configService.getHunkAssignments(rel)
+				const ctx = contextForUri(target)
+				const rel = relativePathIn(ctx, target)
+				const assignments = ctx.config.getHunkAssignments(rel)
 				if (!assignments || assignments.size === 0) {
 					await vscode.window.showInformationMessage('No hunk assignments found for this file.')
 					return
 				}
 				const worktreeDirs = new Map<string, string>()
-				for (const entry of configService.getStack()) {
-					worktreeDirs.set(entry.name, branchStack.getWorktreePath(entry.name).fsPath)
+				for (const entry of ctx.config.getStack()) {
+					worktreeDirs.set(entry.name, ctx.branchStack.getWorktreePath(entry.name).fsPath)
 				}
 				// Collect stored anchors for the reconciler (T8).  Missing
 				// anchors are tolerated — those assignments fall back to the
 				// raw index.
 				const anchors = new Map<number, import('./configTypes').HunkAnchor>()
 				for (const idx of assignments.keys()) {
-					const a = configService.getHunkAnchor(rel, idx)
+					const a = ctx.config.getHunkAnchor(rel, idx)
 					if (a) anchors.set(idx, a)
 				}
-				const ok = await hunkRouter.routeFile(
-					workspaceRoot.fsPath,
+				const ok = await ctx.hunkRouter.routeFile(
+					ctx.root.fsPath,
 					rel,
 					worktreeDirs,
 					assignments,
 					anchors,
 				)
 				if (ok) {
-					await configService.clearHunkAssignments(rel)
+					await ctx.config.clearHunkAssignments(rel)
 					await vscode.window.showInformationMessage(`Routed hunks for ${rel} successfully.`)
 				}
 			}),
@@ -315,28 +414,16 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
-	const stackResolver = new StackResolver(configService, branchStack)
+	//
+	// `stackResolver`, `rebaseSvc`, `stackCommands`, `rebaseRecovery`, and
+	// `stackShare` all live inside each `FolderContext`.  The rebase
+	// watcher is wired up inside `FolderContext.initialize()`, and the
+	// stack-content scheme is a process-wide singleton bound to the
+	// primary folder's resolver (multi-folder content routing is future
+	// work; the scheme only accepts relative paths today, which implicitly
+	// belong to the primary folder).
 	const stackContentProvider = new StackContentProvider(stackResolver, workspaceRoot)
-	const rebaseSvc = new RebaseSuggestionService(configService, branchStack)
-	rebaseSvc.init(workspaceRoot)
-	const stackCommands = new StackCommands(configService, branchStack, rebaseSvc, workspaceRoot)
-	const rebaseRecovery = new RebaseRecovery()
-	const stackShare = new StackShareService(configService, workspaceRoot)
-	context.subscriptions.push(rebaseSvc, stackResolver, stackContentProvider, stackCommands, rebaseRecovery)
-
-	// Watch every existing and future worktree for mid-rebase state so the
-	// "rebase paused" toast fires the moment a rebase bails (T70).
-	const watchAllWorktrees = () => {
-		for (const entry of configService.getStack()) {
-			if (branchStack.worktreeExists(entry.name)) {
-				rebaseRecovery.watch(branchStack.getWorktreePath(entry.name).fsPath)
-			}
-		}
-	}
-	watchAllWorktrees()
-	context.subscriptions.push(
-		configService.onDidChangeStack(() => watchAllWorktrees()),
-	)
+	context.subscriptions.push(stackContentProvider)
 
 	// Refresh any open gitbraid-stack: documents when assignments change.
 	context.subscriptions.push(
@@ -348,11 +435,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Helper: resolve a BranchNode argument, a branch-name string, or prompt
 	// the user to pick one from the current stack.  Used by the T70 rebase
 	// recovery commands so they share a single UX.
-	const pickBranchWorktree = async (
+	const resolveActiveBranchWorktree = async (
 		arg: string | BranchNode | undefined,
 		placeholder: string,
-	): Promise<string | undefined> => {
-		const stack = configService.getStack()
+	): Promise<{ ctx: FolderContext, worktreeDir: string } | undefined> => {
+		const ctx = activeContext()
+		const stack = ctx.config.getStack()
 		if (stack.length === 0) {
 			await vscode.window.showWarningMessage('Stack is empty.')
 			return undefined
@@ -364,11 +452,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				{ placeHolder: placeholder },
 			)))
 		if (!name) return undefined
-		if (!branchStack.worktreeExists(name)) {
+		if (!ctx.branchStack.worktreeExists(name)) {
 			await vscode.window.showWarningMessage(`No worktree exists for "${name}".`)
 			return undefined
 		}
-		return branchStack.getWorktreePath(name).fsPath
+		return { ctx, worktreeDir: ctx.branchStack.getWorktreePath(name).fsPath }
 	}
 
 	// ── Branch-overlay commands ────────────────────────────────────────────────
@@ -410,10 +498,16 @@ export async function activate(context: vscode.ExtensionContext) {
 				void vscode.window.showWarningMessage('No files found to assign.')
 				return
 			}
-			const stack = configService.getStack()
+			// Use the first target's folder to drive the branch picker.
+			// Multi-file selection that spans folders is an edge case — the
+			// picker defaults to the first target's folder, and targets
+			// outside that folder are reassigned inside THEIR own folder
+			// (branch names have to match).  Skipping sensibly if they don't.
+			const pickerCtx = contextForUri(targets[0])
+			const stack = pickerCtx.config.getStack()
 			// Also offer the currently checked-out branch so users can assign
 			// files to their active workspace branch without them appearing floating.
-			const currentBranch = await git.branch(workspaceRoot).catch(() => undefined)
+			const currentBranch = await git.branch(pickerCtx.root).catch(() => undefined)
 			const currentInStack = currentBranch ? stack.some(e => e.name === currentBranch) : true
 			const pickItems: Array<{ label: string; description?: string }> = []
 			if (currentBranch && !currentInStack) {
@@ -421,7 +515,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			pickItems.push(...stack.map((e) => ({ label: e.name, description: e.color })))
 			if (pickItems.length === 0) {
-				await vscode.window.showWarningMessage('No branches in the stack. Add a branch first.')
+				await vscode.window.showWarningMessage('No branches in the stack for the active folder. Add a branch first.')
 				return
 			}
 			const picked = await vscode.window.showQuickPick(
@@ -433,13 +527,23 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			const runner = getDefaultGitRunner()
 			for (const target of targets) {
-				const rel = vscode.workspace.asRelativePath(target)
-				const previous = configService.getAssignment(rel)
-				await configService.setAssignment(rel, picked.label)
-				recordAssignFile(undoStack, configService, rel, picked.label, previous)
-				// Hide assigned file from main git status only when a real worktree exists.
-				if (branchStack.worktreeExists(picked.label)) {
-					await hideAssignedFile(runner, workspaceRoot.fsPath, rel)
+				const ctx = contextForUri(target)
+				const rel = relativePathIn(ctx, target)
+				// The chosen branch must exist in the target's own folder
+				// (either in its stack, or as its current workspace branch).
+				// If it doesn't (cross-folder selection), skip with a warning.
+				const branchInStack = !!ctx.config.getBranch(picked.label)
+				if (!branchInStack && picked.label !== currentBranch) {
+					log.warn(`assignFile: skipping ${rel} — branch "${picked.label}" not in folder ${ctx.root.fsPath}`)
+					continue
+				}
+				const previous = ctx.config.getAssignment(rel)
+				await ctx.config.setAssignment(rel, picked.label)
+				recordAssignFile(ctx.undoStack, ctx.config, rel, picked.label, previous)
+				// Hide assigned file from main git status only when a real
+				// worktree exists for the branch in the target's folder.
+				if (branchInStack && ctx.branchStack.worktreeExists(picked.label)) {
+					await hideAssignedFile(runner, ctx.root.fsPath, rel)
 				}
 			}
 			const msg = targets.length === 1
@@ -454,18 +558,24 @@ export async function activate(context: vscode.ExtensionContext) {
 				await vscode.window.showWarningMessage('No file selected to unassign.')
 				return
 			}
-			const rel = vscode.workspace.asRelativePath(target)
-			const previous = configService.getAssignment(rel)
-			await configService.removeAssignment(rel)
+			const ctx = contextForUri(target)
+			const rel = relativePathIn(ctx, target)
+			const previous = ctx.config.getAssignment(rel)
+			await ctx.config.removeAssignment(rel)
 			if (previous !== undefined) {
-				recordUnassignFile(undoStack, configService, rel, previous)
+				recordUnassignFile(ctx.undoStack, ctx.config, rel, previous)
+				// Undo skip-worktree / excludes that assignFile may have set.
+				await unhideAssignedFile(getDefaultGitRunner(), ctx.root.fsPath, rel)
 			}
 			await vscode.window.showInformationMessage(`Unassigned ${rel}`)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.addStackBranch', cmd(async () => {
-			const workspaceUri = vscode.workspace.workspaceFolders![0].uri
-			const stackBranchNames = new Set(configService.getStack().map(e => e.name))
+			// Multi-root: add to whichever folder the user is currently
+			// editing (not the first workspace folder).
+			const ctx = activeContext()
+			const workspaceUri = ctx.root
+			const stackBranchNames = new Set(ctx.config.getStack().map(e => e.name))
 
 			// Build the initial local branch list
 			const { local: localBranches } = await git.listBranches(workspaceUri)
@@ -551,7 +661,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 
-			const stack = configService.getStack()
+			const stack = ctx.config.getStack()
 			// Detect the repo's default branch (main / master / trunk / develop)
 			// instead of hard-coding "main" (T73 in the remediation plan).
 			const defaultBranch = await detectDefaultBranch(workspaceUri).catch(() => 'main')
@@ -562,12 +672,13 @@ export async function activate(context: vscode.ExtensionContext) {
 				// to main — avoids creating a branch the user didn't confirm.
 				return
 			}
-			await branchStack.addBranchToStack(name, basePick)
-			await vscode.window.showInformationMessage(`Branch "${name}" added to stack`)
+			await ctx.branchStack.addBranchToStack(name, basePick)
+			await vscode.window.showInformationMessage(`Branch "${name}" added to stack in ${path.basename(ctx.root.fsPath)}`)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.removeStackBranch', cmd(async (node?: BranchNode) => {
-			const stack = configService.getStack()
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showWarningMessage('Stack is empty.')
 				return
@@ -581,12 +692,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!picked) {
 				return
 			}
-			await branchStack.removeBranchFromStack(picked)
+			await ctx.branchStack.removeBranchFromStack(picked)
 			await vscode.window.showInformationMessage(`Branch "${picked}" removed from stack`)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.rebaseBranch', cmd(async (arg?: string | BranchNode) => {
-			const stack = configService.getStack()
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showWarningMessage('Stack is empty.')
 				return
@@ -600,12 +712,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!name) {
 				return
 			}
-			await rebaseSvc.rebaseBranch(name)
+			await ctx.rebaseSvc.rebaseBranch(name)
 		})),
 
 		// T67 — stack-wide operations.
 		vscode.commands.registerCommand('gitbraid.pushStack', cmd(async () => {
-			const stack = configService.getStack()
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showInformationMessage('Stack is empty — nothing to push.')
 				return
@@ -620,19 +733,20 @@ export async function activate(context: vscode.ExtensionContext) {
 				{ placeHolder: `Push ${String(stack.length)} branch(es) to origin?` },
 			)
 			if (!mode) return
-			await stackCommands.pushStack({ forceWithLease: mode.force })
+			await ctx.stackCommands.pushStack({ forceWithLease: mode.force })
 		})),
 
 		// T71 — share the stack layout with teammates via a committed
 		// `.gitbraid/stack.json` file.
 		vscode.commands.registerCommand('gitbraid.exportStack', cmd(async () => {
-			const stack = configService.getStack()
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showInformationMessage('Stack is empty — nothing to export.')
 				return
 			}
-			const filePath = await stackShare.exportToDisk()
-			const rel = path.relative(workspaceRoot.fsPath, filePath)
+			const filePath = await ctx.stackShare.exportToDisk()
+			const rel = path.relative(ctx.root.fsPath, filePath)
 			const open = await vscode.window.showInformationMessage(
 				`GitBraid: exported ${String(stack.length)} branch(es) to ${rel}. ` +
 				'Commit this file to share the layout with your team.',
@@ -644,14 +758,15 @@ export async function activate(context: vscode.ExtensionContext) {
 		})),
 
 		vscode.commands.registerCommand('gitbraid.importStack', cmd(async () => {
-			const shared = await stackShare.readSharedFile()
+			const ctx = activeContext()
+			const shared = await ctx.stackShare.readSharedFile()
 			if (!shared) {
 				await vscode.window.showInformationMessage(
 					`GitBraid: no shared stack found.  Run "GitBraid: Export Stack" on a colleague's machine and commit the resulting \`${SHARED_DIR}/${SHARED_FILE}\`.`,
 				)
 				return
 			}
-			const diff = stackShare.diffWithCurrent(shared)
+			const diff = ctx.stackShare.diffWithCurrent(shared)
 			const totalChanges =
 				diff.newBranches.length + diff.newAssignments.length +
 				diff.conflictBranches.length + diff.conflictAssignments.length
@@ -683,7 +798,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				if (!pick) return
 				resolution = pick.resolution
 			}
-			const summary = await stackShare.applyImport(shared, resolution)
+			const summary = await ctx.stackShare.applyImport(shared, resolution)
 			await vscode.window.showInformationMessage(
 				`GitBraid: imported ${String(summary.addedBranches)} new branch(es), ${String(summary.addedAssignments)} new assignment(s), ` +
 				`updated ${String(summary.updatedBranches)}/${String(summary.updatedAssignments)}, skipped ${String(summary.skipped)}.`,
@@ -692,23 +807,24 @@ export async function activate(context: vscode.ExtensionContext) {
 
 		// T70 — rebase conflict recovery.
 		vscode.commands.registerCommand('gitbraid.rebaseAbort', cmd(async (arg?: string | BranchNode) => {
-			const wt = await pickBranchWorktree(arg, 'Abort rebase in branch')
-			if (!wt) return
-			await rebaseRecovery.abort(wt)
+			const resolved = await resolveActiveBranchWorktree(arg, 'Abort rebase in branch')
+			if (!resolved) return
+			await resolved.ctx.rebaseRecovery.abort(resolved.worktreeDir)
 		})),
 		vscode.commands.registerCommand('gitbraid.rebaseContinue', cmd(async (arg?: string | BranchNode) => {
-			const wt = await pickBranchWorktree(arg, 'Continue rebase in branch')
-			if (!wt) return
-			await rebaseRecovery.continue(wt)
+			const resolved = await resolveActiveBranchWorktree(arg, 'Continue rebase in branch')
+			if (!resolved) return
+			await resolved.ctx.rebaseRecovery.continue(resolved.worktreeDir)
 		})),
 		vscode.commands.registerCommand('gitbraid.openRebaseConflicts', cmd(async (arg?: string | BranchNode) => {
-			const wt = await pickBranchWorktree(arg, 'Open conflicts for branch')
-			if (!wt) return
-			await rebaseRecovery.openConflicts(wt)
+			const resolved = await resolveActiveBranchWorktree(arg, 'Open conflicts for branch')
+			if (!resolved) return
+			await resolved.ctx.rebaseRecovery.openConflicts(resolved.worktreeDir)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.syncStack', cmd(async () => {
-			const stack = configService.getStack()
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
 			if (stack.length === 0) {
 				await vscode.window.showInformationMessage('Stack is empty — nothing to sync.')
 				return
@@ -719,57 +835,67 @@ export async function activate(context: vscode.ExtensionContext) {
 				'Sync',
 			)
 			if (proceed !== 'Sync') return
-			await stackCommands.syncStack()
+			await ctx.stackCommands.syncStack()
 		})),
 	)
 
 	// ─── Phase 5: Exported API & LM tools ─────────────────────────────────────
-	const mbcExportedApi = new MbcApi(configService, branchStack, workspaceSync, workspaceRoot)
-	context.subscriptions.push(...registerLmTools(mbcExportedApi))
+	// The exported API is a facade over `FolderRegistry` that delegates to
+	// whichever folder's `GitBraidApi` is active.  Downstream consumers —
+	// `vscode.extensions.getExtension(...).exports`, language-model tools,
+	// future MCP clients — see a single API object whose operations target
+	// the folder the user is currently editing.
+	const gitbraidExportedApi = new GitBraidApiFacade(registry)
+	context.subscriptions.push(gitbraidExportedApi, ...registerLmTools(gitbraidExportedApi))
 
 	// ─── Phase 6: Worktree management commands ────────────────────────────────
 	commands.push(
 		vscode.commands.registerCommand('gitbraid.launchWindowForWorktree', cmd(async (node?: BranchNode) => {
+			const ctx = activeContext()
 			const branchName = node instanceof BranchNode ? node.entry.name
-				: await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Open branch worktree in new window' })
+				: await vscode.window.showQuickPick(ctx.config.getStack().map(e => e.name), { placeHolder: 'Open branch worktree in new window' })
 			if (!branchName) return
-			await vscode.commands.executeCommand('vscode.openFolder', branchStack.getWorktreePath(branchName), { forceNewWindow: true })
+			await vscode.commands.executeCommand('vscode.openFolder', ctx.branchStack.getWorktreePath(branchName), { forceNewWindow: true })
 		})),
 		vscode.commands.registerCommand('gitbraid.lockWorktree', cmd(async (node?: BranchNode) => {
+			const ctx = activeContext()
 			const branchName = node instanceof BranchNode ? node.entry.name
-				: await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Lock worktree for branch' })
+				: await vscode.window.showQuickPick(ctx.config.getStack().map(e => e.name), { placeHolder: 'Lock worktree for branch' })
 			if (!branchName) return
-			await git.worktree.lock(branchStack.getWorktreePath(branchName).fsPath)
+			await git.worktree.lock(ctx.branchStack.getWorktreePath(branchName).fsPath)
 			await vscode.window.showInformationMessage(`Locked worktree for "${branchName}"`)
 		})),
 		vscode.commands.registerCommand('gitbraid.unlockWorktree', cmd(async (node?: BranchNode) => {
+			const ctx = activeContext()
 			const branchName = node instanceof BranchNode ? node.entry.name
-				: await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Unlock worktree for branch' })
+				: await vscode.window.showQuickPick(ctx.config.getStack().map(e => e.name), { placeHolder: 'Unlock worktree for branch' })
 			if (!branchName) return
-			await git.worktree.unlock(branchStack.getWorktreePath(branchName).fsPath)
+			await git.worktree.unlock(ctx.branchStack.getWorktreePath(branchName).fsPath)
 			await vscode.window.showInformationMessage(`Unlocked worktree for "${branchName}"`)
 		})),
 		vscode.commands.registerCommand('gitbraid.copyToWorktree', cmd(async (node?: FileNode | FloatingFileNode) => {
 			const fileUri = (node instanceof FileNode || node instanceof FloatingFileNode) ? node.resourceUri
 				: vscode.window.activeTextEditor?.document.uri
 			if (!fileUri) return
-			const picked = await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Copy file to branch worktree' })
+			const ctx = contextForUri(fileUri)
+			const picked = await vscode.window.showQuickPick(ctx.config.getStack().map(e => e.name), { placeHolder: 'Copy file to branch worktree' })
 			if (!picked) return
-			const rel = vscode.workspace.asRelativePath(fileUri)
-			await vscode.workspace.fs.copy(fileUri, vscode.Uri.joinPath(branchStack.getWorktreePath(picked), rel), { overwrite: true })
+			const rel = relativePathIn(ctx, fileUri)
+			await vscode.workspace.fs.copy(fileUri, vscode.Uri.joinPath(ctx.branchStack.getWorktreePath(picked), rel), { overwrite: true })
 			await vscode.window.showInformationMessage(`Copied ${rel} → ${picked}`)
 		})),
 		vscode.commands.registerCommand('gitbraid.moveToWorktree', cmd(async (node?: FileNode | FloatingFileNode) => {
 			const fileUri = (node instanceof FileNode || node instanceof FloatingFileNode) ? node.resourceUri
 				: vscode.window.activeTextEditor?.document.uri
 			if (!fileUri) return
-			const picked = await vscode.window.showQuickPick(configService.getStack().map(e => e.name), { placeHolder: 'Move file to branch worktree' })
+			const ctx = contextForUri(fileUri)
+			const picked = await vscode.window.showQuickPick(ctx.config.getStack().map(e => e.name), { placeHolder: 'Move file to branch worktree' })
 			if (!picked) return
-			const rel = vscode.workspace.asRelativePath(fileUri)
-			await vscode.workspace.fs.copy(fileUri, vscode.Uri.joinPath(branchStack.getWorktreePath(picked), rel), { overwrite: true })
+			const rel = relativePathIn(ctx, fileUri)
+			await vscode.workspace.fs.copy(fileUri, vscode.Uri.joinPath(ctx.branchStack.getWorktreePath(picked), rel), { overwrite: true })
 			await vscode.workspace.fs.delete(fileUri)
 			if (node instanceof FileNode) {
-				await configService.removeAssignment(rel)
+				await ctx.config.removeAssignment(rel)
 			}
 			await vscode.window.showInformationMessage(`Moved ${rel} → ${picked}`)
 		})),
@@ -783,7 +909,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// it and occasionally double-append; consolidated in T24.
 
 	log.info('extension activation complete')
-	return mbcExportedApi
+	return gitbraidExportedApi
 
 }
 

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
-import type { MbcApi } from './mbcApi'
+import type { GitBraidExportedAPI } from './@types/GitBraidAPI'
+type GitBraidApi = GitBraidExportedAPI
 
 // ─── Tool result helpers ──────────────────────────────────────────────────────
 
@@ -15,9 +16,9 @@ function jsonResult(value: unknown): vscode.LanguageModelToolResult {
 // ─── Tool implementations ─────────────────────────────────────────────────────
 
 class GetStackTool implements vscode.LanguageModelTool<Record<string, never>> {
-	readonly name = 'mbc_getStack'
+	readonly name = 'gitbraid_getStack'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
@@ -43,9 +44,9 @@ interface AssignFileInput {
 }
 
 class AssignFileTool implements vscode.LanguageModelTool<AssignFileInput> {
-	readonly name = 'mbc_assignFile'
+	readonly name = 'gitbraid_assignFile'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<AssignFileInput>,
@@ -82,9 +83,9 @@ interface AssignHunkInput {
 }
 
 class AssignHunkTool implements vscode.LanguageModelTool<AssignHunkInput> {
-	readonly name = 'mbc_assignHunk'
+	readonly name = 'gitbraid_assignHunk'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<AssignHunkInput>,
@@ -115,9 +116,9 @@ class AssignHunkTool implements vscode.LanguageModelTool<AssignHunkInput> {
 // ─── getFloatingFiles ─────────────────────────────────────────────────────────
 
 class GetFloatingFilesTool implements vscode.LanguageModelTool<Record<string, never>> {
-	readonly name = 'mbc_getFloatingFiles'
+	readonly name = 'gitbraid_getFloatingFiles'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
@@ -146,9 +147,9 @@ interface CommitBranchInput {
 }
 
 class CommitBranchTool implements vscode.LanguageModelTool<CommitBranchInput> {
-	readonly name = 'mbc_commitBranch'
+	readonly name = 'gitbraid_commitBranch'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<CommitBranchInput>,
@@ -183,9 +184,9 @@ interface GetBranchStatusInput {
 }
 
 class GetBranchStatusTool implements vscode.LanguageModelTool<GetBranchStatusInput> {
-	readonly name = 'mbc_getBranchStatus'
+	readonly name = 'gitbraid_getBranchStatus'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<GetBranchStatusInput>,
@@ -212,9 +213,9 @@ interface AddBranchInput {
 }
 
 class AddBranchTool implements vscode.LanguageModelTool<AddBranchInput> {
-	readonly name = 'mbc_addBranch'
+	readonly name = 'gitbraid_addBranch'
 
-	constructor(private readonly _api: MbcApi) {}
+	constructor(private readonly _api: GitBraidApi) {}
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<AddBranchInput>,
@@ -245,10 +246,10 @@ class AddBranchTool implements vscode.LanguageModelTool<AddBranchInput> {
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 /**
- * Registers all MBC language model tools with VS Code.
+ * Registers all GitBraid language model tools with VS Code.
  * Returns disposables that unregister the tools when disposed.
  */
-export function registerLmTools(api: MbcApi): vscode.Disposable[] {
+export function registerLmTools(api: GitBraidApi): vscode.Disposable[] {
 	const tools: Array<vscode.LanguageModelTool<never>> = [
 		new GetStackTool(api) as unknown as vscode.LanguageModelTool<never>,
 		new AssignFileTool(api) as unknown as vscode.LanguageModelTool<never>,

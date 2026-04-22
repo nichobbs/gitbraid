@@ -1,6 +1,9 @@
 import * as vscode from 'vscode'
+import * as path from 'node:path'
 import { ConfigService } from './configService'
 import { WorkspaceSync } from './workspaceSync'
+import type { FolderRegistry } from './folderRegistry'
+import type { FolderContext } from './folderContext'
 
 /**
  * Colours files in the Explorer based on their branch assignment.
@@ -9,8 +12,11 @@ import { WorkspaceSync } from './workspaceSync'
  * - Floating (dirty but unassigned) files → neutral badge `?`.
  * - All other files → no decoration.
  *
- * Decorations are refreshed automatically when assignments or floating-dirty
- * state changes.
+ * Multi-root aware (phase 2): given a URI, the provider resolves the owning
+ * `FolderContext` via the registry and reads that folder's assignments.
+ * Each folder's events fan out to the right subset of URIs.  When the
+ * provider is constructed without a registry (single-folder tests), it
+ * falls back to the supplied `ConfigService` / `WorkspaceSync` pair.
  */
 export class BranchFileDecorationProvider implements vscode.FileDecorationProvider, vscode.Disposable {
 
@@ -18,62 +24,124 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
 	readonly onDidChangeFileDecorations = this._onDidChangeFileDecorations.event
 
 	private readonly _disposables: vscode.Disposable[] = []
+	/** Per-context subscription bundle, keyed by folder root fsPath. */
+	private readonly _ctxSubs = new Map<string, vscode.Disposable[]>()
 
 	constructor(
-		private readonly _config: ConfigService,
-		private readonly _sync: WorkspaceSync,
+		private readonly _fallbackConfig: ConfigService,
+		private readonly _fallbackSync: WorkspaceSync,
+		private readonly _registry?: FolderRegistry,
 	) {
-		// Re-fire when any assignment changes
+		if (this._registry) {
+			for (const ctx of this._registry.getAll()) {
+				this._subscribeContext(ctx)
+			}
+			this._disposables.push(
+				this._registry.onDidChangeFolders((e) => {
+					for (const ctx of e.added) this._subscribeContext(ctx)
+					for (const ctx of e.removed) this._unsubscribeContext(ctx)
+				}),
+			)
+		} else {
+			this._subscribeFallback()
+		}
+
 		this._disposables.push(
-			_config.onDidChangeAssignment((e) => {
-				const wsf = vscode.workspace.workspaceFolders?.[0]
-				if (!wsf) { return }
+			vscode.window.registerFileDecorationProvider(this),
+		)
+	}
+
+	private _subscribeContext(ctx: FolderContext): void {
+		if (this._ctxSubs.has(ctx.root.fsPath)) return
+		const subs: vscode.Disposable[] = [
+			ctx.config.onDidChangeAssignment((e) => {
 				this._onDidChangeFileDecorations.fire(
-					vscode.Uri.joinPath(wsf.uri, e.relativePath)
+					vscode.Uri.joinPath(ctx.root, e.relativePath),
 				)
 			}),
-			_sync.onDidFloatFile((e) => {
-				const wsf = vscode.workspace.workspaceFolders?.[0]
-				if (!wsf) { return }
+			ctx.workspaceSync.onDidFloatFile((e) => {
 				this._onDidChangeFileDecorations.fire(
-					vscode.Uri.joinPath(wsf.uri, e.relativePath)
+					vscode.Uri.joinPath(ctx.root, e.relativePath),
 				)
 			}),
-			// Refresh all when the stack changes (branch removed → clear colours)
-			_config.onDidChangeStack(() => {
-				const wsf = vscode.workspace.workspaceFolders?.[0]
-				if (!wsf) { return }
-				// Fire for all currently assigned URIs so stale colours clear
-				const assignments = _config.getAllAssignments()
+			ctx.config.onDidChangeStack(() => {
+				const assignments = ctx.config.getAllAssignments()
 				const uris = Object.keys(assignments).map((rel) =>
-					vscode.Uri.joinPath(wsf.uri, rel)
+					vscode.Uri.joinPath(ctx.root, rel),
 				)
 				if (uris.length > 0) {
 					this._onDidChangeFileDecorations.fire(uris)
 				}
 			}),
-			vscode.window.registerFileDecorationProvider(this),
+		]
+		this._ctxSubs.set(ctx.root.fsPath, subs)
+	}
+
+	private _unsubscribeContext(ctx: FolderContext): void {
+		const subs = this._ctxSubs.get(ctx.root.fsPath)
+		if (!subs) return
+		for (const d of subs) d.dispose()
+		this._ctxSubs.delete(ctx.root.fsPath)
+	}
+
+	private _subscribeFallback(): void {
+		const fire = (rel: string) => {
+			const wsf = vscode.workspace.workspaceFolders?.[0]
+			if (!wsf) return
+			this._onDidChangeFileDecorations.fire(vscode.Uri.joinPath(wsf.uri, rel))
+		}
+		this._disposables.push(
+			this._fallbackConfig.onDidChangeAssignment((e) => fire(e.relativePath)),
+			this._fallbackSync.onDidFloatFile((e) => fire(e.relativePath)),
+			this._fallbackConfig.onDidChangeStack(() => {
+				const wsf = vscode.workspace.workspaceFolders?.[0]
+				if (!wsf) return
+				const assignments = this._fallbackConfig.getAllAssignments()
+				const uris = Object.keys(assignments).map((rel) =>
+					vscode.Uri.joinPath(wsf.uri, rel),
+				)
+				if (uris.length > 0) {
+					this._onDidChangeFileDecorations.fire(uris)
+				}
+			}),
 		)
 	}
 
-	provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
-		if (!vscode.workspace.workspaceFolders?.length) { return undefined }
+	/**
+	 * Resolve the `(ConfigService, WorkspaceSync, relativePath)` triple for
+	 * the given URI.  Returns undefined if the URI isn't inside any known
+	 * context (multi-root mode) or is outside the workspace entirely.
+	 */
+	private _resolve(uri: vscode.Uri): { config: ConfigService, sync: WorkspaceSync, rel: string } | undefined {
+		if (this._registry) {
+			const ctx = this._registry.getForUri(uri)
+			if (!ctx) return undefined
+			const rel = path.relative(ctx.root.fsPath, uri.fsPath).replaceAll('\\', '/')
+			return { config: ctx.config, sync: ctx.workspaceSync, rel }
+		}
+		if (!vscode.workspace.workspaceFolders?.length) return undefined
+		const rel = vscode.workspace.asRelativePath(uri, false)
+		return { config: this._fallbackConfig, sync: this._fallbackSync, rel }
+	}
 
+	provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
 		// Honour gitbraid.prDecorationsEnabled (previously declared but never
 		// read — see reviews/02-bugs-and-correctness.md
 		// "FileDecorationProvider ignores prDecorationsEnabled setting").
 		const enabled = vscode.workspace.getConfiguration('gitbraid').get<boolean>('prDecorationsEnabled', true)
 		if (!enabled) { return undefined }
 
-		const rel = vscode.workspace.asRelativePath(uri, false)
+		const resolved = this._resolve(uri)
+		if (!resolved) return undefined
+		const { config, sync, rel } = resolved
 
 		// Skip anything inside .worktrees/
 		if (rel.startsWith('.worktrees/') || rel === '.worktrees') { return undefined }
 
 		// 1 — Assigned files: colour by branch
-		const branchName = this._config.getAssignment(rel)
+		const branchName = config.getAssignment(rel)
 		if (branchName) {
-			const entry = this._config.getBranch(branchName)
+			const entry = config.getBranch(branchName)
 			// Initial letter forms a low-cardinality but human-recognisable
 			// differentiator when many branches share a coarse chart colour.
 			const badge = branchBadge(branchName)
@@ -91,7 +159,7 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
 		}
 
 		// 2 — Floating dirty files: neutral badge
-		if (this._sync.isFloating(rel)) {
+		if (sync.isFloating(rel)) {
 			return {
 				badge: '?',
 				tooltip: 'Floating — not yet assigned to a branch',
@@ -101,21 +169,36 @@ export class BranchFileDecorationProvider implements vscode.FileDecorationProvid
 		return undefined
 	}
 
-	/** Force a full refresh of all decorations (e.g. after a stack reorder). */
+	/** Force a full refresh across every known context. */
 	refreshAll(): void {
-		const wsf = vscode.workspace.workspaceFolders?.[0]
-		if (!wsf) { return }
-		const assignments = this._config.getAllAssignments()
-		const uris = Object.keys(assignments).map((rel) =>
-			vscode.Uri.joinPath(wsf.uri, rel)
-		)
-		if (uris.length > 0) {
-			this._onDidChangeFileDecorations.fire(uris)
+		const allUris: vscode.Uri[] = []
+		if (this._registry) {
+			for (const ctx of this._registry.getAll()) {
+				const assignments = ctx.config.getAllAssignments()
+				for (const rel of Object.keys(assignments)) {
+					allUris.push(vscode.Uri.joinPath(ctx.root, rel))
+				}
+			}
+		} else {
+			const wsf = vscode.workspace.workspaceFolders?.[0]
+			if (wsf) {
+				const assignments = this._fallbackConfig.getAllAssignments()
+				for (const rel of Object.keys(assignments)) {
+					allUris.push(vscode.Uri.joinPath(wsf.uri, rel))
+				}
+			}
+		}
+		if (allUris.length > 0) {
+			this._onDidChangeFileDecorations.fire(allUris)
 		}
 	}
 
 	dispose(): void {
 		this._onDidChangeFileDecorations.dispose()
+		for (const subs of this._ctxSubs.values()) {
+			for (const d of subs) d.dispose()
+		}
+		this._ctxSubs.clear()
 		for (const d of this._disposables) {
 			d.dispose()
 		}

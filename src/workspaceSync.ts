@@ -67,8 +67,14 @@ export class WorkspaceSync implements vscode.Disposable {
 	private readonly _onDidFloatFile = new vscode.EventEmitter<{ relativePath: string }>()
 	readonly onDidFloatFile: vscode.Event<{ relativePath: string }> = this._onDidFloatFile.event
 
-	private constructor(private readonly _config: ConfigService) {}
+	/**
+	 * Public constructor — each `FolderContext` creates its own instance
+	 * paired with that folder's `ConfigService`.  `getInstance()` /
+	 * `resetInstance()` retained for back-compat with the test suite.
+	 */
+	constructor(private readonly _config: ConfigService) {}
 
+	/** Legacy singleton, retained for tests. */
 	static getInstance(config?: ConfigService): WorkspaceSync {
 		if (!WorkspaceSync._instance) {
 			config ??= ConfigService.getInstance()
