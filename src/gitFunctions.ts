@@ -1,25 +1,10 @@
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
-import util from 'node:util'
 import child_process from 'node:child_process'
 import path from 'node:path'
 import { GitError } from './errors'
-const exec = util.promisify(child_process.exec)
+import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 
-
-interface GitResponse {
-	stdout: string
-	stderr: string
-}
-
-interface GitErrorResponse {
-	code: number
-	killed: boolean
-	signal: string | null
-	cmd: string
-	stdout: string
-	stderr: string
-}
 
 interface WorktreeStatus {
 	name: string
@@ -44,62 +29,55 @@ function redactCredentials (s: string): string {
 		.replaceAll(/\b(ghp_|github_pat_)\w{20,}\b/g, '***')
 }
 
-function redactGitError (e: GitErrorResponse): GitErrorResponse {
-	return {
-		...e,
-		cmd: e.cmd ? redactCredentials(e.cmd) : e.cmd,
-		stdout: e.stdout ? redactCredentials(e.stdout) : e.stdout,
-		stderr: e.stderr ? redactCredentials(e.stderr) : e.stderr,
-	}
-}
-
 
 class Git {
 
-	private gitExec (args: string, repoRoot?: vscode.Uri | string) {
-		if (!repoRoot) {
-			repoRoot = vscode.workspace.workspaceFolders![0].uri
-		}
-		if (repoRoot instanceof vscode.Uri) {
-			repoRoot = repoRoot.fsPath
-		}
+	private readonly _explicitRunner: IGitRunner | undefined
 
-		const command = 'git ' + args
-		log.info('executing: ' + command + ' (in ' + repoRoot + ')')
-		return exec(command, { cwd: repoRoot })
-			.then((r: GitResponse) => {
-				r.stdout = r.stdout.trim()
-				log.info('success! (' + command + ') (stdout=' + r.stdout + ')')
-				// git writes benign diagnostics to stderr on successful commands
-				// (e.g. "warning: LF will be replaced by CRLF…").  Only log these
-				// at debug level — never pop a user notification — because they
-				// fire on nearly every save on Windows.
-				if (r.stderr && r.stderr.trim() !== '') {
-					log.debug('stderr=' + r.stderr)
-				}
-				return r.stdout
-			}, (e: GitErrorResponse) => {
-				log.error('GitErrorResponse=' + JSON.stringify(redactGitError(e), null, 2))
-				if (e.stderr && e.stderr !== '') {
-					log.notificationError(redactCredentials(e.stderr))
-					throw new GitError(e.stderr, e.code)
-				}
-				throw e
-			})
+	private get _runner(): IGitRunner {
+		return this._explicitRunner ?? getDefaultGitRunner()
+	}
+
+	constructor(runner?: IGitRunner) {
+		this._explicitRunner = runner
+		this.worktree = new Worktree(() => this._runner, () => this._defaultCwd())
+	}
+
+	private _defaultCwd(): string {
+		return vscode.workspace.workspaceFolders![0].uri.fsPath
+	}
+
+	/**
+	 * Spawn-based runner for all git calls.  Uses `IGitRunner` so tests can
+	 * inject a fake.  Never passes arguments through a shell.
+	 */
+	private async _run(args: string[], cwd?: string | vscode.Uri): Promise<string> {
+		const cwdPath = cwd instanceof vscode.Uri ? cwd.fsPath : (cwd ?? this._defaultCwd())
+		log.info(`executing (spawn): git ${redactCredentials(args.join(' '))} (in ${cwdPath})`)
+		const { stdout, stderr, exitCode } = await this._runner.run(args, { cwd: cwdPath })
+		if (exitCode !== 0) {
+			const msg = redactCredentials(stderr || `git ${args[0]} exited ${String(exitCode)}`)
+			log.error(`git ${args.join(' ')} failed: ${msg}`)
+			throw new GitError(msg, exitCode)
+		}
+		if (stderr.trim()) {
+			log.debug(`git ${args.join(' ')} stderr: ${redactCredentials(stderr)}`)
+		}
+		return stdout.trim()
 	}
 
 	// Reset cache when .gitignore changes
 	public ignoreCache: string[] = []
-	public worktree = new Worktree(this.gitExec)
+	public worktree: Worktree
 
 
 	init (workspaceUri?: vscode.Uri) {
 		workspaceUri ??= vscode.workspace.workspaceFolders![0].uri
-		return this.gitExec('init -b main', workspaceUri.fsPath)
+		return this._run(['init', '-b', 'main'], workspaceUri)
 	}
 
 	defaultBranch () {
-		return this.gitExec('config init.defaultBranch').then((r) => {
+		return this._run(['config', 'init.defaultBranch']).then((r) => {
 			log.info('init.defaultBranch: ' + r)
 			return r
 		}, (e) => {
@@ -111,14 +89,11 @@ class Git {
 	branch (workspaceUri?: vscode.Uri): Promise<string> {
 		workspaceUri ??= vscode.workspace.workspaceFolders![0].uri
 		log.info('git branch --show-current (cwd=' + workspaceUri.fsPath + ')')
-		// gitExec resolves to the trimmed stdout string; do not dereference `.stdout`
-		// on it (previously `(r: any) => r.stdout` which was always undefined).
-		return this.gitExec('branch --show-current', workspaceUri.fsPath)
-			.then((stdout) => stdout.trim())
+		return this._run(['branch', '--show-current'], workspaceUri)
 	}
 
 	version () {
-		return this.gitExec('version').then((r) => {
+		return this._run(['version']).then((r) => {
 			log.info('git version: ' + r)
 			return r
 		})
@@ -126,35 +101,26 @@ class Git {
 
 	async revParse (uri: vscode.Uri, topLevel = false) {
 		let dirpath: string
-		const stat = await vscode.workspace.fs.stat(uri).then((s) => { return s }, (e) => { return undefined })
+		const stat = await vscode.workspace.fs.stat(uri).then((s) => { return s }, () => { return undefined })
 		if (stat?.type === vscode.FileType.Directory) {
 			dirpath = uri.fsPath
 		} else {
 			dirpath = path.dirname(uri.fsPath)
 		}
 
-		let args = 'rev-parse'
-		if (topLevel) {
-			args += ' --show-toplevel'
-		} else {
-			args += ' HEAD'
-		}
-		const resp = await this.gitExec(args, dirpath).then((r) => {
+		const args = topLevel ? ['rev-parse', '--show-toplevel'] : ['rev-parse', 'HEAD']
+		return this._run(args, dirpath).then((r) => {
 			if (topLevel) {
 				log.info('revParse: "' + r + '"')
 				return r.split('\n')[0]
 			}
 			return r
 		})
-		return resp
 	}
 
 	revList (revA: string, revB: string): Promise<{ ahead: number, behind: number }> {
-		return this.gitExec('rev-list --left-right --count ' + revA + '...' + revB).then((stdout) => {
-			// gitExec already returns stdout as a trimmed string; do not dereference
-			// `.stdout` (previously `r.stdout` on a string, giving undefined).
-			// Note the `...` (three-dot) form: `--left-right --count A..B` is
-			// invalid — `--left-right` requires symmetric difference.
+		// Three-dot form required by --left-right --count: A...B (symmetric difference)
+		return this._run(['rev-list', '--left-right', '--count', `${revA}...${revB}`]).then((stdout) => {
 			const counts = stdout.trim().split('\t')
 			return {
 				ahead: Number.parseInt(counts[0] ?? '0', 10) || 0,
@@ -173,24 +139,21 @@ class Git {
 	async listBranches(workspaceUri?: vscode.Uri, filter?: string): Promise<{ local: string[], remote: string[] }> {
 		const root = workspaceUri ?? vscode.workspace.workspaceFolders![0].uri
 
-		const localRaw = await this.gitExec("branch --format='%(refname:short)'", root).catch(() => '')
+		const localRaw = await this._run(['branch', '--format=%(refname:short)'], root).catch(() => '')
 		const local = localRaw.split('\n').map(s => s.trim()).filter(Boolean)
 
 		let remote: string[] = []
 		try {
 			const remoteArgs = filter
-				? `branch -r --format='%(refname:short)' --list "*${filter}*"`
-				: "branch -r --format='%(refname:short)'"
-			const remoteRaw = await this.gitExec(remoteArgs, root)
+				? ['branch', '-r', '--format=%(refname:short)', '--list', `*${filter}*`]
+				: ['branch', '-r', '--format=%(refname:short)']
+			const remoteRaw = await this._run(remoteArgs, root)
 			remote = remoteRaw
 				.split('\n')
 				.map(s => s.trim())
 				.filter(Boolean)
 				// strip only a leading "origin/" — preserving other remotes' prefixes
 				// so `upstream/feature/foo` doesn't collide with `origin/feature/foo`.
-				// Earlier code used `^[^/]+\/` which ate the first segment of any
-				// branch name that contained slashes (e.g. `origin/feature/docs`
-				// became `feature/docs`, but `upstream/fork/main` became `fork/main`).
 				.map(s => s.replace(/^origin\//, ''))
 				.filter(s => s !== 'HEAD' && !s.endsWith('/HEAD'))
 				// exclude branches that are already local
@@ -203,21 +166,20 @@ class Git {
 		return { local, remote }
 	}
 
-	checkIgnore (path: string) {
-		return this.gitExec('check-ignore ' + path)
+	checkIgnore (filePath: string) {
+		return this._run(['check-ignore', filePath])
 			.then(() => {
-				// log.info('checkIgnore: ' + path + ' -> true (r=' + r + ')')
-				this.ignoreCache.push(path)
-				log.info('ignore path=' + path)
+				this.ignoreCache.push(filePath)
+				log.info('ignore path=' + filePath)
 				return true
-			}, (e: any) => {
-				log.trace('checkIgnore returned non-zero. path=' + path)
+			}, () => {
+				log.trace('checkIgnore returned non-zero. path=' + filePath)
 				return false
 			})
 	}
 
 	statusIgnored () {
-		return this.gitExec('status --ignored --porcelain -z').then((r) => {
+		return this._run(['status', '--ignored', '--porcelain', '-z']).then((r) => {
 			const lines: string[] = r.split('\0')
 			const ignoredFiles = []
 			for (const l of lines) {
@@ -225,9 +187,9 @@ class Git {
 					continue
 				}
 				const status = l.substring(0, 1)
-				const path = l.substring(3)
+				const filePath = l.substring(3)
 				if (status === '!') {
-					ignoredFiles.push(path)
+					ignoredFiles.push(filePath)
 				}
 			}
 			return ignoredFiles
@@ -244,28 +206,47 @@ class Git {
 			}
 		}
 
-		let cwd: vscode.Uri
-		if (rootUri === undefined) {
-			cwd = vscode.workspace.workspaceFolders![0].uri
-		} else {
-			cwd = rootUri
-		}
-
-		return this.gitExec('add ' + paths.join(' '), cwd)
+		const cwd = rootUri ?? vscode.workspace.workspaceFolders![0].uri
+		return this._run(['add', ...paths], cwd)
 	}
 
 	commit (message: string, args?: string, repoUri?: vscode.Uri) {
-		return this.gitExec('commit -m "' + message + '" ' + args, repoUri)
+		const argsList = ['commit', '-m', message]
+		if (args?.trim()) {
+			argsList.push(...args.trim().split(/\s+/))
+		}
+		return this._run(argsList, repoUri)
 	}
 }
 
 
 class Worktree {
 
-	constructor(private readonly gitExec: (args: string) => Promise<string>) {}
+	private readonly _getRunner: () => IGitRunner
+	private readonly _defaultCwd: () => string
+
+	constructor(getRunner: () => IGitRunner, defaultCwd: () => string) {
+		this._getRunner = getRunner
+		this._defaultCwd = defaultCwd
+	}
+
+	private async _run(args: string[]): Promise<string> {
+		const cwd = this._defaultCwd()
+		log.info(`executing (spawn): git ${args.join(' ')} (in ${cwd})`)
+		const { stdout, stderr, exitCode } = await this._getRunner().run(args, { cwd })
+		if (exitCode !== 0) {
+			const msg = stderr || `git ${args[0]} exited ${String(exitCode)}`
+			log.error(`git worktree command failed: ${msg}`)
+			throw new GitError(msg, exitCode)
+		}
+		if (stderr.trim()) {
+			log.debug(`git ${args.join(' ')} stderr: ${stderr}`)
+		}
+		return stdout.trim()
+	}
 
 	public list () {
-		return this.gitExec('worktree list --porcelain -z').then((stdout) => {
+		return this._run(['worktree', 'list', '--porcelain', '-z']).then((stdout) => {
 			const trees: WorktreeStatus[] = []
 			const lines = stdout.split('\0\0')
 			for (const line of lines) {
@@ -292,28 +273,35 @@ class Worktree {
 		})
 	}
 
-	public add (args: string) {
-		return this.gitExec('worktree add ' + args)
+	/** Check out an existing branch into a new worktree directory. */
+	public add (worktreePath: string, branch: string) {
+		return this._run(['worktree', 'add', worktreePath, branch])
 	}
 
-	public remove(args: string, force?: boolean) {
-		let cmd = 'worktree remove '
+	/** Create a new branch and add a worktree for it in one step. */
+	public addNew (branchName: string, worktreePath: string, base: string) {
+		return this._run(['worktree', 'add', '-b', branchName, worktreePath, base])
+	}
+
+	public remove(worktreePath: string, force?: boolean) {
+		const args = ['worktree', 'remove']
 		if (force) {
-			cmd = cmd + '--force '
+			args.push('--force')
 		}
-		return this.gitExec(cmd + args)
+		args.push(worktreePath)
+		return this._run(args)
 	}
 
-	public lock(path: string) {
-		return this.gitExec('worktree lock ' + path)
+	public lock(worktreePath: string) {
+		return this._run(['worktree', 'lock', worktreePath])
 	}
 
-	public unlock(path: string) {
-		return this.gitExec('worktree unlock ' + path)
+	public unlock(worktreePath: string) {
+		return this._run(['worktree', 'unlock', worktreePath])
 	}
 
 	public prune() {
-		return this.gitExec('worktree prune')
+		return this._run(['worktree', 'prune'])
 	}
 
 	/**
@@ -322,7 +310,7 @@ class Worktree {
 	 * the legacy slug-only directory naming to the hashed form (T9).
 	 */
 	public repair() {
-		return this.gitExec('worktree repair')
+		return this._run(['worktree', 'repair'])
 	}
 }
 

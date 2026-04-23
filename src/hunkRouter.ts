@@ -1,12 +1,9 @@
-import util from 'node:util'
 import child_process from 'node:child_process'
 import * as crypto from 'node:crypto'
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
 import { DiffEngine, DiffHunk } from './diffEngine'
 import type { HunkAnchor } from './configTypes'
-
-const exec = util.promisify(child_process.exec)
 
 /** Compute the 12-char body hash used by {@link HunkAnchor}. */
 export function hunkBodyHash(hunk: DiffHunk): string {
@@ -218,7 +215,20 @@ export class HunkRouter {
 				this._rangesOverlap(anchor.startLine, anchor.endLine, h.startLine, h.endLine),
 			)
 			if (candidates.length === 1) {
-				resolved.set(candidates[0].index, branch)
+				const h = candidates[0]
+				if (h.startLine !== anchor.startLine || h.endLine !== anchor.endLine) {
+					log.warn(
+						`HunkRouter: fuzzy-relocated assignment for hunk ${String(oldIndex)} (${branch}) — ` +
+						`was lines ${String(anchor.startLine)}-${String(anchor.endLine)}, ` +
+						`now lines ${String(h.startLine)}-${String(h.endLine)}.`,
+					)
+					void vscode.window.showWarningMessage(
+						`gitbraid: hunk assignment for "${branch}" shifted — ` +
+						`review hunk routing before committing.`,
+						'Open Output',
+					).then((pick) => { if (pick === 'Open Output') log.show() })
+				}
+				resolved.set(h.index, branch)
 				continue
 			}
 			log.warn(

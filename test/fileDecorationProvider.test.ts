@@ -160,7 +160,7 @@ suite('BranchFileDecorationProvider', () => {
 		await svc.addBranch({ name: 'branch-red', color: '#FF0000', base: 'main' })
 		await svc.setAssignment('src/red.ts', 'branch-red')
 		const deco = provider.provideFileDecoration(vscode.Uri.joinPath(wsRoot(), 'src/red.ts'))
-		assert.ok(deco?.color, 'Expected color decoration')
+		assert.ok(deco?.color, `Expected color decoration, got ${JSON.stringify(deco)}`)
 	})
 
 	test('colorNameForHex: green-range color returns decoration', async () => {
@@ -168,7 +168,7 @@ suite('BranchFileDecorationProvider', () => {
 		await svc.addBranch({ name: 'branch-green', color: '#00FF80', base: 'main' })
 		await svc.setAssignment('src/green.ts', 'branch-green')
 		const deco = provider.provideFileDecoration(vscode.Uri.joinPath(wsRoot(), 'src/green.ts'))
-		assert.ok(deco?.color, 'Expected color decoration')
+		assert.ok(deco?.color, `Expected color decoration, got ${JSON.stringify(deco)}`)
 	})
 
 	test('colorNameForHex: purple-range color returns decoration', async () => {
@@ -176,7 +176,7 @@ suite('BranchFileDecorationProvider', () => {
 		await svc.addBranch({ name: 'branch-purple', color: '#8000FF', base: 'main' })
 		await svc.setAssignment('src/purple.ts', 'branch-purple')
 		const deco = provider.provideFileDecoration(vscode.Uri.joinPath(wsRoot(), 'src/purple.ts'))
-		assert.ok(deco?.color, 'Expected color decoration')
+		assert.ok(deco?.color, `Expected color decoration, got ${JSON.stringify(deco)}`)
 	})
 
 	test('colorNameForHex: hue>=315 returns fallback red decoration', async () => {
@@ -184,7 +184,7 @@ suite('BranchFileDecorationProvider', () => {
 		await svc.addBranch({ name: 'branch-red2', color: '#FF0080', base: 'main' })
 		await svc.setAssignment('src/red2.ts', 'branch-red2')
 		const deco = provider.provideFileDecoration(vscode.Uri.joinPath(wsRoot(), 'src/red2.ts'))
-		assert.ok(deco?.color, 'Expected color decoration')
+		assert.ok(deco?.color, `Expected color decoration, got ${JSON.stringify(deco)}`)
 	})
 
 	test('colorNameForHex: grey (delta===0) returns blue decoration', async () => {
@@ -192,7 +192,7 @@ suite('BranchFileDecorationProvider', () => {
 		await svc.addBranch({ name: 'branch-grey', color: '#888888', base: 'main' })
 		await svc.setAssignment('src/grey.ts', 'branch-grey')
 		const deco = provider.provideFileDecoration(vscode.Uri.joinPath(wsRoot(), 'src/grey.ts'))
-		assert.ok(deco?.color, 'Expected color decoration')
+		assert.ok(deco?.color, `Expected color decoration, got ${JSON.stringify(deco)}`)
 	})
 
 	test('provideFileDecoration: orphaned assignment (branch not in stack) returns tooltip-only', async () => {

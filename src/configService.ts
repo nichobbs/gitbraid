@@ -20,6 +20,12 @@ const WORKTREES_DIR = '.worktrees'
 const MAX_WRITE_RETRIES = 3
 /** Debounce window for coalescing rapid mutations into one flush (T48). */
 const FLUSH_DEBOUNCE_MS = 50
+/** Lock file is considered stale after this many ms (handles crashed windows). */
+const LOCK_STALE_MS = 5_000
+/** Delay between lock acquisition retries. */
+const LOCK_RETRY_DELAY_MS = 50
+/** Max attempts to acquire the lock before giving up. */
+const LOCK_MAX_RETRIES = 40
 
 /**
  * Merge an externally-modified config with our in-memory version.  The goal
@@ -478,35 +484,85 @@ export class ConfigService implements vscode.Disposable {
 		const dir = path.dirname(this._configPath)
 		await fs.promises.mkdir(dir, { recursive: true })
 
-		for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
-			const conflictDetected = this._detectDiskConflict()
-			if (conflictDetected) {
-				log.warn(`ConfigService: detected concurrent write (attempt ${String(attempt + 1)}/${String(MAX_WRITE_RETRIES)}); merging`)
-				const external = await this._readFromDisk()
-				this._config = mergeConfigs(external, this._config)
-				continue
+		const lockPath = this._configPath + '.lock'
+		await this._acquireLock(lockPath)
+		try {
+			for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
+				const conflictDetected = this._detectDiskConflict()
+				if (conflictDetected) {
+					log.warn(`ConfigService: detected concurrent write (attempt ${String(attempt + 1)}/${String(MAX_WRITE_RETRIES)}); merging`)
+					const external = await this._readFromDisk()
+					this._config = mergeConfigs(external, this._config)
+					continue
+				}
+
+				const content = JSON.stringify(this._config, null, 2) + '\n'
+				const tmpPath = this._configPath + '.tmp'
+				await fs.promises.writeFile(tmpPath, content, 'utf-8')
+				await fs.promises.rename(tmpPath, this._configPath)
+
+				try {
+					const stat = await fs.promises.stat(this._configPath)
+					this._lastSeenMtimeMs = stat.mtimeMs
+				} catch {
+					// stat failure is non-fatal
+				}
+
+				await this._ensureGitignore()
+				return
 			}
 
-			const content = JSON.stringify(this._config, null, 2) + '\n'
-			const tmpPath = this._configPath + '.tmp'
-			await fs.promises.writeFile(tmpPath, content, 'utf-8')
-			await fs.promises.rename(tmpPath, this._configPath)
-
-			try {
-				const stat = await fs.promises.stat(this._configPath)
-				this._lastSeenMtimeMs = stat.mtimeMs
-			} catch {
-				// stat failure is non-fatal
-			}
-
-			await this._ensureGitignore()
-			return
+			throw new ConfigError(
+				`Failed to write local-config.json after ${String(MAX_WRITE_RETRIES)} retries due to concurrent modification. ` +
+				'Close other VS Code windows on this repository or edit the file manually.',
+			)
+		} finally {
+			await this._releaseLock(lockPath)
 		}
+	}
 
+	/**
+	 * Acquire `lockPath` using O_EXCL so only one VS Code window writes at a
+	 * time.  Retries up to LOCK_MAX_RETRIES times; treats the lock as stale
+	 * (and removes it) if it is older than LOCK_STALE_MS.
+	 */
+	private async _acquireLock(lockPath: string): Promise<void> {
+		for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
+			try {
+				// 'wx' = O_WRONLY | O_CREAT | O_EXCL — fails atomically if file exists
+				const fh = await fs.promises.open(lockPath, 'wx')
+				await fh.close()
+				return
+			} catch (e: unknown) {
+				const err = e as NodeJS.ErrnoException
+				if (err.code !== 'EEXIST') throw err
+				// Check whether the existing lock is stale (e.g. from a crashed window).
+				try {
+					const stat = await fs.promises.stat(lockPath)
+					if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+						log.warn('ConfigService: removing stale lock file')
+						await fs.promises.unlink(lockPath)
+						continue
+					}
+				} catch {
+					// Lock was removed between our EEXIST and stat — retry immediately.
+					continue
+				}
+				await new Promise<void>(r => setTimeout(r, LOCK_RETRY_DELAY_MS))
+			}
+		}
 		throw new ConfigError(
-			`Failed to write local-config.json after ${String(MAX_WRITE_RETRIES)} retries due to concurrent modification. ` +
-			'Close other VS Code windows on this repository or edit the file manually.',
+			`ConfigService: could not acquire write lock on local-config.json after ${String(LOCK_MAX_RETRIES)} attempts. ` +
+			'Another VS Code window may be unresponsive. Delete .worktrees/local-config.json.lock to recover.',
 		)
+	}
+
+	private async _releaseLock(lockPath: string): Promise<void> {
+		try {
+			await fs.promises.unlink(lockPath)
+		} catch {
+			// If the file is already gone (e.g. another process cleaned it up), ignore.
+		}
 	}
 
 	/** Returns true if the on-disk file has been modified since our last read. */
