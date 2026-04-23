@@ -128,6 +128,10 @@ suite('WorkspaceSync — bidirectional sync', () => {
 	test('echo suppression: second worktree event with gen>0 does not overwrite primary', async () => {
 		const relPath = 'bidir-echo.txt'
 		await config.setAssignment(relPath, branch)
+		// Let the assignment-triggered _syncFile debounce fire while the
+		// primary file doesn't exist yet so it returns early without bumping
+		// the generation counter.
+		await sleep(400)
 
 		// Seed worktree file.
 		const wtFile = path.join(wtDir, relPath)
