@@ -168,6 +168,75 @@ The suggestion fires once per file per session so it will not repeat.
 
 ---
 
+### Assign files by glob pattern
+
+To assign many related files at once:
+
+1. Run `GitBraid: Assign Files by Glob Pattern` from the Command Palette.
+2. Enter a glob pattern relative to the workspace root (e.g. `src/auth/**`).
+3. Choose a target branch.
+4. Review matched files in a checkbox list — uncheck any you want to exclude.
+5. Confirm. The entire batch is recorded as a single undoable action.
+
+This command is also available as the `gitbraid_assignGlob` LM tool so AI
+assistants can perform bulk assignment (e.g. *"Assign all auth-related files to
+feature/auth"*).
+
+---
+
+### Named stack checkpoints
+
+Before a risky rebase or large re-assignment, save a checkpoint:
+
+- **Save** — `GitBraid: Save Stack Checkpoint` prompts for an optional label
+  (e.g. `before-rebase`) and writes a timestamped snapshot to
+  `.worktrees/checkpoints/`.
+- **Restore** — `GitBraid: Restore Stack Checkpoint` shows a QuickPick with
+  branch count and assignment count per snapshot. Restoring requires confirmation
+  and replaces the current stack and assignments entirely.
+
+Checkpoint files use the same JSON schema as `local-config.json` and can be
+opened and inspected directly.
+
+---
+
+### Commit message templates
+
+Set a per-branch template that pre-fills the SCM input box:
+
+1. Right-click a branch in the Branch Stack view, or run
+   `GitBraid: Set Commit Message Template` from the Command Palette.
+2. Enter a template string. Supported variables:
+   - `{branch}` — full branch name (e.g. `feature/auth`)
+   - `{issue}` — first JIRA-style token in the branch name (e.g. `PROJ-123`)
+   - `{scope}` — last path segment after `/` (e.g. `auth`)
+3. The SCM input box is populated with the expanded template whenever it is
+   empty (so hand-typed messages are never overwritten).
+4. Leave the field blank to clear the template.
+
+Example: template `feat({scope}): {issue} ` on branch `feature/PROJ-42-login`
+expands to `feat(PROJ-42-login): PROJ-42 `.
+
+---
+
+### Team stack templates
+
+Share your stack layout with new teammates:
+
+1. Build and test your stack locally.
+2. Run `GitBraid: Export Stack as Team Template`.
+3. Enter optional onboarding instructions (shown to new teammates as a toast).
+4. Commit the generated `.gitbraid/stack.json` to the repository.
+
+When a teammate clones the repo and opens it in VS Code, GitBraid detects the
+template and displays:
+
+> *GitBraid: team stack template found — [your instructions]. Apply it?*
+
+Clicking **Apply Template** imports the stack and assignments immediately.
+
+---
+
 ### Undo and redo assignments
 
 Assignments (file, hunk, reorder, add/remove branch) are reversible within the session.
@@ -240,7 +309,7 @@ Settings are under `gitbraid.*` in VS Code preferences.
 
 ## AI / chat integration
 
-Eight language model tools allow AI assistants (e.g. GitHub Copilot Chat) to
+Nine language model tools allow AI assistants (e.g. GitHub Copilot Chat) to
 interact with the stack programmatically. Reference them with `#gitbraid_*` in chat.
 
 | Tool | What it does |
@@ -253,6 +322,7 @@ interact with the stack programmatically. Reference them with `#gitbraid_*` in c
 | `gitbraid_commitBranch` | Commits assigned files on a branch. |
 | `gitbraid_getBranchStatus` | Returns staged/unstaged/untracked counts for a branch. |
 | `gitbraid_getStackDiagram` | Returns an ASCII tree diagram of the stack. |
+| `gitbraid_assignGlob` | Assigns all files matching a glob pattern to a branch. |
 
 Example prompt: *"Assign src/auth.ts to the feature/auth branch and commit it with
 the message 'feat: add auth module'."*

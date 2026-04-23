@@ -30,6 +30,18 @@ the commits it should.
 - **Smart auto-assign** — when you save a new file in a directory where every
   other file already belongs to a single branch, GitBraid offers to assign it
   automatically.
+- **Assign by glob** (`gitbraid.assignGlob`) — enter a glob pattern, preview
+  matched files in a checkbox list, and assign them all in one undoable step.
+  Also available as the `gitbraid_assignGlob` LM tool for AI-driven bulk assignment.
+- **Named checkpoints** (`gitbraid.saveCheckpoint` / `gitbraid.restoreCheckpoint`)
+  — snapshot the full stack and assignments before risky rebases; restore from a
+  QuickPick of saved snapshots with branch and assignment counts.
+- **Commit message templates** (`gitbraid.setCommitTemplate`) — per-branch
+  template pre-populates the SCM input box with variables `{branch}`, `{issue}`
+  (JIRA token), and `{scope}` (last path segment).
+- **Team stack templates** (`gitbraid.exportStackTemplate`) — export a template
+  to `.gitbraid/stack.json`; new teammates are offered a one-click "Apply
+  Template" prompt when they open the repo without an existing stack.
 - **Routing preview** (`gitbraid.previewRouting`) — dry-run all hunk
   assignments with `git apply --check`; see per-branch pass/fail in the Output
   panel before committing anything.
