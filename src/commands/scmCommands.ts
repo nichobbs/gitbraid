@@ -18,6 +18,32 @@ export function registerScmCommands(deps: CommandDeps): vscode.Disposable[] {
 			await activeContext().scmManager.commitBranch(name)
 		})),
 
+		// Invoked from scm/inputBox button; VS Code passes the SourceControlInputBox as argument.
+		vscode.commands.registerCommand('gitbraid.scm.commitFromInputBox', cmd(async (arg?: unknown) => {
+			const manager = activeContext().scmManager
+			let branchName: string | undefined
+			if (arg && typeof arg === 'object' && 'value' in arg) {
+				branchName = manager.getBranchForInputBox(arg as vscode.SourceControlInputBox)
+			}
+			if (!branchName) {
+				branchName = await resolveBranchNameArg(undefined, 'Commit to branch')
+			}
+			if (!branchName) return
+			await manager.commitBranch(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.commitAndPush', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Commit & Push branch')
+			if (!branchName) return
+			await activeContext().scmManager.commitAndPush(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.commitAndSync', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Commit & Sync branch')
+			if (!branchName) return
+			await activeContext().scmManager.commitAndSync(branchName)
+		})),
+
 		vscode.commands.registerCommand('gitbraid.scm.refreshAll', cmd(async () => {
 			await activeContext().scmManager.refreshAll()
 		})),
@@ -62,6 +88,26 @@ export function registerScmCommands(deps: CommandDeps): vscode.Disposable[] {
 			const branchName = await resolveBranchNameArg(arg, 'Stage all changes in branch')
 			if (!branchName) return
 			await activeContext().scmManager.stageAll(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.unstageAll', cmd(async (arg?: unknown) => {
+			const branchName = await resolveBranchNameArg(arg, 'Unstage all changes in branch')
+			if (!branchName) return
+			await activeContext().scmManager.unstageAll(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.stageAllGroup', cmd(async (group?: unknown) => {
+			if (!group || typeof group !== 'object') return
+			const branchName = activeContext().scmManager.getBranchForGroup(group as vscode.SourceControlResourceGroup)
+			if (!branchName) return
+			await activeContext().scmManager.stageAll(branchName)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.scm.unstageAllGroup', cmd(async (group?: unknown) => {
+			if (!group || typeof group !== 'object') return
+			const branchName = activeContext().scmManager.getBranchForGroup(group as vscode.SourceControlResourceGroup)
+			if (!branchName) return
+			await activeContext().scmManager.unstageAll(branchName)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.scm.generateCommitMessage', cmd(async (arg?: unknown) => {

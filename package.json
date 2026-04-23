@@ -39,6 +39,9 @@
 	"engines": {
 		"vscode": "^1.95.0"
 	},
+	"enabledApiProposals": [
+		"scmActionButton"
+	],
 	"categories": [
 		"SCM Providers",
 		"Other"
@@ -445,6 +448,42 @@
 				"title": "Stage All Changes",
 				"category": "GitBraid",
 				"icon": "$(add)"
+			},
+			{
+				"command": "gitbraid.scm.unstageAll",
+				"title": "Unstage All Changes",
+				"category": "GitBraid",
+				"icon": "$(remove)"
+			},
+			{
+				"command": "gitbraid.scm.commitFromInputBox",
+				"title": "Commit",
+				"category": "GitBraid",
+				"icon": "$(check)"
+			},
+			{
+				"command": "gitbraid.scm.commitAndPush",
+				"title": "Commit & Push",
+				"category": "GitBraid",
+				"icon": "$(cloud-upload)"
+			},
+			{
+				"command": "gitbraid.scm.commitAndSync",
+				"title": "Commit & Sync",
+				"category": "GitBraid",
+				"icon": "$(sync)"
+			},
+			{
+				"command": "gitbraid.scm.stageAllGroup",
+				"title": "Stage All Changes",
+				"category": "GitBraid",
+				"icon": "$(add)"
+			},
+			{
+				"command": "gitbraid.scm.unstageAllGroup",
+				"title": "Unstage All Changes",
+				"category": "GitBraid",
+				"icon": "$(remove)"
 			}
 		],
 		"viewsWelcome": [
@@ -455,6 +494,12 @@
 			}
 		],
 		"menus": {
+			"scm/inputBox": [
+				{
+					"command": "gitbraid.scm.commitFromInputBox",
+					"when": "scmProvider =~ /^gitbraid-/"
+				}
+			],
 			"view/title": [
 				{
 					"command": "gitbraid.addStackBranch",
@@ -509,6 +554,18 @@
 					"group": "gitbraid@3"
 				}
 			],
+			"scm/resourceGroup/context": [
+				{
+					"command": "gitbraid.scm.stageAllGroup",
+					"when": "scmProvider =~ /^gitbraid-/ && scmResourceGroup == changes",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.scm.unstageAllGroup",
+					"when": "scmProvider =~ /^gitbraid-/ && scmResourceGroup == staged",
+					"group": "inline"
+				}
+			],
 			"scm/resourceState/context": [
 				{
 					"command": "gitbraid.scm.stageFile",
@@ -538,29 +595,34 @@
 					"group": "1_scm@0"
 				},
 				{
-					"command": "gitbraid.scm.generateCommitMessage",
+					"command": "gitbraid.scm.unstageAll",
 					"when": "scmProvider =~ /^gitbraid-/",
 					"group": "1_scm@1"
 				},
 				{
-					"command": "gitbraid.scm.pullBranch",
+					"command": "gitbraid.scm.generateCommitMessage",
 					"when": "scmProvider =~ /^gitbraid-/",
 					"group": "1_scm@2"
 				},
 				{
-					"command": "gitbraid.scm.pushBranch",
+					"command": "gitbraid.scm.pullBranch",
 					"when": "scmProvider =~ /^gitbraid-/",
 					"group": "1_scm@3"
 				},
 				{
-					"command": "gitbraid.scm.syncBranch",
+					"command": "gitbraid.scm.pushBranch",
 					"when": "scmProvider =~ /^gitbraid-/",
 					"group": "1_scm@4"
 				},
 				{
-					"command": "gitbraid.scm.stashBranch",
+					"command": "gitbraid.scm.syncBranch",
 					"when": "scmProvider =~ /^gitbraid-/",
 					"group": "1_scm@5"
+				},
+				{
+					"command": "gitbraid.scm.stashBranch",
+					"when": "scmProvider =~ /^gitbraid-/",
+					"group": "1_scm@6"
 				}
 			],
 			"view/item/context": [

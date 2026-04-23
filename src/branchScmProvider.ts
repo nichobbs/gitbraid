@@ -223,6 +223,29 @@ class BranchScmEntry implements vscode.Disposable {
 				title: 'Commit',
 				arguments: [_entry.name],
 			}
+			this._sc.actionButton = {
+				command: {
+					command: 'gitbraid.scm.commitBranch',
+					title: 'Commit',
+					shortTitle: 'Commit',
+					arguments: [_entry.name],
+				},
+				secondaryCommands: [
+					[
+						{
+							command: 'gitbraid.scm.commitAndPush',
+							title: 'Commit & Push',
+							arguments: [_entry.name],
+						},
+						{
+							command: 'gitbraid.scm.commitAndSync',
+							title: 'Commit & Sync',
+							arguments: [_entry.name],
+						},
+					],
+				],
+				enabled: true,
+			}
 			this._sc.statusBarCommands = [
 				{
 					command: 'gitbraid.scm.generateCommitMessage',
@@ -270,6 +293,8 @@ class BranchScmEntry implements vscode.Disposable {
 	get branchName(): string { return this._entry.name }
 	get worktreeDir(): string { return this._worktreeDir }
 	get inputBox(): vscode.SourceControlInputBox { return this._sc.inputBox }
+	get changesGroup(): vscode.SourceControlResourceGroup { return this._changes }
+	get stagedGroup(): vscode.SourceControlResourceGroup { return this._staged }
 
 	/** Last status snapshot; used to skip redundant group updates (T47). */
 	private _lastStatusHash: string | undefined
@@ -356,6 +381,8 @@ class BranchScmEntry implements vscode.Disposable {
 export class BranchScmProviderManager implements vscode.Disposable {
 
 	private readonly _entries = new Map<string, BranchScmEntry>()
+	private readonly _groupToBranch = new Map<vscode.SourceControlResourceGroup, string>()
+	private readonly _inputBoxToBranch = new Map<vscode.SourceControlInputBox, string>()
 	private readonly _disposables: vscode.Disposable[] = []
 
 	constructor(
@@ -422,6 +449,8 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			entry.dispose()
 		}
 		this._entries.clear()
+		this._groupToBranch.clear()
+		this._inputBoxToBranch.clear()
 
 		for (const branchEntry of stackEntries) {
 			if (!currentNames.has(branchEntry.name)) continue
@@ -433,6 +462,9 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			} else if (branchEntry.commitTemplate) {
 				scmEntry.inputBox.value = _expandCommitTemplate(branchEntry.commitTemplate, branchEntry.name)
 			}
+			this._groupToBranch.set(scmEntry.changesGroup, branchEntry.name)
+			this._groupToBranch.set(scmEntry.stagedGroup, branchEntry.name)
+			this._inputBoxToBranch.set(scmEntry.inputBox, branchEntry.name)
 			this._entries.set(branchEntry.name, scmEntry)
 		}
 
@@ -515,6 +547,16 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		await entry.refresh(true)
 	}
 
+	/** Resolve a branch name from a resource group reference. */
+	getBranchForGroup(group: vscode.SourceControlResourceGroup): string | undefined {
+		return this._groupToBranch.get(group)
+	}
+
+	/** Resolve a branch name from an input box reference (used by scm/inputBox commands). */
+	getBranchForInputBox(inputBox: vscode.SourceControlInputBox): string | undefined {
+		return this._inputBoxToBranch.get(inputBox)
+	}
+
 	/** Stage all modified tracked files in the given branch's worktree. */
 	async stageAll(branchName: string): Promise<void> {
 		const entry = this._entries.get(branchName)
@@ -522,6 +564,18 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		const { exitCode, stderr } = await this._runner.run(['add', '-u'], { cwd: entry.statusDir })
 		if (exitCode !== 0) {
 			await showError(`Stage all failed for "${branchName}"`, new Error(stderr || `git add -u exited ${String(exitCode)}`))
+			return
+		}
+		await entry.refresh(true)
+	}
+
+	/** Unstage all staged files in the given branch's worktree. */
+	async unstageAll(branchName: string): Promise<void> {
+		const entry = this._entries.get(branchName)
+		if (!entry) return
+		const { exitCode, stderr } = await this._runner.run(['restore', '--staged', '.'], { cwd: entry.statusDir })
+		if (exitCode !== 0) {
+			await showError(`Unstage all failed for "${branchName}"`, new Error(stderr || `git restore exited ${String(exitCode)}`))
 			return
 		}
 		await entry.refresh(true)
@@ -656,17 +710,17 @@ export class BranchScmProviderManager implements vscode.Disposable {
 		}
 	}
 
-	async commitBranch(branchName: string): Promise<void> {
+	async commitBranch(branchName: string): Promise<boolean> {
 		const entry = this._entries.get(branchName)
 		if (!entry) {
 			await vscode.window.showErrorMessage(`Branch "${branchName}" not found in stack`)
-			return
+			return false
 		}
 
 		const message = entry.inputBox.value.trim()
 		if (!message) {
 			await vscode.window.showWarningMessage('Enter a commit message before committing.')
-			return
+			return false
 		}
 
 		// Warn about floating files (non-blocking), honouring
@@ -683,7 +737,7 @@ export class BranchScmProviderManager implements vscode.Disposable {
 				{ modal: true },
 				'Commit anyway',
 			)
-			if (proceed !== 'Commit anyway') { return }
+			if (proceed !== 'Commit anyway') { return false }
 		}
 
 		const { exitCode, stderr } = await this._runner.run(
@@ -694,9 +748,23 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			entry.inputBox.value = ''
 			log.info(`[BranchScmProvider] committed to "${branchName}"`)
 			await entry.refresh(true)
+			return true
 		} else {
 			await showError(`Commit to "${branchName}" failed`, new Error(stderr || `git commit exited ${String(exitCode)}`))
+			return false
 		}
+	}
+
+	async commitAndPush(branchName: string): Promise<void> {
+		const committed = await this.commitBranch(branchName)
+		if (!committed) return
+		await this.pushBranch(branchName)
+	}
+
+	async commitAndSync(branchName: string): Promise<void> {
+		const committed = await this.commitBranch(branchName)
+		if (!committed) return
+		await this.syncBranch(branchName)
 	}
 
 	dispose(): void {
@@ -704,6 +772,8 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			entry.dispose()
 		}
 		this._entries.clear()
+		this._groupToBranch.clear()
+		this._inputBoxToBranch.clear()
 		for (const d of this._disposables) {
 			d.dispose()
 		}
