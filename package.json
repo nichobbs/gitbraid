@@ -261,6 +261,36 @@
 				"icon": "$(eye)"
 			},
 			{
+				"command": "gitbraid.assignGlob",
+				"title": "Assign Files by Glob Pattern",
+				"category": "GitBraid",
+				"icon": "$(filter)"
+			},
+			{
+				"command": "gitbraid.saveCheckpoint",
+				"title": "Save Stack Checkpoint",
+				"category": "GitBraid",
+				"icon": "$(save)"
+			},
+			{
+				"command": "gitbraid.restoreCheckpoint",
+				"title": "Restore Stack Checkpoint",
+				"category": "GitBraid",
+				"icon": "$(history)"
+			},
+			{
+				"command": "gitbraid.setCommitTemplate",
+				"title": "Set Commit Message Template",
+				"category": "GitBraid",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "gitbraid.exportStackTemplate",
+				"title": "Export Stack as Team Template",
+				"category": "GitBraid",
+				"icon": "$(repo-push)"
+			},
+			{
 				"command": "gitbraid.assignHunk",
 				"title": "Assign Hunk to Branch",
 				"category": "GitBraid",
@@ -792,6 +822,30 @@
 				"inputSchema": {
 					"type": "object",
 					"properties": {},
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_assignGlob",
+				"displayName": "GitBraid: Assign Files by Glob",
+				"modelDescription": "Assigns all workspace files matching a glob pattern to a branch. Use this for bulk assignment of related files (e.g. 'src/auth/**' to 'feature/auth').",
+				"userDescription": "Assign files matching a glob pattern to a branch.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidAssignGlob",
+				"icon": "$(filter)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"pattern": {
+							"type": "string",
+							"description": "Glob pattern relative to workspace root, e.g. 'src/auth/**'"
+						},
+						"branch": {
+							"type": "string",
+							"description": "Branch name to assign the matched files to"
+						}
+					},
+					"required": ["pattern", "branch"],
 					"additionalProperties": false
 				}
 			},

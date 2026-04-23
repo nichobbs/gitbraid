@@ -109,6 +109,20 @@ const _STATUS_META: Record<string, StatusMeta> = {
 /** Cache so we don't recreate SVG URIs on every refresh tick. */
 const _decoCache = new Map<string, vscode.SourceControlResourceDecorations>()
 
+/**
+ * Expand a commit-message template for a branch.
+ * Variables: `{branch}` → full name, `{issue}` → first JIRA-style token,
+ * `{scope}` → last path segment after `/`.
+ */
+function _expandCommitTemplate(template: string, branchName: string): string {
+	const issue = /[A-Z]+-\d+/.exec(branchName)?.[0] ?? ''
+	const scope = branchName.includes('/') ? branchName.slice(branchName.lastIndexOf('/') + 1) : branchName
+	return template
+		.replaceAll('{branch}', branchName)
+		.replaceAll('{issue}', issue)
+		.replaceAll('{scope}', scope)
+}
+
 function statusDecoration(xy: string, isStaged: boolean): vscode.SourceControlResourceDecorations | undefined {
 	let code: string
 	if (xy === '??') {
@@ -414,7 +428,11 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			const wtDir = worktreePath(this._workspaceRoot, branchEntry.name).fsPath
 			const scmEntry = new BranchScmEntry(branchEntry, wtDir, this._workspaceRoot, this._runner)
 			const saved = savedValues.get(branchEntry.name)
-			if (saved) scmEntry.inputBox.value = saved
+			if (saved) {
+				scmEntry.inputBox.value = saved
+			} else if (branchEntry.commitTemplate) {
+				scmEntry.inputBox.value = _expandCommitTemplate(branchEntry.commitTemplate, branchEntry.name)
+			}
 			this._entries.set(branchEntry.name, scmEntry)
 		}
 

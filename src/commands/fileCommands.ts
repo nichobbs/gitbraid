@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import * as path from 'node:path'
 import { log } from '../channelLogger'
 import { FileNode, FloatingFileNode } from '../branchStackTreeProvider'
 import { hideAssignedFile, unhideAssignedFile } from '../gitIndex'
@@ -198,6 +199,83 @@ export function registerFileCommands(deps: CommandDeps): vscode.Disposable[] {
 				await ctx.config.removeAssignment(rel)
 			}
 			await vscode.window.showInformationMessage(`Moved ${rel} → ${picked}`)
+		})),
+
+		// ─── assignGlob ───────────────────────────────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.assignGlob', cmd(async () => {
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showWarningMessage('No branches in the stack to assign to.')
+				return
+			}
+			const pattern = await vscode.window.showInputBox({
+				prompt: 'Glob pattern to match files (relative to workspace root)',
+				placeHolder: 'src/auth/**',
+				validateInput: (v) => v.trim() ? undefined : 'Enter a glob pattern',
+			})
+			if (!pattern) return
+
+			const branch = await vscode.window.showQuickPick(
+				stack.map((e) => e.name),
+				{ placeHolder: 'Assign matched files to which branch?' },
+			)
+			if (!branch) return
+
+			const uris = await vscode.workspace.findFiles(
+				pattern,
+				'{.worktrees/**,.git/**,node_modules/**}',
+			)
+			if (uris.length === 0) {
+				await vscode.window.showInformationMessage(`No files matched "${pattern}".`)
+				return
+			}
+
+			const candidates = uris
+				.map((u) => path.relative(ctx.root.fsPath, u.fsPath).replaceAll('\\', '/'))
+				.filter((rel) => !rel.startsWith('..'))
+				.sort()
+
+			if (candidates.length === 0) {
+				await vscode.window.showInformationMessage(`No files matched "${pattern}" in this workspace folder.`)
+				return
+			}
+
+			const items = candidates.map((rel): vscode.QuickPickItem => ({ label: rel, picked: true }))
+			const selected = await vscode.window.showQuickPick(items, {
+				canPickMany: true,
+				placeHolder: `Select files to assign to "${branch}"`,
+				title: `GitBraid: Assign ${String(candidates.length)} file(s) to ${branch}`,
+			})
+			if (!selected || selected.length === 0) return
+
+			const previousAssignments = ctx.config.getAllAssignments()
+			const paths = selected.map((i) => i.label)
+			for (const rel of paths) {
+				await ctx.config.setAssignment(rel, branch)
+			}
+
+			ctx.undoStack.push({
+				label: `Assign glob "${pattern}" → ${branch} (${String(paths.length)} files)`,
+				async undo() {
+					for (const rel of paths) {
+						const prev = previousAssignments[rel]
+						if (prev === undefined) {
+							await ctx.config.removeAssignment(rel)
+						} else {
+							await ctx.config.setAssignment(rel, prev)
+						}
+					}
+				},
+				async redo() {
+					for (const rel of paths) {
+						await ctx.config.setAssignment(rel, branch)
+					}
+				},
+			})
+
+			await vscode.window.showInformationMessage(`Assigned ${String(paths.length)} file(s) to "${branch}".`)
 		})),
 	]
 }

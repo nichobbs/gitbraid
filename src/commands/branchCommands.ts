@@ -351,5 +351,93 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 				`updated ${String(summary.updatedBranches)}/${String(summary.updatedAssignments)}, skipped ${String(summary.skipped)}.`,
 			)
 		})),
+
+		// ─── Checkpoints ─────────────────────────────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.saveCheckpoint', cmd(async () => {
+			const ctx = activeContext()
+			const label = await vscode.window.showInputBox({
+				prompt: 'Optional checkpoint label',
+				placeHolder: 'before-rebase',
+			})
+			if (label === undefined) return
+			const filePath = await ctx.checkpoint.saveCheckpoint(label || undefined)
+			await vscode.window.showInformationMessage(`Checkpoint saved: ${path.basename(filePath)}`)
+		})),
+
+		vscode.commands.registerCommand('gitbraid.restoreCheckpoint', cmd(async () => {
+			const ctx = activeContext()
+			const metas = await ctx.checkpoint.listCheckpoints()
+			if (metas.length === 0) {
+				await vscode.window.showInformationMessage('No saved checkpoints found.')
+				return
+			}
+			const items = metas.map((m) => ({
+				label: m.filename.replace(/\.json$/, ''),
+				description: `${String(m.branchCount)} branches · ${String(m.assignmentCount)} assignments`,
+				detail: new Date(m.timestamp).toLocaleString(),
+				filePath: m.filePath,
+			}))
+			const selected = await vscode.window.showQuickPick(items, {
+				placeHolder: 'Select a checkpoint to restore',
+				title: 'GitBraid: Restore Stack Checkpoint',
+			})
+			if (!selected) return
+			const confirm = await vscode.window.showWarningMessage(
+				`Restore checkpoint "${selected.label}"? The current stack and assignments will be replaced.`,
+				{ modal: true },
+				'Restore',
+			)
+			if (confirm !== 'Restore') return
+			await ctx.checkpoint.restoreCheckpoint(selected.filePath)
+			await vscode.window.showInformationMessage(`Restored checkpoint: ${selected.label}`)
+		})),
+
+		// ─── Commit message templates ─────────────────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.setCommitTemplate', cmd(async (arg?: unknown) => {
+			const ctx = activeContext()
+			const branchName = await resolveBranchNameArg(arg, 'Branch to set commit template for')
+			if (!branchName) return
+			const entry = ctx.config.getBranch(branchName)
+			const current = entry?.commitTemplate ?? ''
+			const template = await vscode.window.showInputBox({
+				prompt: `Commit message template for "${branchName}" (leave blank to clear)`,
+				value: current,
+				placeHolder: 'feat({scope}): {issue} ',
+			})
+			if (template === undefined) return
+			await ctx.config.setCommitTemplate(branchName, template)
+			if (template) {
+				await vscode.window.showInformationMessage(
+					`Template set for "${branchName}". Variables: {branch}, {issue}, {scope}.`,
+				)
+			} else {
+				await vscode.window.showInformationMessage(`Commit template cleared for "${branchName}".`)
+			}
+		})),
+
+		// ─── Team stack template export ───────────────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.exportStackTemplate', cmd(async () => {
+			const ctx = activeContext()
+			if (ctx.config.getStack().length === 0) {
+				await vscode.window.showWarningMessage('Stack is empty — nothing to export as a template.')
+				return
+			}
+			const instructions = await vscode.window.showInputBox({
+				prompt: 'Optional onboarding instructions (shown to new teammates)',
+				placeHolder: 'Set up the sprint stack: feature/auth → feature/token → main',
+			})
+			if (instructions === undefined) return
+			const filePath = await ctx.stackShare.exportAsTemplate(instructions || undefined)
+			const pick = await vscode.window.showInformationMessage(
+				`Template exported to ${path.relative(ctx.root.fsPath, filePath)}. Commit this file so teammates can use it.`,
+				'Open File',
+			)
+			if (pick === 'Open File') {
+				await vscode.window.showTextDocument(vscode.Uri.file(filePath))
+			}
+		})),
 	]
 }

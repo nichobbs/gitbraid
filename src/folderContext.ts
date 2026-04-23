@@ -15,6 +15,7 @@ import { BranchScmProviderManager } from './branchScmProvider'
 import { UndoStack } from './undoStack'
 import { FileChangeBus } from './fileChangeBus'
 import { WorktreeHealthService } from './worktreeHealthService'
+import { CheckpointService } from './checkpointService'
 
 // `StackContentProvider` is deliberately NOT created here — it registers
 // a `vscode.workspace.registerTextDocumentContentProvider(scheme, ...)`
@@ -63,6 +64,7 @@ export class FolderContext implements vscode.Disposable {
 	readonly undoStack: UndoStack
 	readonly api: GitBraidApi
 	readonly healthSvc: WorktreeHealthService
+	readonly checkpoint: CheckpointService
 
 	private _initialized = false
 	private _disposed = false
@@ -84,6 +86,7 @@ export class FolderContext implements vscode.Disposable {
 		this.undoStack = new UndoStack()
 		this.api = new GitBraidApi(this.config, this.branchStack, this.workspaceSync, root)
 		this.healthSvc = new WorktreeHealthService(this.config, this.branchStack, root)
+		this.checkpoint = new CheckpointService(this.config, vscode.Uri.joinPath(root, '.worktrees'))
 	}
 
 	/**
@@ -95,6 +98,7 @@ export class FolderContext implements vscode.Disposable {
 		log.info(`FolderContext: initialising for ${this.root.fsPath}`)
 
 		await this.config.load(this.root)
+		await this.stackShare.detectAndOfferTemplate()
 		await this.branchStack.initStack(this.root)
 
 		this.workspaceSync.init(this.root, this.bus)
