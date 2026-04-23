@@ -15,6 +15,9 @@ function wsRoot(): vscode.Uri {
 function cleanup() {
 	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true }) } catch {}
 	try { fs.rmSync(path.join(wsRoot().fsPath, '.gitignore')) } catch {}
+	// Remove files written by individual tests so they don't leak into subsequent tests
+	// and trigger spurious WorkspaceSync floating-file events (especially on Windows).
+	try { fs.rmSync(path.join(wsRoot().fsPath, 'src', 'floating.ts')) } catch {}
 }
 
 async function writeWorkspaceFile(relativePath: string, content: string): Promise<vscode.Uri> {
@@ -31,6 +34,26 @@ function waitForEvent<T>(event: vscode.Event<T>, timeoutMs = 2000): Promise<T> {
 			clearTimeout(timer)
 			disposable.dispose()
 			resolve(value)
+		})
+	})
+}
+
+function waitForUriEvent(
+	event: vscode.Event<vscode.Uri | vscode.Uri[] | undefined>,
+	pathSuffix: string,
+	timeoutMs = 3000
+): Promise<vscode.Uri> {
+	const normalise = (u: vscode.Uri) => u.fsPath.replaceAll('\\', '/')
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(`Event timeout waiting for URI ending in ${pathSuffix}`)), timeoutMs)
+		const disposable = event((value) => {
+			const uris = value === undefined ? [] : Array.isArray(value) ? value : [value]
+			const match = uris.find(u => normalise(u).endsWith(pathSuffix))
+			if (match) {
+				clearTimeout(timer)
+				disposable.dispose()
+				resolve(match)
+			}
 		})
 	})
 }
@@ -125,13 +148,12 @@ suite('BranchFileDecorationProvider', () => {
 	test('decoration fires onDidChangeFileDecorations on assignment change', async () => {
 		await svc.addBranch({ name: 'feature/impl', color: '#2196F3', base: 'main' })
 
-		const changePromise = waitForEvent(provider.onDidChangeFileDecorations)
+		// Use a filtered wait that ignores unrelated events (e.g. floating-file
+		// events that _seedFromGitStatus emits asynchronously on Windows).
+		const changePromise = waitForUriEvent(provider.onDidChangeFileDecorations, 'src/bar.ts')
 		await svc.setAssignment('src/bar.ts', 'feature/impl')
 
-		const firedUri = await changePromise
-		const uri = Array.isArray(firedUri) ? firedUri[0] : firedUri
-		// Normalise backslashes (Windows) so the suffix comparison is
-		// platform-independent.
+		const uri = await changePromise
 		const normalised = uri.fsPath.replaceAll('\\', '/')
 		assert.ok(normalised.endsWith('src/bar.ts'), `Expected decoration change for assigned file, got ${uri.fsPath}`)
 	})
