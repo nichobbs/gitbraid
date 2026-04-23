@@ -90,7 +90,7 @@ suite('HunkRouter.detectOverlaps', () => {
 
 })
 
-// ─── Suite: HunkRouter._buildPatch (via routeFile + mock engine) ──────────────
+// ─── Suite: HunkRouter.buildPatch (via routeFile + mock engine) ──────────────
 
 suite('HunkRouter (patch building)', () => {
 
@@ -221,9 +221,9 @@ suite('HunkRouter.routeFile (edge cases)', () => {
 
 })
 
-// ─── Suite: HunkRouter._buildPatch (internal) ────────────────────────────────
+// ─── Suite: HunkRouter.buildPatch (internal) ────────────────────────────────
 
-suite('HunkRouter._buildPatch (internal)', () => {
+suite('HunkRouter.buildPatch (internal)', () => {
 
 	let router: HunkRouter
 
@@ -232,13 +232,13 @@ suite('HunkRouter._buildPatch (internal)', () => {
 	})
 
 	test('returns empty string for empty hunks array', () => {
-		const patch = (router as any)._buildPatch([])
+		const patch = (router as { buildPatch: (h: unknown[]) => string }).buildPatch([])
 		assert.strictEqual(patch, '')
 	})
 
 	test('single hunk: patch includes file header and hunk body', () => {
 		const hunks = makeHunks([{ start: 5, end: 8 }])
-		const patch = (router as any)._buildPatch(hunks)
+		const patch = (router as { buildPatch: (h: unknown[]) => string }).buildPatch(hunks)
 		assert.ok(patch.includes('diff --git'), 'missing file header')
 		assert.ok(patch.includes('@@ '), 'missing hunk header')
 		assert.ok(patch.includes('+changed line'), 'missing hunk body')
@@ -246,7 +246,7 @@ suite('HunkRouter._buildPatch (internal)', () => {
 
 	test('multiple hunks are sorted by startLine', () => {
 		const hunks = makeHunks([{ start: 20, end: 22 }, { start: 1, end: 3 }])
-		const patch = (router as any)._buildPatch(hunks)
+		const patch = (router as { buildPatch: (h: unknown[]) => string }).buildPatch(hunks)
 		const idx1 = patch.indexOf('@@ -1,')
 		const idx20 = patch.indexOf('@@ -20,')
 		assert.ok(idx1 < idx20, 'hunks should be sorted by startLine ascending')
@@ -254,7 +254,7 @@ suite('HunkRouter._buildPatch (internal)', () => {
 
 	test('multiple hunks share one file header', () => {
 		const hunks = makeHunks([{ start: 1, end: 2 }, { start: 10, end: 11 }])
-		const patch = (router as any)._buildPatch(hunks)
+		const patch = (router as { buildPatch: (h: unknown[]) => string }).buildPatch(hunks)
 		// Only one "diff --git" header in the output
 		const count = (patch.match(/diff --git/g) ?? []).length
 		assert.strictEqual(count, 1, 'should have exactly one file header')
