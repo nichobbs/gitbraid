@@ -89,8 +89,9 @@ suite('BranchStackTreeProvider', () => {
 		assert.strictEqual(stackBranches.length, 2)
 		assert.strictEqual(floatingGroups.length, 1)
 
+		// Descending stack order: highest layer (feature/impl, order 2) first.
 		const names = stackBranches.map((n) => (n as BranchNode).entry.name)
-		assert.deepStrictEqual(names, ['feature/docs', 'feature/impl'])
+		assert.deepStrictEqual(names, ['feature/impl', 'feature/docs'])
 	})
 
 	// ── Branch children ───────────────────────────────────────────────────────

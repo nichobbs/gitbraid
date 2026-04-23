@@ -488,11 +488,12 @@ export class BranchStackTreeProvider
 		if (this._currentBranch && !stack.some(e => e.name === this._currentBranch)) {
 			nodes.push(new CurrentBranchNode(this._currentBranch))
 		}
-		// Managed stack branches: non-scratch sorted alphabetically first, scratch last.
-		const sorted = [...stack].sort((a, b) => a.name.localeCompare(b.name))
-		for (const e of sorted) {
-			nodes.push(e.scratch ? new ScratchNode(e) : new BranchNode(e))
-		}
+		// Non-scratch branches in descending stack order (topmost layer first),
+		// scratch branches appended at the end (they are unordered parking areas).
+		const nonScratch = stack.filter(e => !e.scratch).sort((a, b) => b.order - a.order)
+		const scratchBranches = stack.filter(e => e.scratch)
+		for (const e of nonScratch) nodes.push(new BranchNode(e))
+		for (const e of scratchBranches) nodes.push(new ScratchNode(e))
 		nodes.push(new FloatingGroupNode(floating.length))
 		return nodes
 	}
