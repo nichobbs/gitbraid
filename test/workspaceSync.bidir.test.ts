@@ -58,6 +58,11 @@ suite('WorkspaceSync — bidirectional sync', () => {
 	setup(async () => {
 		wtDir = worktreePath(wsRoot(), branch).fsPath
 		try { fs.rmSync(wtDir, { recursive: true, force: true }) } catch { /* ignore */ }
+		// Scrub any persisted `local-config.json` from a prior test so
+		// `load()` starts from a clean slate — otherwise the second test's
+		// `addBranch` sees the first test's branch still on disk and
+		// throws "already exists".
+		try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees', 'local-config.json'), { force: true }) } catch { /* ignore */ }
 		ConfigService.resetInstance()
 		WorkspaceSync.resetInstance()
 		config = ConfigService.getInstance()
@@ -78,7 +83,7 @@ suite('WorkspaceSync — bidirectional sync', () => {
 
 	test('worktree change propagates to primary when file is assigned', async () => {
 		const relPath = 'bidir-test.txt'
-		await config.assignFile(relPath, branch)
+		await config.setAssignment(relPath, branch)
 
 		// Write content to the worktree.
 		const wtFile = path.join(wtDir, relPath)
@@ -122,7 +127,7 @@ suite('WorkspaceSync — bidirectional sync', () => {
 
 	test('echo suppression: second worktree event with gen>0 does not overwrite primary', async () => {
 		const relPath = 'bidir-echo.txt'
-		await config.assignFile(relPath, branch)
+		await config.setAssignment(relPath, branch)
 
 		// Seed worktree file.
 		const wtFile = path.join(wtDir, relPath)
