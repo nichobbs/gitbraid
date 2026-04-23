@@ -16,6 +16,7 @@ import { UndoStack } from './undoStack'
 import { FileChangeBus } from './fileChangeBus'
 import { WorktreeHealthService } from './worktreeHealthService'
 import { CheckpointService } from './checkpointService'
+import { StackPopulator } from './stackPopulator'
 
 // `StackContentProvider` is deliberately NOT created here — it registers
 // a `vscode.workspace.registerTextDocumentContentProvider(scheme, ...)`
@@ -65,6 +66,7 @@ export class FolderContext implements vscode.Disposable {
 	readonly api: GitBraidApi
 	readonly healthSvc: WorktreeHealthService
 	readonly checkpoint: CheckpointService
+	readonly stackPopulator: StackPopulator
 
 	private _initialized = false
 	private _disposed = false
@@ -87,6 +89,7 @@ export class FolderContext implements vscode.Disposable {
 		this.api = new GitBraidApi(this.config, this.branchStack, this.workspaceSync, root)
 		this.healthSvc = new WorktreeHealthService(this.config, this.branchStack, root)
 		this.checkpoint = new CheckpointService(this.config, vscode.Uri.joinPath(root, '.worktrees'))
+		this.stackPopulator = new StackPopulator(this.config)
 	}
 
 	/**
@@ -102,8 +105,10 @@ export class FolderContext implements vscode.Disposable {
 		await this.branchStack.initStack(this.root)
 
 		this.workspaceSync.init(this.root, this.bus)
+		this.stackPopulator.init(this.root)
 		this.rebaseSvc.init(this.root)
 		await this.scmManager.initialize()
+		await this.stackPopulator.seedFromStack()
 
 		// Watch every stack worktree for mid-rebase state.
 		const watchAll = () => {
@@ -125,6 +130,7 @@ export class FolderContext implements vscode.Disposable {
 		// Reverse construction order so dependents tear down before
 		// dependencies.
 		this.scmManager.dispose()
+		this.stackPopulator.dispose()
 		this.rebaseRecovery.dispose()
 		this.rebaseSvc.dispose()
 		this.healthSvc.dispose()

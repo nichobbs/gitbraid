@@ -291,6 +291,18 @@
 				"icon": "$(repo-push)"
 			},
 			{
+				"command": "gitbraid.moveBranchUp",
+				"title": "Move Branch Up in Stack",
+				"category": "GitBraid",
+				"icon": "$(arrow-up)"
+			},
+			{
+				"command": "gitbraid.moveBranchDown",
+				"title": "Move Branch Down in Stack",
+				"category": "GitBraid",
+				"icon": "$(arrow-down)"
+			},
+			{
 				"command": "gitbraid.assignHunk",
 				"title": "Assign Hunk to Branch",
 				"category": "GitBraid",
@@ -603,6 +615,16 @@
 					"group": "inline"
 				},
 				{
+					"command": "gitbraid.moveBranchUp",
+					"when": "view == gitbraid.stackView && viewItem == branch",
+					"group": "order@1"
+				},
+				{
+					"command": "gitbraid.moveBranchDown",
+					"when": "view == gitbraid.stackView && viewItem == branch",
+					"group": "order@2"
+				},
+				{
 					"command": "gitbraid.resetBranch",
 					"when": "view == gitbraid.stackView && viewItem == branch",
 					"group": "branch@1"
@@ -911,6 +933,16 @@
 				"command": "gitbraid.redoLastAssignment",
 				"key": "ctrl+alt+shift+z",
 				"mac": "cmd+alt+shift+z"
+			},
+			{
+				"command": "gitbraid.moveBranchUp",
+				"key": "alt+up",
+				"when": "focusedView == gitbraid.stackView && viewItem == branch"
+			},
+			{
+				"command": "gitbraid.moveBranchDown",
+				"key": "alt+down",
+				"when": "focusedView == gitbraid.stackView && viewItem == branch"
 			}
 		]
 	},

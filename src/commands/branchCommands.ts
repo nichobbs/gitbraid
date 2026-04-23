@@ -33,8 +33,35 @@ async function detectDefaultBranch(workspaceUri: vscode.Uri): Promise<string> {
 	return 'main'
 }
 
+/**
+ * Move `branchName` one position up (toward the top of the stack / higher
+ * order) or down (toward the base / lower order) within the sorted stack.
+ * The stack is treated as ascending by `order` field; "up" means the branch
+ * becomes a higher layer (larger order number, wins over more other branches).
+ */
+async function _moveBranch(
+	ctx: import('./types').CommandDeps['primary'],
+	branchName: string,
+	direction: 'up' | 'down',
+): Promise<void> {
+	const sorted = ctx.config.getStack()
+		.filter(e => !e.scratch)
+		.sort((a, b) => a.order - b.order)
+	const idx = sorted.findIndex(e => e.name === branchName)
+	if (idx === -1) return
+	if (direction === 'up' && idx >= sorted.length - 1) return
+	if (direction === 'down' && idx <= 0) return
+
+	const names = sorted.map(e => e.name)
+	const swapWith = direction === 'up' ? idx + 1 : idx - 1
+	;[names[idx], names[swapWith]] = [names[swapWith], names[idx]]
+
+	// Preserve scratch branches at their current orders — pass only non-scratch names.
+	await ctx.config.reorderStack(names)
+}
+
 export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
-	const { activeContext, resolveBranchNameArg, resolveActiveBranchWorktree } = deps
+	const { activeContext, resolveBranchNameArg, resolveActiveBranchWorktree, stackView } = deps
 
 	return [
 		vscode.commands.registerCommand('gitbraid.addStackBranch', cmd(async () => {
@@ -415,6 +442,36 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 			} else {
 				await vscode.window.showInformationMessage(`Commit template cleared for "${branchName}".`)
 			}
+		})),
+
+		// ─── Stack reorder (move up / move down) ─────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.moveBranchUp', cmd(async (node?: BranchNode) => {
+			const ctx = activeContext()
+			const target = node instanceof BranchNode
+				? node
+				: stackView.selection.find((s): s is BranchNode => s instanceof BranchNode)
+			if (!target) {
+				const name = await resolveBranchNameArg(undefined, 'Select branch to move up')
+				if (!name) return
+				await _moveBranch(ctx, name, 'up')
+				return
+			}
+			await _moveBranch(ctx, target.entry.name, 'up')
+		})),
+
+		vscode.commands.registerCommand('gitbraid.moveBranchDown', cmd(async (node?: BranchNode) => {
+			const ctx = activeContext()
+			const target = node instanceof BranchNode
+				? node
+				: stackView.selection.find((s): s is BranchNode => s instanceof BranchNode)
+			if (!target) {
+				const name = await resolveBranchNameArg(undefined, 'Select branch to move down')
+				if (!name) return
+				await _moveBranch(ctx, name, 'down')
+				return
+			}
+			await _moveBranch(ctx, target.entry.name, 'down')
 		})),
 
 		// ─── Team stack template export ───────────────────────────────────────────
