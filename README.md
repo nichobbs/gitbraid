@@ -11,6 +11,12 @@ the commits it should.
 
 - **Branch stack** — maintain an ordered stack of branches where each layer builds
   on the one below. The workspace always reflects the cumulative top-of-stack state.
+  Branches in the **Branch Stack** view are ordered top-layer-first; drag or use
+  `Alt+Up` / `Alt+Down` to reorder them.
+- **Layered workspace population** — when a branch is added to the stack its
+  committed files (relative to its base) are automatically copied into the primary
+  workspace and assigned. The highest layer wins when two branches introduce the same
+  file, so the workspace always reflects the true union of the stack.
 - **File assignment** — tag any file to a branch with a single command. Assigned
   files are decorated with the branch colour and a short badge in the Explorer.
 - **Hunk-level routing** — CodeLens above every diff hunk lets you direct individual
@@ -79,6 +85,8 @@ the commits it should.
 | Assign file to branch | `Ctrl+Alt+A` | `Cmd+Alt+A` |
 | Route hunks | `Ctrl+Alt+R` | `Cmd+Alt+R` |
 | Open stack view | `Ctrl+Alt+T` | `Cmd+Alt+T` |
+| Move branch up in stack | `Alt+Up` _(Branch Stack focused)_ | `Alt+Up` |
+| Move branch down in stack | `Alt+Down` _(Branch Stack focused)_ | `Alt+Down` |
 | Undo last assignment | `Ctrl+Alt+Z` | `Cmd+Alt+Z` |
 | Redo last assignment | `Ctrl+Alt+Shift+Z` | `Cmd+Alt+Shift+Z` |
 

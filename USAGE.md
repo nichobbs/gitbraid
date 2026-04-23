@@ -21,8 +21,9 @@ Control panel.
 ## Views
 
 The **Branch Stack** view lives in its own **GitBraid** activity-bar icon (the braid
-icon on the left sidebar). It shows the ordered stack: each branch lists its assigned
-files; floating (unassigned) files appear at the bottom under **Floating (unassigned)**.
+icon on the left sidebar). It shows the ordered stack with the **topmost layer first**:
+each branch lists its assigned files; floating (unassigned) files appear at the bottom
+under **Floating (unassigned)**.
 
 Each branch node displays live health indicators:
 
@@ -64,6 +65,27 @@ or **`Ctrl+Alt+B`**
 3. GitBraid creates a git worktree for that branch under `.worktrees/`.
 
 > To remove a branch: **Command Palette** → `GitBraid: Remove Branch from Stack`.
+
+When a branch is added, GitBraid automatically copies any files it has committed
+(relative to its base) into the primary workspace and assigns them to that branch.
+This means the workspace immediately reflects the union of all layers — you do not
+need to edit a file manually before it becomes visible. If two branches both introduce
+the same file, the **highest layer** in the stack owns it in the workspace.
+
+---
+
+### Reorder the stack
+
+The order of branches in the stack determines which layer wins when two branches touch
+the same file (highest layer wins). The **Branch Stack** view shows branches top-layer-first.
+
+**With the mouse:** drag a branch node onto another to insert it at that position.
+
+**With the keyboard** (when a branch is selected in the Branch Stack view):
+- `Alt+Up` — move the branch one position higher (makes it a higher layer)
+- `Alt+Down` — move the branch one position lower (makes it a lower layer)
+
+Both actions are also available via right-click → **Move Branch Up/Down in Stack**.
 
 ---
 

@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Added
+- **Layered workspace population** (`StackPopulator`) — when a branch is added to the
+  stack, GitBraid now automatically copies its committed files (those that differ from
+  the branch's base via `git diff --name-only`) into the primary workspace and assigns
+  them to that branch. On extension activation, any committed files in existing stack
+  branches that have no assignment yet are seeded into the workspace. The highest layer
+  in the stack wins when two branches introduce the same file; overlapping files surface
+  a warning notification.
+- **Stack-ordered Branch Stack view** — branches in the **Branch Stack** tree view are
+  now shown in descending stack order (topmost layer first) instead of alphabetically.
+  Scratch branches continue to appear at the bottom.
+- **Move Branch Up / Move Branch Down** commands (`gitbraid.moveBranchUp` /
+  `gitbraid.moveBranchDown`) — reorder the stack without the mouse. Bound to
+  `Alt+Up` / `Alt+Down` when a branch node is focused in the Branch Stack view.
+  Also available via right-click context menu on any branch node.
+
+### Fixed
+- Activity bar icon now renders correctly in all VS Code themes. The SVG was
+  converted from `<circle>` elements to `<path>` arc equivalents; VS Code's
+  CSS mask renderer only reliably handles `<path>` elements.
+
 ### Security
 - Reject shell metacharacters in paths, branch names, and commit messages
   before they reach `child_process.exec` (hardens DiffEngine, StackResolver,
