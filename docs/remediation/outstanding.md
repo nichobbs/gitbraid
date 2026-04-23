@@ -23,6 +23,19 @@ criteria.
   palette description.
 - **FileChangeBus `files.watcherExclude` (Performance)** — `_dispatch` now filters
   against the user's `watcherExclude` globs before emitting.
+- **T21 (Correctness)** — Lock file (`local-config.json.lock`, opened with `O_EXCL`)
+  serialises writes across VS Code windows. Stale locks (>5 s old, e.g. from crashed
+  windows) are removed automatically. Lock is released in a `finally` block so a write
+  error never leaves the lock dangling. Tests in `configService.test.ts` verify the
+  lock is absent after a write and that a stale lock is cleaned up.
+- **T58 (Testing)** — Injection test suite added (`test/injection.test.ts`).
+  40 parametric tests verify that shell metacharacters in paths, commit messages, and
+  branch names flow through `IGitRunner.run()` as verbatim array elements. Fixed
+  `Git._runner` to be a dynamic getter (calls `getDefaultGitRunner()` per-call) so
+  `setDefaultGitRunnerForTest` works on the module-level singleton.
+- **`extension.ts` size (Architecture)** — Reduced from ~1376 to 257 lines by
+  extracting all 44 command registrations into `src/commands/` (viewCommands,
+  fileCommands, hunkCommands, branchCommands, scmCommands) wired via `CommandDeps`.
 
 ---
 
@@ -34,21 +47,7 @@ criteria.
 
 ## Correctness
 
-### T21 — Config concurrent-write protection
-
-Two VS Code windows open on the same repository both write
-`.worktrees/local-config.json` without awareness of each other. The mtime-based
-conflict detection in `ConfigService._writeToDisk` has a narrow race: if two windows
-both pass the pre-write mtime check before either renames its temp file, the second
-rename silently overwrites the first.
-
-**Status:** mtime detection and retry loop are in place and handle the common case.
-The narrow TOCTOU window (between `statSync` and `rename`) requires a lock file or an
-OS-level exclusive open (`O_EXCL`) for a fully correct solution. Low-priority given
-the millisecond-scale window and the retry loop's merge-and-recover behaviour.
-
-**Fix:** Implement a `.lock` file using `O_EXCL` to serialise writers across windows,
-or use the Node.js `lockfile` pattern. Up to 3 retries, then surface a `ConfigError`.
+*(No open items)*
 
 ---
 
@@ -67,17 +66,6 @@ unassigns. Branch→Branch drag reorders.
 
 ## Testing
 
-### T58 — Injection test suite
-
-Now that T18 is complete (full spawn migration), an injection test suite should
-verify that branch-name, path, and commit-message payloads containing shell
-metacharacters (`$(...)`, backtick, `;`, `|`) flow through `IGitRunner` as safe
-arg arrays and do not cause side effects.
-
-**Fix:** Add `test/injection.test.ts` using `FakeGitRunner`. Assert that the args
-array passed to `runner.run()` contains the metacharacter as a literal string element,
-not split across a shell-interpreted command.
-
 ### Coverage thresholds below the original target
 
 CI enforces 55% lines / 45% branches. The T61 target was 70% / 60%. Coverage should
@@ -86,21 +74,7 @@ be raised as new tests are added.
 **Fix:** Raise CI thresholds incrementally (60%/50%, then 65%/55%). Priority modules
 for new tests: `workspaceSync.ts` (bidirectional path now partially covered),
 `gitFunctions.ts` (needs unit tests via `FakeGitRunner` for the migrated methods),
-`extension.ts` (command handlers once extracted to `src/commands/`).
-
----
-
-## Architecture
-
-### `extension.ts` still too large (~1376 lines)
-
-Despite `FolderRegistry`/`FolderContext` extraction, the activation file still manages
-command registration, SCM wiring, CodeLens, `.gitignore` stamping, and UI setup inline.
-Splitting into focused activator modules (commands, scm, ui, watchers) would make the
-file navigable.
-
-This is low-urgency but has a real maintenance cost every time a new command or service
-is added.
+`src/commands/` (command handlers now extracted; unit-testable via CommandDeps).
 
 ---
 

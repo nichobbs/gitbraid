@@ -32,11 +32,15 @@ function redactCredentials (s: string): string {
 
 class Git {
 
-	private readonly _runner: IGitRunner
+	private readonly _explicitRunner: IGitRunner | undefined
+
+	private get _runner(): IGitRunner {
+		return this._explicitRunner ?? getDefaultGitRunner()
+	}
 
 	constructor(runner?: IGitRunner) {
-		this._runner = runner ?? getDefaultGitRunner()
-		this.worktree = new Worktree(this._runner, () => this._defaultCwd())
+		this._explicitRunner = runner
+		this.worktree = new Worktree(() => this._runner, () => this._defaultCwd())
 	}
 
 	private _defaultCwd(): string {
@@ -218,18 +222,18 @@ class Git {
 
 class Worktree {
 
-	private readonly _runner: IGitRunner
+	private readonly _getRunner: () => IGitRunner
 	private readonly _defaultCwd: () => string
 
-	constructor(runner: IGitRunner, defaultCwd: () => string) {
-		this._runner = runner
+	constructor(getRunner: () => IGitRunner, defaultCwd: () => string) {
+		this._getRunner = getRunner
 		this._defaultCwd = defaultCwd
 	}
 
 	private async _run(args: string[]): Promise<string> {
 		const cwd = this._defaultCwd()
 		log.info(`executing (spawn): git ${args.join(' ')} (in ${cwd})`)
-		const { stdout, stderr, exitCode } = await this._runner.run(args, { cwd })
+		const { stdout, stderr, exitCode } = await this._getRunner().run(args, { cwd })
 		if (exitCode !== 0) {
 			const msg = stderr || `git ${args[0]} exited ${String(exitCode)}`
 			log.error(`git worktree command failed: ${msg}`)
