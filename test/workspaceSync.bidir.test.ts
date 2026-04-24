@@ -58,11 +58,11 @@ suite('WorkspaceSync — bidirectional sync', () => {
 	setup(async () => {
 		wtDir = worktreePath(wsRoot(), branch).fsPath
 		try { fs.rmSync(wtDir, { recursive: true, force: true }) } catch { /* ignore */ }
-		// Scrub any persisted `local-config.json` from a prior test so
+		// Scrub any persisted config from a prior test so
 		// `load()` starts from a clean slate — otherwise the second test's
 		// `addBranch` sees the first test's branch still on disk and
 		// throws "already exists".
-		try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees', 'local-config.json'), { force: true }) } catch { /* ignore */ }
+		try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees', 'gitbraid-config.json'), { force: true }) } catch { /* ignore */ }
 		ConfigService.resetInstance()
 		WorkspaceSync.resetInstance()
 		config = ConfigService.getInstance()

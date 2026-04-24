@@ -16,7 +16,7 @@ function worktreesDir(): string {
 }
 
 function configPath(): string {
-	return path.join(worktreesDir(), 'local-config.json')
+	return path.join(worktreesDir(), 'gitbraid-config.json')
 }
 
 function gitignorePath(): string {

@@ -411,7 +411,8 @@ export class BranchStackService implements vscode.Disposable {
 		}
 
 		for (const entry of entries) {
-			if (entry === 'local-config.json' || entry === 'local-config.json.tmp') {
+			if (entry === 'gitbraid-config.json' || entry === 'gitbraid-config.json.tmp' ||
+				entry === 'local-config.json' || entry === 'local-config.json.tmp') {
 				continue
 			}
 			if (expectedDirs.has(entry)) {

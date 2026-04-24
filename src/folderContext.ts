@@ -107,7 +107,7 @@ export class FolderContext implements vscode.Disposable {
 		// Watch the config file for external edits (e.g. manually removing
 		// stale assignments) and reload automatically.
 		this._configWatcher = vscode.workspace.createFileSystemWatcher(
-			new vscode.RelativePattern(this.root, '.worktrees/local-config.json'),
+			new vscode.RelativePattern(this.root, '.worktrees/gitbraid-config.json'),
 		)
 		this._configWatcher.onDidChange(() => void this.config.reload())
 		this._configWatcher.onDidCreate(() => void this.config.reload())

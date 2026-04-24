@@ -53,7 +53,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 ### Key Services
 
-**`ConfigService`** (`src/configService.ts`) — Persists the stack and file/hunk assignments to `.worktrees/local-config.json`. Uses atomic temp-file writes, mtime-based concurrent-write detection, a 50 ms debounce, and version migration. Fires `onDidChangeAssignment` / `onDidChangeStack` events consumed throughout the codebase.
+**`ConfigService`** (`src/configService.ts`) — Persists the stack and file/hunk assignments to `.worktrees/gitbraid-config.json`. Uses atomic temp-file writes, mtime-based concurrent-write detection, a 50 ms debounce, and version migration. Fires `onDidChangeAssignment` / `onDidChangeStack` events consumed throughout the codebase.
 
 **`BranchStackService`** (`src/branchStackService.ts`) — Manages git worktrees under `.worktrees/`. Branch name → directory mapping uses a slug + SHA1 suffix (`feature-docs__a1b2c3d`) to avoid collisions. Wraps ConfigService and is the authoritative source for stack membership.
 
@@ -75,7 +75,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 ### Local Config Schema
 
-`.worktrees/local-config.json` is the only persistent state:
+`.worktrees/gitbraid-config.json` is the only persistent state:
 ```json
 {
   "version": 1,
@@ -96,4 +96,4 @@ Never write this file directly — always go through `ConfigService`.
 
 ## Extension Activation
 
-The extension activates when VS Code detects `.git` or `.worktrees/local-config.json` in the workspace. The `activate()` function in `src/extension.ts` runs six sequential phases: workspace trust check → folder service graph → SCM/UI → hunk CodeLens → command registration → LM tool registration. All disposables are pushed to `context.subscriptions`.
+The extension activates when VS Code detects `.git` or `.worktrees/gitbraid-config.json` in the workspace. The `activate()` function in `src/extension.ts` runs six sequential phases: workspace trust check → folder service graph → SCM/UI → hunk CodeLens → command registration → LM tool registration. All disposables are pushed to `context.subscriptions`.

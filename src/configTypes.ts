@@ -1,7 +1,7 @@
 /**
  * Type definitions for the branch-overlay workspace configuration.
  *
- * The config is stored in `.worktrees/local-config.json` and is never
+ * The config is stored in `.worktrees/gitbraid-config.json` and is never
  * committed to the repository — it is personal working state.
  */
 
@@ -76,7 +76,7 @@ export interface HunkAnchor {
 	bodyHash: string
 }
 
-/** Root structure of `.worktrees/local-config.json`. */
+/** Root structure of `.worktrees/gitbraid-config.json`. */
 export interface BranchConfig {
 	version: number
 	stack: BranchStackEntry[]
