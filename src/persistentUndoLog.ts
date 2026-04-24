@@ -86,6 +86,15 @@ export class PersistentUndoLog {
 		try { await fsp.unlink(this._path) } catch { /* missing is fine */ }
 	}
 
+	/**
+	 * Replace the entire log contents with `entries`.  Exposed for the
+	 * replay flow which truncates the log to everything up to and
+	 * including the replay target.
+	 */
+	async writeAll(entries: UndoLogEntry[]): Promise<void> {
+		await this._writeAll(entries)
+	}
+
 	private async _truncateIfNeeded(): Promise<void> {
 		const entries = await this.load()
 		if (entries.length <= this._max) return
