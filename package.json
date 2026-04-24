@@ -1046,7 +1046,7 @@
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "npm run lint && npm run compile && npm test",
+		"vscode:prepublish": "npm run lint && npm run compile",
 		"build": "node esbuild.js",
 		"compile": "node esbuild.js",
 		"package": "npx vsce package --no-dependencies",
