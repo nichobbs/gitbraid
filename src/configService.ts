@@ -136,6 +136,40 @@ export class ConfigService implements vscode.Disposable {
 			Object.keys(this._config.assignments).length + ' assignments)')
 	}
 
+	/**
+	 * Re-read `local-config.json` from disk and fire change events for any
+	 * differences.  Safe to call at any time — used when the file is edited
+	 * externally (e.g. manually removing stale entries).
+	 */
+	async reload(): Promise<void> {
+		if (!this._configPath) return
+		const prev = this._config
+		this._config = await this._readFromDisk()
+		log.info('ConfigService reloaded (' + this._config.stack.length + ' branches, ' +
+			Object.keys(this._config.assignments).length + ' assignments)')
+
+		// Fire events for assignment differences
+		const prevAssignments = prev.assignments
+		const nextAssignments = this._config.assignments
+		const allKeys = new Set([...Object.keys(prevAssignments), ...Object.keys(nextAssignments)])
+		for (const key of allKeys) {
+			if (prevAssignments[key] !== nextAssignments[key]) {
+				this._onDidChangeAssignment.fire({
+					relativePath: key,
+					branch: nextAssignments[key],
+					previousBranch: prevAssignments[key],
+				})
+			}
+		}
+
+		// Fire a stack event if the stack changed at all
+		const prevNames = prev.stack.map((e) => e.name).sort((a, b) => a.localeCompare(b)).join(',')
+		const nextNames = this._config.stack.map((e) => e.name).sort((a, b) => a.localeCompare(b)).join(',')
+		if (prevNames !== nextNames) {
+			this._onDidChangeStack.fire({ type: 'reorder', branch: '' })
+		}
+	}
+
 	// ─── Stack queries ────────────────────────────────────────────────────────
 
 	/** Returns a copy of the stack entries sorted by order (ascending). */

@@ -70,6 +70,8 @@ export class FolderContext implements vscode.Disposable {
 
 	private _initialized = false
 	private _disposed = false
+	/** Watches `.worktrees/local-config.json` for external edits. */
+	private _configWatcher: vscode.FileSystemWatcher | undefined
 
 	constructor(root: vscode.Uri) {
 		this.root = root
@@ -101,6 +103,14 @@ export class FolderContext implements vscode.Disposable {
 		log.info(`FolderContext: initialising for ${this.root.fsPath}`)
 
 		await this.config.load(this.root)
+
+		// Watch the config file for external edits (e.g. manually removing
+		// stale assignments) and reload automatically.
+		this._configWatcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(this.root, '.worktrees/local-config.json'),
+		)
+		this._configWatcher.onDidChange(() => void this.config.reload())
+		this._configWatcher.onDidCreate(() => void this.config.reload())
 		await this.stackShare.detectAndOfferTemplate()
 		await this.branchStack.initStack(this.root)
 
@@ -140,5 +150,6 @@ export class FolderContext implements vscode.Disposable {
 		this.config.dispose()
 		this.undoStack.dispose()
 		this.bus.dispose()
+		this._configWatcher?.dispose()
 	}
 }
