@@ -484,6 +484,12 @@
 				"title": "Unstage All Changes",
 				"category": "GitBraid",
 				"icon": "$(remove)"
+			},
+			{
+				"command": "gitbraid.startMcpServer",
+				"title": "Start / Stop MCP Server",
+				"category": "GitBraid",
+				"icon": "$(plug)"
 			}
 		],
 		"viewsWelcome": [
@@ -749,6 +755,11 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Experimental: copy externally-made edits inside .worktrees/ back into the primary workspace. Leave disabled unless you actively edit worktree directories from a terminal or second window."
+				},
+				"gitbraid.mcpWriteEnabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Allow external MCP clients to call write tools (addBranch, assignFile, commitBranch, etc.). When false, only read-only tools are accessible. Requires the MCP server to be running."
 				}
 			}
 		},
@@ -929,7 +940,10 @@
 							"description": "Branch name to assign the matched files to"
 						}
 					},
-					"required": ["pattern", "branch"],
+					"required": [
+						"pattern",
+						"branch"
+					],
 					"additionalProperties": false
 				}
 			},
@@ -1007,6 +1021,9 @@
 				"when": "focusedView == gitbraid.stackView && viewItem == branch"
 			}
 		]
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.29.0"
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run lint && npm run compile && npm test",

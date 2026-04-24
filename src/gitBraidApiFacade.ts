@@ -148,4 +148,10 @@ export class GitBraidApiFacade implements GitBraidExportedAPI, vscode.Disposable
 	async syncBranch(branch: string): Promise<void> {
 		await this._api().syncBranch(branch)
 	}
+	async rebaseBranch(branch: string): Promise<void> {
+		await this._api().rebaseBranch(branch)
+	}
+	async routeHunks(relativePath: string): Promise<{ routed: number, skipped: number }> {
+		return this._api().routeHunks(relativePath)
+	}
 }

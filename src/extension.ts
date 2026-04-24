@@ -14,6 +14,7 @@ import { GitBraidApiFacade } from './gitBraidApiFacade'
 import { withErrorHandler, showError } from './errorSurfacer'
 import { registerAllCommands } from './commands'
 import type { CommandDeps } from './commands'
+import { GitBraidMcpServer } from './mcpServer'
 export { showError }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -254,6 +255,31 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ─── Phase 6: Exported API & LM tools ─────────────────────────────────────
 	const gitbraidExportedApi = new GitBraidApiFacade(registry)
 	context.subscriptions.push(gitbraidExportedApi, ...registerLmTools(gitbraidExportedApi))
+
+	// ─── Phase 7: MCP server (opt-in) ─────────────────────────────────────────
+	const mcpServer = new GitBraidMcpServer(gitbraidExportedApi, stackContentProvider)
+	context.subscriptions.push(mcpServer)
+
+	const mcpStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90)
+	mcpStatusBar.command = 'gitbraid.startMcpServer'
+	mcpStatusBar.text = '$(plug) MCP: off'
+	mcpStatusBar.tooltip = 'GitBraid MCP server is stopped. Click to start.'
+	mcpStatusBar.show()
+	context.subscriptions.push(mcpStatusBar)
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('gitbraid.startMcpServer', async () => {
+			if (mcpServer.isRunning) {
+				await mcpServer.stop()
+				mcpStatusBar.text = '$(plug) MCP: off'
+				mcpStatusBar.tooltip = 'GitBraid MCP server is stopped. Click to start.'
+			} else {
+				await mcpServer.start()
+				mcpStatusBar.text = '$(plug) MCP: on'
+				mcpStatusBar.tooltip = 'GitBraid MCP server is running. Click to stop.'
+			}
+		}),
+	)
 
 	await filesExcludeWorktreesDir()
 	log.info('extension activation complete')

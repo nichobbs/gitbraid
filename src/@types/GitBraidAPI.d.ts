@@ -118,6 +118,19 @@ export interface GitBraidExportedAPI {
 	/** Remove a single hunk assignment. */
 	removeHunkAssignment(relativePath: string, hunkIndex: number): Promise<void>
 
+	/**
+	 * Rebases the branch onto its configured parent branch.
+	 * Throws if the branch is not in the stack or if git rebase fails.
+	 */
+	rebaseBranch(branch: string): Promise<void>
+
+	/**
+	 * Applies all pending hunk assignments for a file by running `git apply`
+	 * in each target branch's worktree, then clears the assignments.
+	 * Returns the number of hunks routed and skipped.
+	 */
+	routeHunks(relativePath: string): Promise<{ routed: number, skipped: number }>
+
 	// ── Events ────────────────────────────────────────────────────────────────
 
 	/** Fires whenever a file assignment is created, changed, or removed. */
