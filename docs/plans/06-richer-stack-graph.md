@@ -2,7 +2,10 @@
 
 **Inspiration:** GitButler commit graph view.
 
-**Status:** Planned.
+**Status:** **Partially implementing.** The data source (`CommitListService`
+in `src/commitListService.ts`) is in place with caching and the
+`parseLogOutput` helper.  Tree-provider integration that hangs
+`CommitGroupNode` / `CommitNode` off each `BranchNode` is still to do.
 
 ## Goal
 

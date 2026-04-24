@@ -2,7 +2,11 @@
 
 **Inspiration:** git-spr, ghstack.
 
-**Status:** Planned.
+**Status:** **Partially implementing.** Data model flag `singleCommit` is in
+place on `BranchStackEntry`, with `ConfigService.setSingleCommit` and the
+`gitbraid.toggleSingleCommitMode` command.  The amend/squash rewrite inside
+`BranchScmProvider.commitBranch` and push-time invariant check are still to
+do — the flag is persisted but not yet enforced.
 
 ## Goal
 

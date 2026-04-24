@@ -414,6 +414,29 @@ export class ConfigService implements vscode.Disposable {
 		this._onDidChangeStack.fire({ type: 'reorder', branch: name })
 	}
 
+	async setSingleCommit(name: string, singleCommit: boolean): Promise<void> {
+		const entry = this._config.stack.find((e) => e.name === name)
+		if (!entry) {
+			throw new ConfigError(`Branch "${name}" is not in the stack`)
+		}
+		const normalised = singleCommit === true ? true : undefined
+		if (entry.singleCommit === normalised) return
+		entry.singleCommit = normalised
+		await this._writeToDisk()
+		this._onDidChangeStack.fire({ type: 'reorder', branch: name })
+	}
+
+	async setPrNumber(name: string, prNumber: number | undefined): Promise<void> {
+		const entry = this._config.stack.find((e) => e.name === name)
+		if (!entry) {
+			throw new ConfigError(`Branch "${name}" is not in the stack`)
+		}
+		if (entry.prNumber === prNumber) return
+		entry.prNumber = prNumber
+		await this._writeToDisk()
+		this._onDidChangeStack.fire({ type: 'reorder', branch: name })
+	}
+
 	/**
 	 * Replace the entire in-memory config with `snapshot` and flush to disk.
 	 * Used by `CheckpointService.restoreCheckpoint` to roll back to a saved state.

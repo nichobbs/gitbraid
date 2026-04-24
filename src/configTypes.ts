@@ -32,6 +32,19 @@ export interface BranchStackEntry {
 	 * `{scope}` (last path segment after `/`).
 	 */
 	commitTemplate?: string
+	/**
+	 * Cached pull-request number for this branch on the configured host.
+	 * This is a cache, not a source of truth — the host adapter is always
+	 * authoritative.  Stored so the UI can avoid a network round-trip for
+	 * the common case of "which PR is this branch?".
+	 */
+	prNumber?: number
+	/**
+	 * When true the SCM panel treats this branch as single-commit: new
+	 * commits amend the existing HEAD instead of appending.  See
+	 * `docs/plans/03-single-commit-per-pr.md`.
+	 */
+	singleCommit?: boolean
 }
 
 /**

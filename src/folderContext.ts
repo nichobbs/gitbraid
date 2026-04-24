@@ -18,6 +18,10 @@ import { WorktreeHealthService } from './worktreeHealthService'
 import { CheckpointService } from './checkpointService'
 import { StackPopulator } from './stackPopulator'
 import { StackedPRToolImporter } from './stackedPRToolImporter'
+import { SubmitStackService } from './submitStackService'
+import { PRHostAdapter, pickAdapter, NullPRHostAdapter } from './prHostAdapter'
+import { PersistentUndoLog } from './persistentUndoLog'
+import * as path from 'node:path'
 
 // `StackContentProvider` is deliberately NOT created here — it registers
 // a `vscode.workspace.registerTextDocumentContentProvider(scheme, ...)`
@@ -69,6 +73,10 @@ export class FolderContext implements vscode.Disposable {
 	readonly checkpoint: CheckpointService
 	readonly stackPopulator: StackPopulator
 	readonly stackedToolImporter: StackedPRToolImporter
+	readonly undoLog: PersistentUndoLog
+	/** PR host adapter — resolved lazily on first use so extension activation stays cheap. */
+	private _prAdapter: PRHostAdapter | undefined
+	private _secrets: vscode.SecretStorage | undefined
 
 	private _initialized = false
 	private _disposed = false
@@ -95,6 +103,42 @@ export class FolderContext implements vscode.Disposable {
 		this.checkpoint = new CheckpointService(this.config, vscode.Uri.joinPath(root, '.worktrees'))
 		this.stackPopulator = new StackPopulator(this.config)
 		this.stackedToolImporter = new StackedPRToolImporter(this.config, root)
+		this.undoLog = new PersistentUndoLog(path.join(root.fsPath, '.worktrees'))
+	}
+
+	/** Inject VS Code's `SecretStorage` (for the Octokit PR adapter). */
+	setSecretStorage(secrets: vscode.SecretStorage): void {
+		this._secrets = secrets
+	}
+
+	/**
+	 * Resolve a PR host adapter for this folder.  Caches the result; call
+	 * {@link invalidatePRAdapter} to force a rebuild (e.g. after the user
+	 * changes `gitbraid.prHost`).
+	 */
+	async getPRAdapter(): Promise<PRHostAdapter> {
+		if (this._prAdapter) return this._prAdapter
+		const secrets = this._secrets
+		if (!secrets) {
+			this._prAdapter = new NullPRHostAdapter()
+			return this._prAdapter
+		}
+		this._prAdapter = await pickAdapter(this.root.fsPath, secrets)
+		log.info(`FolderContext: PR adapter → ${this._prAdapter.name} for ${this.root.fsPath}`)
+		return this._prAdapter
+	}
+
+	invalidatePRAdapter(): void {
+		this._prAdapter = undefined
+	}
+
+	/**
+	 * Construct a `SubmitStackService` for this folder.  Fresh per call because
+	 * the underlying adapter may change (setting flip, secret stored).
+	 */
+	async buildSubmitStackService(): Promise<SubmitStackService> {
+		const adapter = await this.getPRAdapter()
+		return new SubmitStackService(this.config, this.branchStack, this.root, adapter)
 	}
 
 	/**
