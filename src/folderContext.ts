@@ -17,6 +17,7 @@ import { FileChangeBus } from './fileChangeBus'
 import { WorktreeHealthService } from './worktreeHealthService'
 import { CheckpointService } from './checkpointService'
 import { StackPopulator } from './stackPopulator'
+import { StackedPRToolImporter } from './stackedPRToolImporter'
 
 // `StackContentProvider` is deliberately NOT created here — it registers
 // a `vscode.workspace.registerTextDocumentContentProvider(scheme, ...)`
@@ -67,6 +68,7 @@ export class FolderContext implements vscode.Disposable {
 	readonly healthSvc: WorktreeHealthService
 	readonly checkpoint: CheckpointService
 	readonly stackPopulator: StackPopulator
+	readonly stackedToolImporter: StackedPRToolImporter
 
 	private _initialized = false
 	private _disposed = false
@@ -92,6 +94,7 @@ export class FolderContext implements vscode.Disposable {
 		this.healthSvc = new WorktreeHealthService(this.config, this.branchStack, root)
 		this.checkpoint = new CheckpointService(this.config, vscode.Uri.joinPath(root, '.worktrees'))
 		this.stackPopulator = new StackPopulator(this.config)
+		this.stackedToolImporter = new StackedPRToolImporter(this.config, root)
 	}
 
 	/**

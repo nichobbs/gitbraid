@@ -53,14 +53,12 @@ criteria.
 
 ## UX
 
-### T17 — Drag-and-drop file reassignment
-
-`BranchStackTreeProvider` does not implement `vscode.TreeDragAndDropController`.
-File reassignment requires right-click → QuickPick (3 clicks minimum).
-
-**Fix:** Implement DnD on `BranchStackTreeProvider`. Accept `text/uri-list` drops
-from the Explorer. Drop onto a `BranchNode` reassigns; drop onto the floating group
-unassigns. Branch→Branch drag reorders.
+*(No open items — T17 DnD shipped in `branchStackTreeProvider.ts:234-420`.
+RM-009 default keybindings shipped via `package.json` `contributes.keybindings`.
+RM-012 cross-tool stack importer shipped as
+`src/stackedPRToolImporter.ts` + the `gitbraid.importStackedTool` command.
+See `docs/plans/07-import-from-tools.md` and `docs/reviews/2026-04-24-audit.md`
+for details.)*
 
 ---
 

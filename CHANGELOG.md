@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- **Cross-tool stack importer** (`gitbraid.importStackedTool`, RM-012) — detect
+  Graphite / git-stack / git-spr / GitButler / plain-upstream metadata in the
+  active repository, preview the inferred stack, and seed GitBraid's
+  `.worktrees/local-config.json` so users migrating from another tool don't
+  have to rebuild their stack by hand. New module:
+  `src/stackedPRToolImporter.ts`. Plan: `docs/plans/07-import-from-tools.md`.
+- **Expanded default keybindings** (RM-009) — adds bindings for
+  `gitbraid.unassignFile` (Ctrl/Cmd+Alt+U), `gitbraid.assignHunk`
+  (Ctrl/Cmd+Alt+H), `gitbraid.focusStackView` (Ctrl/Cmd+Alt+S),
+  `gitbraid.pushStack` (Ctrl/Cmd+Alt+Shift+P), and `gitbraid.rebaseBranch`
+  (Ctrl/Cmd+Alt+Shift+R).
+- **Competitive analysis + feature roadmap** — `docs/competitive-analysis.md`
+  compares GitBraid against Graphite, git-spr, git-stack, Sapling, GitButler,
+  ghstack, and Stacked Git; `docs/plans/` captures implementation plans for
+  the gaps (PR creation, stack visualisation, absorb, merge queue, virtual
+  branches, persistent undo).
 - **Layered workspace population** (`StackPopulator`) — when a branch is added to the
   stack, GitBraid now automatically copies its committed files (those that differ from
   the branch's base via `git diff --name-only`) into the primary workspace and assigns
