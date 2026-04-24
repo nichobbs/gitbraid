@@ -441,6 +441,10 @@ export function renderStackBlock(entries: StackBodyEntry[], currentBranch: strin
  * existing block between the sentinels; otherwise prepends.  Honours
  * `DO_NOT_TOUCH` at the top of the body — if present we return the body
  * unchanged so users can opt out of GitBraid's body edits.
+ *
+ * Output is normalised so the function is idempotent: both the
+ * prepend-and-replace paths produce content with at most one blank line
+ * between sections and a single trailing newline.
  */
 export function mergeStackBlock(existingBody: string, block: string): string {
 	if (existingBody.trimStart().startsWith(DO_NOT_TOUCH)) {
@@ -448,13 +452,16 @@ export function mergeStackBlock(existingBody: string, block: string): string {
 	}
 	const start = existingBody.indexOf(STACK_BLOCK_START)
 	const end = existingBody.indexOf(STACK_BLOCK_END)
+	let raw: string
 	if (start !== -1 && end !== -1 && end > start) {
 		const before = existingBody.slice(0, start)
 		const after = existingBody.slice(end + STACK_BLOCK_END.length)
-		return (before + block + after).replace(/\n{3,}/g, '\n\n').trim() + '\n'
+		raw = before + block + after
+	} else {
+		const joiner = existingBody.trim().length > 0 ? '\n\n' : ''
+		raw = block + joiner + existingBody
 	}
-	const joiner = existingBody.trim().length > 0 ? '\n\n' : ''
-	return block + joiner + existingBody
+	return raw.replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '') + '\n'
 }
 
 // ─── Adapter selection ───────────────────────────────────────────────────────
