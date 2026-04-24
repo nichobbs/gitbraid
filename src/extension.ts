@@ -7,6 +7,7 @@ import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider
 import { StackContentProvider } from './stackContentProvider'
 import { recordAssignFile, recordUnassignFile } from './undoStack'
 import { PRAwareness } from './prAwareness'
+import { StackDashboardView } from './stackDashboardView'
 import { registerLmTools } from './lmTools'
 import { FolderRegistry } from './folderRegistry'
 import { FolderContext } from './folderContext'
@@ -45,6 +46,24 @@ export async function activate(context: vscode.ExtensionContext) {
 		return
 	}
 
+	// Wire SecretStorage into each folder context so the Octokit PR adapter can
+	// read `gitbraid.githubToken` when the vscode-pull-request extension isn't
+	// installed.  New folders added later (multi-root) also get it via the
+	// `onDidChangeFolders` hook further down.
+	for (const ctx of contexts) ctx.setSecretStorage(context.secrets)
+	context.subscriptions.push(
+		registry.onDidChangeFolders((e) => {
+			for (const ctx of e.added) ctx.setSecretStorage(context.secrets)
+		}),
+	)
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration((e) => {
+			if (e.affectsConfiguration('gitbraid.prHost')) {
+				for (const ctx of registry.getAll()) ctx.invalidatePRAdapter()
+			}
+		}),
+	)
+
 	const primary = contexts[0]
 	const workspaceRoot = primary.root
 	const configService = primary.config
@@ -74,16 +93,32 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(prAwareness)
 	prAwareness.start()
 
+	const stackDashboardView = new StackDashboardView(registry, prAwareness, context.extensionUri)
+	context.subscriptions.push(
+		stackDashboardView,
+		vscode.window.registerWebviewViewProvider(StackDashboardView.viewType, stackDashboardView),
+	)
+
 	const stackTreeProvider = new BranchStackTreeProvider(
 		configService,
 		workspaceSync,
 		(rel, newBranch, previous) => {
 			const ctx = activeContext()
 			recordAssignFile(ctx.undoStack, ctx.config, rel, newBranch, previous)
+			void ctx.undoLog.append({
+				ts: new Date().toISOString(),
+				action: 'assign-file',
+				detail: { path: rel, from: previous ?? null, to: newBranch },
+			})
 		},
 		(rel, previous) => {
 			const ctx = activeContext()
 			recordUnassignFile(ctx.undoStack, ctx.config, rel, previous)
+			void ctx.undoLog.append({
+				ts: new Date().toISOString(),
+				action: 'unassign-file',
+				detail: { path: rel, from: previous },
+			})
 		},
 		prAwareness,
 		primary.root,
@@ -250,7 +285,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		prAwareness,
 		overlayDiagnostics,
 	}
-	context.subscriptions.push(...registerAllCommands(cmdDeps))
+	context.subscriptions.push(...registerAllCommands(cmdDeps, context.secrets))
 
 	// ─── Phase 6: Exported API & LM tools ─────────────────────────────────────
 	const gitbraidExportedApi = new GitBraidApiFacade(registry)

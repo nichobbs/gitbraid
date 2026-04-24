@@ -2,7 +2,11 @@
 
 **Inspiration:** Graphite web app.
 
-**Status:** Planned. Depends on [plan 01](01-pr-creation.md).
+**Status:** **Implementing (read-only webview).** See
+`src/stackDashboardView.ts`; `gitbraid.stackDashboard` is registered as a
+webview view in the activity-bar container.  Inline actions currently wire
+`Submit`, `Rebase`, `Open PR`, and `Refresh`; reviews/checks UI is deferred
+until the PR adapter exposes them.  Depends on [plan 01](01-pr-creation.md).
 
 ## Goal
 

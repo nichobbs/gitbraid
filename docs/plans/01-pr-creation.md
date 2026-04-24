@@ -3,7 +3,12 @@
 **Inspiration:** Graphite `gt submit`, git-spr `git spr update`,
 ghstack `ghstack submit`.
 
-**Status:** Planned.
+**Status:** **Implementing.** Core adapter seam + `gitbraid.submitStack` /
+`gitbraid.openStackedPR` / `gitbraid.setGithubToken` commands are landed;
+Octokit + VS Code extension adapters present; body rewriting with idempotent
+stacked-PR block is wired.  GitLab backend still deferred.  See
+`src/prHostAdapter.ts`, `src/submitStackService.ts`, and
+`src/commands/prCommands.ts`.
 
 ## Goal
 

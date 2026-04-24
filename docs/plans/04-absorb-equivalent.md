@@ -2,7 +2,12 @@
 
 **Inspiration:** Sapling `sl absorb`, Mercurial `hg absorb`.
 
-**Status:** Planned.
+**Status:** **Implementing.** Core routine lives in `src/absorb.ts`
+(`absorbFiles` / `dominantCommitForHunk`) with the `gitbraid.absorbHunks`
+command wired in `src/commands/prCommands.ts`.  Uses the existing
+`DiffEngine` for hunk extraction and `git blame --line-porcelain` for
+attribution.  The `gitbraid.absorbRewritePushed` setting guards the
+rewrite-already-pushed path.
 
 ## Goal
 

@@ -2,7 +2,10 @@
 
 **Inspiration:** git-branchless, Sapling's "smartlog" history.
 
-**Status:** Planned. Extends the existing in-memory `undoStack.ts`.
+**Status:** **Implementing.** See `src/persistentUndoLog.ts`; each
+`FolderContext` owns a `.worktrees/undo-log.jsonl` writer and assignment
+changes are mirrored to it.  The `gitbraid.showUndoLog` QuickPick reads it.
+Full replay-through-this-action UX remains pending.
 
 ## Goal
 
