@@ -6,6 +6,8 @@ import { PRAwareness } from './prAwareness'
 import { buildSnapshot, ChecksStatus } from './dashboardSnapshot'
 import { git } from './gitFunctions'
 import { worktreePath } from './branchStackService'
+import { DashboardRequest, parseRequest } from './dashboardMessages'
+import { defaultDashboardDeps, handleDashboardRequest } from './commands/dashboardCommands'
 
 /**
  * Plan 02 — the stacked-PR dashboard webview.
@@ -174,30 +176,40 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 	}
 
 	private async _handleMessage(msg: unknown): Promise<void> {
-		if (typeof msg !== 'object' || msg === null) return
-		const m = msg as Record<string, unknown>
-		const cmd = typeof m.cmd === 'string' ? m.cmd : undefined
-		const branch = typeof m.branch === 'string' ? m.branch : undefined
+		// Accept both the Wave B typed contract (`{ kind, ... }`) and the
+		// original `{ cmd, branch }` shape so older webview builds still
+		// route correctly.  Falls through to `handleDashboardRequest` after
+		// normalising.
+		const req = parseRequest(msg) ?? parseLegacyCmd(msg)
+		if (!req) {
+			log.warn(`StackDashboardView: unparseable message — ${JSON.stringify(msg)}`)
+			return
+		}
 		try {
-			switch (cmd) {
-				case 'submit':
-					await vscode.commands.executeCommand('gitbraid.submitStack')
-					return
-				case 'openPr':
-					if (branch) await vscode.commands.executeCommand('gitbraid.openStackedPR', branch)
-					return
-				case 'rebase':
-					if (branch) await vscode.commands.executeCommand('gitbraid.rebaseBranch', branch)
-					return
-				case 'refresh':
-					await vscode.commands.executeCommand('gitbraid.refreshPRStatus')
-					return
-				default:
-					log.warn(`StackDashboardView: unknown cmd=${String(cmd)}`)
-			}
+			await handleDashboardRequest(req, defaultDashboardDeps())
 		} catch (e) {
 			log.error(`StackDashboardView._handleMessage: ${e instanceof Error ? e.message : String(e)}`)
 		}
+	}
+}
+
+/**
+ * Back-compat shim for the original `{ cmd: 'submit' | 'openPr' | ... }`
+ * webview messages.  Maps to the typed request union so both paths
+ * funnel through the same dispatcher.
+ */
+function parseLegacyCmd(msg: unknown): DashboardRequest | undefined {
+	if (typeof msg !== 'object' || msg === null) return undefined
+	const m = msg as Record<string, unknown>
+	const cmd = typeof m.cmd === 'string' ? m.cmd : undefined
+	const branch = typeof m.branch === 'string' ? m.branch : undefined
+	switch (cmd) {
+		case 'submit':  return { kind: 'submit' }
+		case 'refresh': return { kind: 'refresh' }
+		case 'openPr':  return branch ? { kind: 'openPr', branch } : undefined
+		case 'rebase':  return branch ? { kind: 'rebase', branch } : undefined
+		case 'switch':  return branch ? { kind: 'switchBranch', branch } : undefined
+		default: return undefined
 	}
 }
 
@@ -238,7 +250,7 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 
 			return `
 				<li class="row" data-branch="${safe(b.name)}">
-					<div class="connector ${i === 0 ? 'first' : ''} ${i === data.branches.length - 1 ? 'last' : ''}"></div>
+					<div class="${connectorClass(i, data.branches.length)}"></div>
 					<div class="node ${b.isCurrent ? 'current-branch' : ''}" style="border-color:${safe(b.color)}">
 						<div class="title">
 							<span class="branch">${currentMarker}${safe(b.name)}${singleCommitIcon}</span>
@@ -252,8 +264,10 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 							${b.prTitle ? `<span class="prtitle">${safe(b.prTitle)}</span>` : ''}
 						</div>
 						<div class="actions">
-							<button data-cmd="openPr" data-branch="${safe(b.name)}" ${b.prNumber ? '' : 'disabled'}>Open PR</button>
-							<button data-cmd="rebase" data-branch="${safe(b.name)}">Rebase</button>
+							<button data-kind="openPr" data-branch="${safe(b.name)}" ${b.prNumber ? '' : 'disabled'}>Open PR</button>
+							<button data-kind="rebase" data-branch="${safe(b.name)}">Rebase</button>
+							<button data-kind="commit" data-branch="${safe(b.name)}" title="Commit to this branch">Commit</button>
+							<button class="more" data-testid="row-menu-button-${safe(b.name)}" data-more-branch="${safe(b.name)}" data-branch-pr-url="${safe(b.prUrl ?? '')}" aria-haspopup="menu" aria-label="More actions for ${safe(b.name)}">⋯</button>
 						</div>
 					</div>
 				</li>`
@@ -298,18 +312,28 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	.checks-success { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
 	.checks-pending { color: var(--vscode-testing-iconQueued, var(--vscode-charts-yellow)); }
 	.checks-failure { color: var(--vscode-testing-iconFailed, var(--vscode-charts-red)); }
-	.actions { margin-top: 4px; display: flex; gap: 4px; }
+	.actions { margin-top: 4px; display: flex; gap: 4px; align-items: center; }
 	.actions button { font-size: 11px; padding: 1px 6px; }
+	.actions button.more { margin-left: auto; padding: 1px 7px; font-weight: bold; }
 	.empty { color: var(--vscode-descriptionForeground); font-size: 12px; }
 	footer.adapter { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--vscode-panel-border); font-size: 10px; color: var(--vscode-descriptionForeground); }
+	#menu { position: fixed; display: none; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 2px 8px rgba(0,0,0,0.3); border-radius: 2px; padding: 2px 0; z-index: 100; min-width: 180px; font-size: 12px; }
+	#menu[aria-hidden="false"] { display: block; }
+	#menu button { display: block; width: 100%; text-align: left; background: transparent; color: inherit; border: 0; padding: 4px 10px; cursor: pointer; font-size: inherit; }
+	#menu button:hover, #menu button:focus { background: var(--vscode-menu-selectionBackground); color: var(--vscode-menu-selectionForeground); outline: none; }
+	#menu hr { border: 0; border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-panel-border)); margin: 4px 0; }
 </style>
 </head>
 <body>
 	<div class="header">
 		<h2>Stack — ${safe(data.workspaceName)}</h2>
 		<div class="toolbar">
-			<button data-cmd="refresh">Refresh</button>
-			<button data-cmd="submit">Submit</button>
+			<button data-kind="addBranch"      title="Add a branch to the stack">Add</button>
+			<button data-kind="refresh"        title="Refresh PR status">Refresh</button>
+			<button data-kind="submit"         title="Submit / update stacked PRs">Submit</button>
+			<button data-kind="mergeStack"     title="Drive the stack through the merge queue">Merge</button>
+			<button data-kind="saveCheckpoint" title="Save a stack checkpoint">Checkpoint</button>
+			<button data-kind="showUndoLog"    title="Show / replay the undo log">Undo…</button>
 		</div>
 	</div>
 	${banner}
@@ -317,16 +341,174 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 		${rows}
 	</ul>
 	${adapterStrip}
+	<div id="menu" role="menu" aria-hidden="true"></div>
 	<script nonce="${nonce}">
 		const vscode = acquireVsCodeApi()
+		const menu = document.getElementById('menu')
+
+		function post(req) { vscode.postMessage(req) }
+
+		function closeMenu() {
+			menu.setAttribute('aria-hidden', 'true')
+			menu.dataset.branch = ''
+			menu.innerHTML = ''
+		}
+
+		function openMenu(button) {
+			const branch = button.dataset.moreBranch
+			const prUrl = button.dataset.branchPrUrl || ''
+			if (!branch) return
+			menu.dataset.branch = branch
+			menu.innerHTML = [
+				{ kind: 'switchBranch',        label: 'Switch to this branch' },
+				{ kind: 'commit',              label: 'Commit…' },
+				{ kind: 'pushBranch',          label: 'Push' },
+				{ sep: true },
+				{ kind: 'moveBranchUp',        label: 'Move up' },
+				{ kind: 'moveBranchDown',      label: 'Move down' },
+				{ sep: true },
+				{ kind: 'absorbHunks',         label: 'Absorb hunks…' },
+				{ kind: 'routeHunks',          label: 'Route hunks…' },
+				{ kind: 'toggleSingleCommit',  label: 'Toggle single-commit mode' },
+				{ kind: 'setCommitTemplate',   label: 'Set commit template…' },
+				{ sep: true },
+				{ kind: 'openWorktree',        label: 'Open worktree in new window' },
+				{ kind: 'copyBranchName',      label: 'Copy branch name' },
+				{ kind: 'copyPrUrl',           label: 'Copy PR URL', disabled: !prUrl, extra: { url: prUrl } },
+				{ sep: true },
+				{ kind: 'removeBranch',        label: 'Remove from stack…' },
+			].map((item) => {
+				if (item.sep) return '<hr>'
+				const disabled = item.disabled ? 'disabled' : ''
+				const extra = item.extra ? ' data-extra=\\'' + JSON.stringify(item.extra).replace(/'/g, '&#39;') + '\\'' : ''
+				return '<button role="menuitem" data-kind="' + item.kind + '" data-menu-branch="' + branch + '"' + extra + ' ' + disabled + '>' + item.label + '</button>'
+			}).join('')
+			const r = button.getBoundingClientRect()
+			const mw = 200
+			const left = Math.min(window.innerWidth - mw - 8, r.right - mw)
+			menu.style.left = Math.max(8, left) + 'px'
+			menu.style.top = (r.bottom + 4) + 'px'
+			menu.setAttribute('aria-hidden', 'false')
+		}
+
 		document.body.addEventListener('click', (e) => {
-			const el = e.target.closest('[data-cmd]')
+			const target = e.target
+			if (!target || target.nodeType !== 1) return
+
+			if (target.classList && target.classList.contains('more')) {
+				openMenu(target)
+				e.stopPropagation()
+				return
+			}
+
+			if (menu.contains(target) && target.dataset && target.dataset.kind) {
+				const kind = target.dataset.kind
+				const branch = target.dataset.menuBranch
+				let req = branch ? { kind: kind, branch: branch } : { kind: kind }
+				try {
+					if (target.dataset.extra) {
+						const extra = JSON.parse(target.dataset.extra)
+						req = Object.assign(req, extra)
+					}
+				} catch { /* ignore */ }
+				post(req)
+				closeMenu()
+				return
+			}
+
+			if (menu.getAttribute('aria-hidden') === 'false' && !menu.contains(target)) {
+				closeMenu()
+			}
+
+			const el = target.closest('[data-kind]')
 			if (!el) return
-			vscode.postMessage({ cmd: el.dataset.cmd, branch: el.dataset.branch })
+			const kind = el.dataset.kind
+			const branch = el.dataset.branch
+			post(branch ? { kind: kind, branch: branch } : { kind: kind })
+		})
+
+		window.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape' && menu.getAttribute('aria-hidden') === 'false') {
+				closeMenu()
+			}
+		})
+
+		// Delta-patch path — swap a single row's markup in place without
+		// a full re-hydrate so the user's scroll/focus state survives.
+		window.addEventListener('message', (ev) => {
+			const msg = ev.data
+			if (!msg || typeof msg !== 'object') return
+			if (msg.kind === 'patchRow' && typeof msg.branchName === 'string' && typeof msg.html === 'string') {
+				const target = document.querySelector('li.row[data-branch="' + CSS.escape(msg.branchName) + '"]')
+				if (!target) return
+				const tpl = document.createElement('template')
+				tpl.innerHTML = msg.html.trim()
+				const next = tpl.content.firstElementChild
+				if (next) target.replaceWith(next)
+			}
 		})
 	</script>
 </body>
 </html>`
+}
+
+// ─── Delta patching (Wave B) ────────────────────────────────────────────────
+
+/**
+ * Wave B host-side delta helper: compose the `<li class="row">` markup
+ * for a single branch so the provider can push it as a patch message
+ * without re-rendering the whole HTML.
+ *
+ * Kept in-module (rather than re-using `buildDashboardHtml`) so the row
+ * markup stays consistent across full-render and patched-render paths.
+ */
+export function buildBranchRowHtml(b: DashboardBranchRow, i: number, total: number): string {
+	const safe = escapeHtml
+	const pr = b.prNumber ? `#${String(b.prNumber)}` : '—'
+	const state = b.prState ?? 'no PR'
+	const stateClass = b.prState ?? 'none'
+	const currentMarker = b.isCurrent
+		? `<span class="current" title="Currently checked out" data-testid="current-marker">●</span>`
+		: ''
+	const singleCommitIcon = b.singleCommit
+		? `<span class="singleCommit" title="Single-commit mode" data-testid="single-commit-icon">⦿</span>`
+		: ''
+	const filesCount = (b.assignedFilesCount ?? 0) > 0
+		? `<span class="files" data-testid="files-count" title="${String(b.assignedFilesCount)} file(s) assigned">📄 ${String(b.assignedFilesCount)}</span>`
+		: ''
+	const aheadBehind = formatAheadBehind(b.aheadCount, b.behindCount)
+	const checksPill = b.checksStatus
+		? `<span class="checks checks-${safe(b.checksStatus)}" data-testid="checks-${safe(b.checksStatus)}" title="Checks: ${safe(b.checksStatus)}">${checksGlyph(b.checksStatus)}</span>`
+		: ''
+	return `<li class="row" data-branch="${safe(b.name)}">
+	<div class="${connectorClass(i, total)}"></div>
+	<div class="node ${b.isCurrent ? 'current-branch' : ''}" style="border-color:${safe(b.color)}">
+		<div class="title">
+			<span class="branch">${currentMarker}${safe(b.name)}${singleCommitIcon}</span>
+			<span class="base">→ ${safe(b.base)}</span>
+		</div>
+		<div class="meta">
+			<span class="pr state-${safe(stateClass)}">${safe(pr)} · ${safe(state)}</span>
+			${checksPill}
+			${aheadBehind}
+			${filesCount}
+			${b.prTitle ? `<span class="prtitle">${safe(b.prTitle)}</span>` : ''}
+		</div>
+		<div class="actions">
+			<button data-kind="openPr" data-branch="${safe(b.name)}" ${b.prNumber ? '' : 'disabled'}>Open PR</button>
+			<button data-kind="rebase" data-branch="${safe(b.name)}">Rebase</button>
+			<button data-kind="commit" data-branch="${safe(b.name)}" title="Commit to this branch">Commit</button>
+			<button class="more" data-testid="row-menu-button-${safe(b.name)}" data-more-branch="${safe(b.name)}" data-branch-pr-url="${safe(b.prUrl ?? '')}" aria-haspopup="menu" aria-label="More actions for ${safe(b.name)}">⋯</button>
+		</div>
+	</div>
+</li>`
+}
+
+function connectorClass(i: number, total: number): string {
+	const parts: string[] = ['connector']
+	if (i === 0) parts.push('first')
+	if (i === total - 1) parts.push('last')
+	return parts.join(' ')
 }
 
 function formatAheadBehind(ahead: number | undefined, behind: number | undefined): string {

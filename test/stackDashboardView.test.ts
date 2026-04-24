@@ -1,12 +1,12 @@
 import * as assert from 'node:assert'
-import { buildDashboardHtml, DashboardData } from '../src/stackDashboardView'
+import { buildDashboardHtml, buildBranchRowHtml, DashboardData } from '../src/stackDashboardView'
 
 suite('stackDashboardView: buildDashboardHtml', () => {
 	test('renders the empty-state message when no branches are present', () => {
 		const html = buildDashboardHtml({ workspaceName: 'proj', branches: [] })
 		assert.ok(html.includes('Stack is empty'))
-		// Empty state still carries the toolbar.
-		assert.ok(html.includes('data-cmd="submit"'))
+		// Empty state still carries the toolbar (Wave B contract uses `data-kind`).
+		assert.ok(html.includes('data-kind="submit"'))
 	})
 
 	test('renders every branch with its PR state', () => {
@@ -161,5 +161,83 @@ suite('stackDashboardView: buildDashboardHtml', () => {
 			branches: [],
 		})
 		assert.ok(!html.includes('data-testid="adapter-strip"'))
+	})
+
+	// ── Wave B additions ───────────────────────────────────────────────────
+
+	test('Wave B: toolbar exposes the new stack-wide actions', () => {
+		const html = buildDashboardHtml({
+			workspaceName: 'proj',
+			branches: [{ name: 'feat/a', base: 'main', order: 1, color: '#abc' }],
+		})
+		for (const kind of ['addBranch', 'refresh', 'submit', 'mergeStack', 'saveCheckpoint', 'showUndoLog']) {
+			assert.ok(html.includes(`data-kind="${kind}"`), `toolbar should include data-kind="${kind}"`)
+		}
+	})
+
+	test('Wave B: every row gets a "more" menu button', () => {
+		const html = buildDashboardHtml({
+			workspaceName: 'proj',
+			branches: [
+				{ name: 'feat/a', base: 'main', order: 1, color: '#abc' },
+				{ name: 'feat/b', base: 'main', order: 2, color: '#abc', prNumber: 9, prUrl: 'https://example.com/pr/9' },
+			],
+		})
+		const moreButtons = html.match(/data-testid="row-menu-button-[^"]+"/g) ?? []
+		assert.strictEqual(moreButtons.length, 2, 'exactly one more-menu button per row')
+		assert.ok(html.includes('data-testid="row-menu-button-feat/a"'))
+		assert.ok(html.includes('data-testid="row-menu-button-feat/b"'))
+		// The branch without a PR URL carries an empty data-branch-pr-url attribute.
+		assert.ok(html.includes('data-testid="row-menu-button-feat/a"'))
+		assert.ok(html.match(/row-menu-button-feat\/a"[^>]*data-branch-pr-url=""/))
+		// The branch with a PR URL carries the URL.
+		assert.ok(html.includes('data-branch-pr-url="https://example.com/pr/9"'))
+	})
+
+	test('Wave B: host markup includes the menu container + message listener', () => {
+		const html = buildDashboardHtml({
+			workspaceName: 'proj',
+			branches: [{ name: 'feat/a', base: 'main', order: 1, color: '#abc' }],
+		})
+		// The host-rendered <div id="menu"> is the anchor the script positions.
+		assert.ok(html.includes('<div id="menu"'))
+		// The script wires the message listener for `patchRow` delta updates.
+		assert.ok(html.includes("window.addEventListener('message'"), 'delta-patch message listener should be wired')
+		assert.ok(html.includes("msg.kind === 'patchRow'"), 'patchRow handling should be in the script')
+	})
+
+	test('Wave B: Escape key closes the menu via keydown handler', () => {
+		const html = buildDashboardHtml({
+			workspaceName: 'proj',
+			branches: [],
+		})
+		assert.ok(html.includes("e.key === 'Escape'"))
+	})
+
+	// ── buildBranchRowHtml (delta patching) ─────────────────────────────────
+
+	test('buildBranchRowHtml: produces a self-contained <li class="row"> for patching', () => {
+		const row = buildBranchRowHtml(
+			{ name: 'feat/a', base: 'main', order: 1, color: '#abc', assignedFilesCount: 2 },
+			0,
+			3,
+		)
+		assert.ok(row.trim().startsWith('<li class="row"'), 'row markup should start with <li>')
+		assert.ok(row.includes('data-branch="feat/a"'))
+		assert.ok(row.includes('📄 2'))
+		// Exactly one more-menu button per row.
+		assert.strictEqual((row.match(/class="more"/g) ?? []).length, 1)
+	})
+
+	test('buildBranchRowHtml: preserves position classes (first/last)', () => {
+		const first = buildBranchRowHtml({ name: 'a', base: 'main', order: 1, color: '#abc' }, 0, 3)
+		assert.ok(first.includes('connector first'))
+		assert.ok(!first.includes('connector last'))
+		const last = buildBranchRowHtml({ name: 'a', base: 'main', order: 1, color: '#abc' }, 2, 3)
+		assert.ok(last.includes('connector last'))
+		assert.ok(!last.includes('connector first'))
+		const mid = buildBranchRowHtml({ name: 'a', base: 'main', order: 1, color: '#abc' }, 1, 3)
+		assert.ok(!mid.includes('connector first'))
+		assert.ok(!mid.includes('connector last'))
 	})
 })
