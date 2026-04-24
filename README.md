@@ -76,6 +76,12 @@ the commits it should.
   that aren't ready for any branch yet. The scratch SCM panel hides the commit input
   so it stays visually distinct. Use **GitBraid: Add Scratch Area** from the command
   palette to create one.
+- **Virtual branches** — add a stack entry without creating a worktree. Files assigned
+  to a virtual branch are captured to an append-only log under `.worktrees/virtual/`
+  until you invoke **GitBraid: Materialise Virtual Branch**, at which point the worktree
+  is created and every captured file is written into it. Ideal for speculative work
+  where you don't want to pay the cost of `git worktree add` upfront. Commands:
+  **Add Virtual Branch**, **Materialise Virtual Branch**, **Discard Virtual Branch**.
 - **Import / export** — share a stack layout with teammates via `.gitbraid/stack.json`
   committed to the repository.
 - **AI / chat integration** — nine VS Code language model tools (`gitbraid_getStack`,

@@ -4,6 +4,7 @@ import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
+import type { VirtualBranchStore } from './virtualBranchStore'
 
 /**
  * Resolves file content through the cumulative branch stack.
@@ -27,6 +28,7 @@ export class StackResolver implements vscode.Disposable {
 		private readonly _config: ConfigService,
 		private readonly _branchStack: BranchStackService,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
+		private readonly _virtualStore?: VirtualBranchStore,
 	) {}
 
 	dispose(): void {
@@ -53,6 +55,21 @@ export class StackResolver implements vscode.Disposable {
 		const branch = this._config.getAssignment(norm)
 		if (!branch) {
 			// Floating — serve the primary workspace copy
+			const uri = vscode.Uri.joinPath(workspaceRoot, norm)
+			try {
+				return await vscode.workspace.fs.readFile(uri)
+			} catch {
+				return undefined
+			}
+		}
+
+		// Virtual branch — look up the snapshot in the virtual store.  If the
+		// store has no record yet we fall through to the primary workspace so
+		// freshly created files are visible immediately.
+		if (this._virtualStore && this._config.isVirtual(branch)) {
+			const stored = this._virtualStore.readFile(branch, norm)
+			if (stored) return stored
+			if (this._virtualStore.isDeleted(branch, norm)) return undefined
 			const uri = vscode.Uri.joinPath(workspaceRoot, norm)
 			try {
 				return await vscode.workspace.fs.readFile(uri)

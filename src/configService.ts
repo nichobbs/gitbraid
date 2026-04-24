@@ -404,6 +404,33 @@ export class ConfigService implements vscode.Disposable {
 		this._onDidChangeStack.fire({ type: 'reorder', branch: name })
 	}
 
+	/**
+	 * Toggle the `virtual` flag for a branch.  `true` marks the branch as
+	 * not-yet-materialised (no worktree on disk); `false` flips it back after
+	 * a successful materialisation.
+	 */
+	async setVirtual(name: string, virtual: boolean): Promise<void> {
+		const entry = this._config.stack.find((e) => e.name === name)
+		if (!entry) {
+			throw new ConfigError(`Branch "${name}" is not in the stack`)
+		}
+		const normalised = virtual === true ? true : undefined
+		if (entry.virtual === normalised) return
+		entry.virtual = normalised
+		await this._writeToDisk()
+		this._onDidChangeStack.fire({ type: 'reorder', branch: name })
+	}
+
+	/** Returns true if the named branch is currently virtual. */
+	isVirtual(name: string): boolean {
+		return this._config.stack.find((e) => e.name === name)?.virtual === true
+	}
+
+	/** Returns the names of every virtual branch currently in the stack. */
+	getVirtualBranches(): string[] {
+		return this._config.stack.filter((e) => e.virtual === true).map((e) => e.name)
+	}
+
 	async setCommitTemplate(name: string, template: string): Promise<void> {
 		const entry = this._config.stack.find((e) => e.name === name)
 		if (!entry) {

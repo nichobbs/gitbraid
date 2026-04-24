@@ -27,6 +27,14 @@ export interface BranchStackEntry {
 	 */
 	scratch?: boolean
 	/**
+	 * When true this branch has no git worktree yet — it exists only as an
+	 * in-memory set of file snapshots held by {@link VirtualBranchStore}.
+	 * Materialising the branch (see `gitbraid.materialiseVirtualBranch`) creates
+	 * the worktree, writes every tracked file, and flips this flag back to
+	 * `undefined` / `false`.  See `docs/plans/08-virtual-branches.md`.
+	 */
+	virtual?: boolean
+	/**
 	 * Optional commit-message template for this branch's SCM input box.
 	 * Variables: `{branch}` (full name), `{issue}` (first JIRA-style token),
 	 * `{scope}` (last path segment after `/`).

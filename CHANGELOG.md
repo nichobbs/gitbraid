@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- **Virtual branches (Plan 08)** — a new kind of stack entry that exists only
+  as an in-memory set of file snapshots until the user commits.  Commands:
+  `GitBraid: Add Virtual Branch`, `GitBraid: Materialise Virtual Branch`,
+  `GitBraid: Discard Virtual Branch`.  Virtual entries skip `git worktree
+  add` and appear in the Branch Stack view under a `$(cloud)` badge.  Saves
+  on assigned files are routed to an append-only JSONL store under
+  `.worktrees/virtual/<slug>.jsonl` so VS Code restarts don't lose work.
+  Materialisation creates the worktree, applies every stored file, and
+  flips the branch back to the regular commit path.  Exposed via the
+  public API (`addBranch(..., { virtual: true })`, `materialiseBranch`,
+  `getVirtualBranches`).  Store implementation: `src/virtualBranchStore.ts`;
+  commands: `src/commands/virtualBranchCommands.ts`; plan:
+  `docs/plans/08-virtual-branches.md`.
 - **Multi-host PR support** — `prHostAdapter.ts` now ships `GitLabAdapter`
   (REST v4, including Merge Train enqueue), `BitbucketAdapter` (Cloud REST
   v2), and `AzureDevOpsAdapter` (REST v7.1 for dev.azure.com and the
@@ -72,6 +85,14 @@
   `gitbraid.moveBranchDown`) — reorder the stack without the mouse. Bound to
   `Alt+Up` / `Alt+Down` when a branch node is focused in the Branch Stack view.
   Also available via right-click context menu on any branch node.
+
+### Notes
+- Coverage floor: adding the new `src/commands/virtualBranchCommands.ts`
+  (which follows the same register-command pattern as other command modules
+  and is therefore dominated by VS Code-host-only code paths) pulls lines
+  coverage by ~0.3 pp.  The core service (`virtualBranchStore.ts`) is at
+  ~97% lines / ~95% functions, so the drop is strictly proportional to the
+  new command-registration surface.  No threshold reduction.
 
 ### Fixed
 - Activity bar icon now renders correctly in all VS Code themes. The SVG was

@@ -8,6 +8,7 @@ import { BranchStackEntry } from './configTypes'
 import { ConfigService } from './configService'
 import { git, checkRefFormat } from './gitFunctions'
 import { getDefaultGitRunner } from './gitRunner'
+import type { VirtualBranchStore } from './virtualBranchStore'
 
 const WORKTREES_DIR = '.worktrees'
 
@@ -130,8 +131,16 @@ export class BranchStackService implements vscode.Disposable {
 	 * Public constructor — each `FolderContext` creates its own instance
 	 * paired with that folder's `ConfigService`.  The `getInstance()` /
 	 * `resetInstance()` pair below remains for the test suite.
+	 *
+	 * @param _virtualStore  Optional virtual-branch store.  Required for the
+	 *                       `addBranchToStack({virtual: true})` and
+	 *                       `materialiseBranch` flows; classical worktree
+	 *                       operations work without it.
 	 */
-	constructor(private readonly _config: ConfigService) {}
+	constructor(
+		private readonly _config: ConfigService,
+		private readonly _virtualStore?: VirtualBranchStore,
+	) {}
 
 	/** Legacy singleton, retained for tests (see class header). */
 	static getInstance(config?: ConfigService): BranchStackService {
@@ -179,7 +188,10 @@ export class BranchStackService implements vscode.Disposable {
 		// target directory is distinct; sequential initialisation was costing
 		// ~500 ms * N on cold starts.  Capped so we don't hammer the pack file
 		// lock on low-CPU hosts.  (T46 in the remediation plan.)
-		await runWithConcurrency(stack, 3, (entry) => this._ensureWorktree(entry))
+		//
+		// Virtual branches are skipped — by design they have no worktree.
+		const materialised = stack.filter((e) => e.virtual !== true)
+		await runWithConcurrency(materialised, 3, (entry) => this._ensureWorktree(entry))
 
 		// Prune orphans
 		await this._pruneOrphans(stack)
@@ -220,13 +232,23 @@ export class BranchStackService implements vscode.Disposable {
 	// ─── Stack mutations ──────────────────────────────────────────────────────
 
 	/**
-	 * Add a new branch to the stack. Creates the git branch and worktree.
+	 * Add a new branch to the stack. Creates the git branch and worktree,
+	 * unless the branch is marked virtual — in which case it is recorded in
+	 * the config only and no git objects are touched until materialisation.
 	 *
 	 * @param name - Git branch name (e.g. "feature/docs")
 	 * @param base - Base branch name (e.g. "main" or another stack branch)
 	 * @param color - Hex colour for decorations (defaults to grey)
+	 * @param opts  - `virtual: true` defers worktree creation until the branch
+	 *                is materialised or committed.  See
+	 *                `docs/plans/08-virtual-branches.md`.
 	 */
-	async addBranchToStack(name: string, base: string, color = '#888888'): Promise<void> {
+	async addBranchToStack(
+		name: string,
+		base: string,
+		color = '#888888',
+		opts?: { virtual?: boolean },
+	): Promise<void> {
 		this._assertInitialised()
 		// Two-tier validation: synchronous pre-filter rejects obvious junk
 		// without spawning git; `git check-ref-format` catches the edge cases
@@ -235,15 +257,66 @@ export class BranchStackService implements vscode.Disposable {
 		validateBranchName(base)
 		this._validateNoCycle(name, base)
 
-		log.info(`BranchStackService.addBranchToStack: ${name} (base=${base})`)
+		const virtual = opts?.virtual === true
+		log.info(`BranchStackService.addBranchToStack: ${name} (base=${base}${virtual ? ', virtual' : ''})`)
 
-		// Create the worktree (which creates the branch too)
-		await this._createWorktree(name, base)
+		if (!virtual) {
+			// Create the worktree (which creates the branch too)
+			await this._createWorktree(name, base)
+		}
 
 		// Record in config
-		await this._config.addBranch({ name, base, color })
+		await this._config.addBranch({ name, base, color, virtual: virtual || undefined })
 
-		log.info(`BranchStackService: branch "${name}" added to stack`)
+		log.info(`BranchStackService: branch "${name}" added to stack${virtual ? ' (virtual)' : ''}`)
+	}
+
+	/**
+	 * Promote a virtual branch to a real worktree.
+	 *
+	 * 1. Create `.worktrees/<slug>` via `git worktree add <base>`.
+	 * 2. Apply every file currently tracked in the virtual store.
+	 * 3. Flip the `virtual` flag off and delete the store entry.
+	 *
+	 * If step 1 or 2 fails the virtual store is left intact so the user can
+	 * retry without losing work.
+	 */
+	async materialiseBranch(name: string): Promise<void> {
+		this._assertInitialised()
+		const entry = this._config.getBranch(name)
+		if (!entry) {
+			throw new BranchStackError(`Branch "${name}" is not in the stack`)
+		}
+		if (entry.virtual !== true) {
+			throw new BranchStackError(`Branch "${name}" is not virtual`)
+		}
+		if (!this._virtualStore) {
+			throw new BranchStackError(
+				`Cannot materialise "${name}" — VirtualBranchStore is not wired up on this service`
+			)
+		}
+
+		log.info(`BranchStackService.materialiseBranch: ${name} (base=${entry.base})`)
+
+		// Step 1: create the worktree (and the branch if missing).
+		await this._createWorktree(name, entry.base)
+
+		// Step 2: flush the virtual store into the new worktree.
+		const wtPath = worktreePath(this._workspaceRoot!, name).fsPath
+		const files = this._virtualStore.listFiles(name)
+		for (const rel of files) {
+			const content = this._virtualStore.readFile(name, rel)
+			if (!content) continue
+			const dest = path.join(wtPath, rel)
+			await fs.promises.mkdir(path.dirname(dest), { recursive: true })
+			await fs.promises.writeFile(dest, Buffer.from(content))
+		}
+
+		// Step 3: flip the flag off and drop the store.
+		await this._config.setVirtual(name, false)
+		await this._virtualStore.removeBranch(name)
+
+		log.info(`BranchStackService: materialised "${name}" with ${String(files.length)} file(s)`)
 	}
 
 	/**
@@ -256,20 +329,43 @@ export class BranchStackService implements vscode.Disposable {
 		this._assertInitialised()
 		log.info(`BranchStackService.removeBranchFromStack: ${name} (force=${force})`)
 
-		const wtPath = worktreePath(this._workspaceRoot!, name)
-		if (fs.existsSync(wtPath.fsPath)) {
-			if (!force && await this._worktreeIsDirty(wtPath.fsPath)) {
-				const answer = await vscode.window.showWarningMessage(
-					`Branch "${name}" has uncommitted changes in its worktree. Remove anyway?`,
-					{ modal: true },
-					'Remove',
-				)
-				if (answer !== 'Remove') {
-					return
+		const entry = this._config.getBranch(name)
+		const isVirtual = entry?.virtual === true
+
+		if (isVirtual) {
+			// Virtual branches carry no worktree.  If the store has any tracked
+			// file we require explicit confirmation (unless force=true) so the
+			// user can't lose in-progress edits by accident.
+			if (!force && this._virtualStore) {
+				const trackedFiles = this._virtualStore.listFiles(name).length
+				if (trackedFiles > 0) {
+					const answer = await vscode.window.showWarningMessage(
+						`Virtual branch "${name}" has ${String(trackedFiles)} uncommitted file(s) in its virtual store. Discard them?`,
+						{ modal: true },
+						'Discard',
+					)
+					if (answer !== 'Discard') {
+						return
+					}
 				}
-				force = true
 			}
-			await git.worktree.remove(wtPath.fsPath, force)
+			await this._virtualStore?.removeBranch(name)
+		} else {
+			const wtPath = worktreePath(this._workspaceRoot!, name)
+			if (fs.existsSync(wtPath.fsPath)) {
+				if (!force && await this._worktreeIsDirty(wtPath.fsPath)) {
+					const answer = await vscode.window.showWarningMessage(
+						`Branch "${name}" has uncommitted changes in its worktree. Remove anyway?`,
+						{ modal: true },
+						'Remove',
+					)
+					if (answer !== 'Remove') {
+						return
+					}
+					force = true
+				}
+				await git.worktree.remove(wtPath.fsPath, force)
+			}
 		}
 		await this._config.removeBranch(name)
 
@@ -413,6 +509,11 @@ export class BranchStackService implements vscode.Disposable {
 		for (const entry of entries) {
 			if (entry === 'gitbraid-config.json' || entry === 'gitbraid-config.json.tmp' ||
 				entry === 'local-config.json' || entry === 'local-config.json.tmp') {
+				continue
+			}
+			// Virtual-branch store lives under `.worktrees/virtual/` — never
+			// treat it as an orphan worktree.
+			if (entry === 'virtual') {
 				continue
 			}
 			if (expectedDirs.has(entry)) {

@@ -11,6 +11,12 @@ import { BranchStackEntry, BranchStatus, StackStatus, AssignmentChangeEvent, Sta
 export interface BranchOptions {
 	/** Hex colour for Explorer decorations, e.g. "#4CAF50" */
 	color?: string
+	/**
+	 * When true the branch is created as a virtual branch — no git worktree
+	 * is allocated until the branch is materialised.  See
+	 * `docs/plans/08-virtual-branches.md` for the full design.
+	 */
+	virtual?: boolean
 }
 
 export interface CommitOptions {
@@ -40,6 +46,16 @@ export interface GitBraidExportedAPI {
 	 * @param force  Remove even if the worktree has uncommitted changes.
 	 */
 	removeBranch(name: string, force?: boolean): Promise<void>
+
+	/**
+	 * Materialises a virtual branch: creates its git worktree, writes every
+	 * file currently captured in the virtual-branch store, and flips the
+	 * branch's `virtual` flag off.  Throws if the branch isn't virtual.
+	 */
+	materialiseBranch(name: string): Promise<void>
+
+	/** Returns the names of every branch currently flagged as virtual. */
+	getVirtualBranches(): string[]
 
 	// ── File assignment ───────────────────────────────────────────────────────
 

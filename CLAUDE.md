@@ -55,9 +55,11 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`ConfigService`** (`src/configService.ts`) — Persists the stack and file/hunk assignments to `.worktrees/gitbraid-config.json`. Uses atomic temp-file writes, mtime-based concurrent-write detection, a 50 ms debounce, and version migration. Fires `onDidChangeAssignment` / `onDidChangeStack` events consumed throughout the codebase.
 
-**`BranchStackService`** (`src/branchStackService.ts`) — Manages git worktrees under `.worktrees/`. Branch name → directory mapping uses a slug + SHA1 suffix (`feature-docs__a1b2c3d`) to avoid collisions. Wraps ConfigService and is the authoritative source for stack membership.
+**`BranchStackService`** (`src/branchStackService.ts`) — Manages git worktrees under `.worktrees/`. Branch name → directory mapping uses a slug + SHA1 suffix (`feature-docs__a1b2c3d`) to avoid collisions. Wraps ConfigService and is the authoritative source for stack membership. Also handles `virtual` branches — entries flagged `virtual: true` skip `git worktree add` and live only in `VirtualBranchStore`; `materialiseBranch()` promotes them to regular worktree branches.
 
-**`WorkspaceSync`** (`src/workspaceSync.ts`) — File system watcher that copies assigned files to their branch worktree on every save, with a configurable debounce (default 200 ms). Also tracks "floating" files (modified but unassigned). Bidirectional sync is present but experimental (disabled by default).
+**`VirtualBranchStore`** (`src/virtualBranchStore.ts`) — Append-only JSONL store under `.worktrees/virtual/<slug>.jsonl` that captures file snapshots for branches flagged `virtual: true` in the stack. Crash-safe by construction (append-only), with lazy compaction when the log grows >2× the live working set. See `docs/plans/08-virtual-branches.md`.
+
+**`WorkspaceSync`** (`src/workspaceSync.ts`) — File system watcher that copies assigned files to their branch worktree on every save, with a configurable debounce (default 200 ms). Also tracks "floating" files (modified but unassigned). Saves for files assigned to a virtual branch go to `VirtualBranchStore` instead of a worktree. Bidirectional sync is present but experimental (disabled by default).
 
 **`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has a 32-entry LRU cache with a 1.5 s TTL to avoid redundant diff runs.
 
@@ -91,16 +93,23 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 ### Local Config Schema
 
-`.worktrees/gitbraid-config.json` is the only persistent state:
+`.worktrees/gitbraid-config.json` is the primary persistent state:
 ```json
 {
   "version": 1,
-  "stack": [{ "name": "feature/docs", "color": "#4CAF50", "order": 1, "base": "main" }],
+  "stack": [
+    { "name": "feature/docs", "color": "#4CAF50", "order": 1, "base": "main" },
+    { "name": "feature/idea", "color": "#6C8EBF", "order": 2, "base": "feature/docs", "virtual": true }
+  ],
   "assignments": { "src/foo.ts": "feature/docs" },
   "hunkAssignments": { "src/bar.ts": { "0": "feature/impl" } }
 }
 ```
 Never write this file directly — always go through `ConfigService`.
+
+Virtual branches (`virtual: true`) also persist their captured file
+snapshots to `.worktrees/virtual/<slug>.jsonl`; these files are managed
+exclusively by `VirtualBranchStore`.
 
 ## Testing Conventions
 

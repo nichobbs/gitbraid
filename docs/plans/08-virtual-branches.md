@@ -2,7 +2,9 @@
 
 **Inspiration:** GitButler's "virtual branches" model.
 
-**Status:** Justified, ready to schedule. Revised 2026-04-24.
+**Status:** Landed 2026-04-24.  See `src/virtualBranchStore.ts`,
+`src/commands/virtualBranchCommands.ts`, and the virtual-branch section in
+`USAGE.md`.
 
 ## TL;DR — why this is worth building
 
