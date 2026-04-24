@@ -66,11 +66,17 @@ if (!fs.existsSync(lcovPath)) {
 const text = fs.readFileSync(lcovPath, 'utf-8')
 
 const totals = { LH: 0, LF: 0, BRH: 0, BRF: 0, FNH: 0, FNF: 0 }
+let currentSfIsNodeModules = false
 for (const line of text.split(/\r?\n/)) {
 	const colon = line.indexOf(':')
 	if (colon <= 0) continue
 	const k = line.slice(0, colon)
 	const v = line.slice(colon + 1)
+	if (k === 'SF') {
+		currentSfIsNodeModules = v.includes('node_modules')
+		continue
+	}
+	if (currentSfIsNodeModules) continue
 	const n = Number(v)
 	if (!Number.isFinite(n)) continue
 	if (k in totals) totals[k] += n
