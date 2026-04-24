@@ -196,6 +196,41 @@ class Git {
 		})
 	}
 
+	/**
+	 * Run `git status --porcelain --ignored -z` in the given directory and
+	 * return a map of `relativePath → XY` two-character porcelain status code.
+	 * Ignored files are included with code `!!`.
+	 * Returns an empty map if git fails (e.g. worktree not yet initialised).
+	 */
+	async statusPorcelain(cwd: vscode.Uri): Promise<Map<string, string>> {
+		const result = new Map<string, string>()
+		let raw: string
+		try {
+			raw = await this._run(['status', '--porcelain', '--ignored', '-z'], cwd)
+		} catch {
+			return result
+		}
+		if (!raw) return result
+		// Porcelain v1 with -z: entries separated by NUL.
+		// Each entry: "XY filepath" or for rename/copy: "XY newpath\0oldpath"
+		const parts = raw.split('\0')
+		let i = 0
+		while (i < parts.length) {
+			const entry = parts[i]
+			if (!entry) { i++; continue }
+			const xy = entry.substring(0, 2)
+			const filePath = entry.substring(3)
+			if (filePath) {
+				result.set(filePath, xy)
+				// Rename/copy entries have the old path as the next NUL-delimited part
+				const x = xy[0]
+				if (x === 'R' || x === 'C') { i++ }
+			}
+			i++
+		}
+		return result
+	}
+
 	add (rootUri: vscode.Uri | undefined, ...targets: (vscode.Uri | string)[]) {
 		const paths: string[] = []
 		for (const target of targets) {

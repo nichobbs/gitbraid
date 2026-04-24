@@ -11,6 +11,7 @@ import {
 	FloatingGroupNode,
 	FileNode,
 	FloatingFileNode,
+	StackTreeNode,
 } from '../src/branchStackTreeProvider'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -106,7 +107,7 @@ suite('BranchStackTreeProvider', () => {
 		const docsEntry = svc.getBranch('feature/docs')
 		assert.ok(docsEntry, 'Expected feature/docs in stack')
 		const branchNode = new BranchNode(docsEntry)
-		const children = tree.getChildren(branchNode)
+		const children = await tree.getChildren(branchNode) ?? []
 
 		assert.strictEqual(children.length, 2)
 		const relPaths = (children as FileNode[]).map((n) => n.relativePath).sort((a, b) => a.localeCompare(b))
@@ -118,7 +119,7 @@ suite('BranchStackTreeProvider', () => {
 		const emptyEntry = svc.getBranch('feature/empty')
 		assert.ok(emptyEntry, 'Expected feature/empty in stack')
 		const branchNode = new BranchNode(emptyEntry)
-		const children = tree.getChildren(branchNode)
+		const children = await tree.getChildren(branchNode) ?? []
 		assert.strictEqual(children.length, 0)
 	})
 
@@ -157,7 +158,7 @@ suite('BranchStackTreeProvider', () => {
 		const docsEntry2 = svc.getBranch('feature/docs')
 		assert.ok(docsEntry2, 'Expected feature/docs in stack')
 		const branchNode = new BranchNode(docsEntry2)
-		const children = tree.getChildren(branchNode) as FileNode[]
+		const children = await tree.getChildren(branchNode) as FileNode[]
 
 		const relPaths = children.map((n) => n.relativePath)
 		assert.deepStrictEqual(relPaths, ['src/a.ts', 'src/m.ts', 'src/z.ts'])

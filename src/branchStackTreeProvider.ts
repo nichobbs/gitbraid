@@ -7,10 +7,13 @@ import type { PRAwareness } from './prAwareness'
 import { codiconForState, stateLabel } from './prAwareness'
 import type { WorktreeHealthService } from './worktreeHealthService'
 import { git } from './gitFunctions'
+import { worktreePath } from './branchStackService'
 
 // ─── Tree node types ──────────────────────────────────────────────────────────
 
-export type StackTreeNode = ProjectNode | BranchNode | FileNode | FloatingGroupNode | FloatingFileNode
+export type FileStatus = 'modified' | 'staged' | 'new' | 'committed'
+
+export type StackTreeNode = ProjectNode | BranchNode | FileNode | FileStatusGroupNode | FloatingGroupNode | FloatingFileNode
 
 /**
  * Root-level node representing the workspace folder (project).  Branch nodes
@@ -54,12 +57,14 @@ export class ScratchNode extends vscode.TreeItem {
 	}
 }
 
-/** A file assigned to a branch — child of BranchNode. */
+/** A file assigned to a branch — child of BranchNode or FileStatusGroupNode. */
 export class FileNode extends vscode.TreeItem {
 	readonly kind = 'file' as const
 	constructor(
 		public readonly relativePath: string,
 		public readonly branchName: string,
+		/** When set, this node lives inside a status group rather than directly under the branch. */
+		public readonly parentGroupStatus?: FileStatus,
 	) {
 		const label = relativePath.split('/').pop() ?? relativePath
 		super(label, vscode.TreeItemCollapsibleState.None)
@@ -67,12 +72,44 @@ export class FileNode extends vscode.TreeItem {
 		this.description = relativePath
 		this.tooltip = `${relativePath} → ${branchName}`
 		this.iconPath = vscode.ThemeIcon.File
-		this.resourceUri = vscode.workspace.workspaceFolders?.[0]
+		// Do NOT set resourceUri — that would cause the branch badge from
+		// FileDecorationProvider to appear here (redundant since files are
+		// already grouped under their branch node).
+		const fileUri = vscode.workspace.workspaceFolders?.[0]
 			? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, relativePath)
 			: undefined
-		this.command = this.resourceUri
-			? { command: 'vscode.open', title: 'Open', arguments: [this.resourceUri] }
+		this.command = fileUri
+			? { command: 'vscode.open', title: 'Open', arguments: [fileUri] }
 			: undefined
+	}
+}
+
+/** A status-category group under a BranchNode (Modified / Staged / New / Committed). */
+export class FileStatusGroupNode extends vscode.TreeItem {
+	readonly kind = 'fileStatusGroup' as const
+
+	private static readonly _labels: Record<FileStatus, string> = {
+		modified: 'Modified',
+		staged: 'Staged',
+		new: 'New',
+		committed: 'Committed',
+	}
+	private static readonly _icons: Record<FileStatus, string> = {
+		modified: 'diff-modified',
+		staged: 'diff-added',
+		new: 'diff-added',
+		committed: 'check',
+	}
+
+	constructor(
+		public readonly status: FileStatus,
+		public readonly branchName: string,
+		public readonly files: readonly string[],
+	) {
+		super(FileStatusGroupNode._labels[status], vscode.TreeItemCollapsibleState.Expanded)
+		this.contextValue = 'fileStatusGroup'
+		this.description = String(files.length)
+		this.iconPath = new vscode.ThemeIcon(FileStatusGroupNode._icons[status])
 	}
 }
 
@@ -160,6 +197,19 @@ function _floatingAgeDecoration(
 	}
 }
 
+/**
+ * Map a two-character porcelain XY code to a `FileStatus` category.
+ * `undefined` means the file is not in the status output → it is clean.
+ */
+function _categorizeXY(xy: string | undefined): FileStatus {
+	if (xy === undefined) return 'committed'
+	const x = xy[0]
+	const y = xy[1]
+	if (x === '?' && y === '?') return 'new'
+	if (x !== ' ' && x !== '?' && (y === ' ' || y === undefined)) return 'staged'
+	return 'modified'
+}
+
 // ─── Tree data provider ───────────────────────────────────────────────────────
 
 /**
@@ -207,6 +257,12 @@ export class BranchStackTreeProvider
 
 	/** The currently checked-out branch name; refreshed on HEAD change. */
 	private _currentBranch: string | undefined = undefined
+
+	/**
+	 * Cache of git-status groups per branch, populated during `_getBranchChildren`.
+	 * Keyed by branch name. Cleared on every `refresh()` so it stays current.
+	 */
+	private readonly _statusCache = new Map<string, { staged: string[], modified: string[], new: string[], committed: string[] }>()
 
 	constructor(
 		config: ConfigService,
@@ -401,6 +457,8 @@ export class BranchStackTreeProvider
 	}
 
 	refresh(node?: StackTreeNode): void {
+		// Clear the status cache so the next getChildren call re-runs git status
+		if (!node) this._statusCache.clear()
 		this._onDidChangeTreeData.fire(node)
 	}
 
@@ -442,7 +500,7 @@ export class BranchStackTreeProvider
 		return element
 	}
 
-	getChildren(element?: StackTreeNode): StackTreeNode[] {
+	getChildren(element?: StackTreeNode): vscode.ProviderResult<StackTreeNode[]> {
 		if (!element) {
 			// When a rootUri is set, the root level contains a single ProjectNode;
 			// branches and the floating group are its children.  Without a rootUri
@@ -458,14 +516,11 @@ export class BranchStackTreeProvider
 		}
 
 		if (element.kind === 'branch') {
-			const assignments = this._config.getAllAssignments()
-			const children: FileNode[] = []
-			for (const [rel, branch] of Object.entries(assignments)) {
-				if (branch === element.entry.name) {
-					children.push(new FileNode(rel, branch))
-				}
-			}
-			return children.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+			return this._getBranchChildren(element)
+		}
+
+		if (element.kind === 'fileStatusGroup') {
+			return element.files.map((rel) => new FileNode(rel, element.branchName, element.status))
 		}
 
 		if (element.kind === 'floatingGroup') {
@@ -476,9 +531,76 @@ export class BranchStackTreeProvider
 	}
 
 	/**
+	 * Resolve the git working-tree directory for `element`.
+	 * - CurrentBranchNode (files live in main workspace) → `_rootUri`
+	 * - All other managed branches → their worktree under `.worktrees/`
+	 * Returns undefined when no rootUri is set (e.g. test contexts).
+	 */
+	private _getWorktreeCwd(element: BranchNode): vscode.Uri | undefined {
+		if (!this._rootUri) return undefined
+		if (element.contextValue === 'currentBranch') return this._rootUri
+		return worktreePath(this._rootUri, element.entry.name)
+	}
+
+	/**
+	 * Returns the file children for a branch node.  When a rootUri is
+	 * available the list is enriched with git-status groups and ignored files
+	 * are filtered out.  Falls back to a plain sorted file list when git is
+	 * unavailable or the worktree doesn't exist yet.
+	 */
+	private _getBranchChildren(element: BranchNode): vscode.ProviderResult<StackTreeNode[]> {
+		const branchName = element.entry.name
+		const assignments = this._config.getAllAssignments()
+		let assigned = Object.entries(assignments)
+			.filter(([, b]) => b === branchName)
+			.map(([rel]) => rel)
+			.sort((a, b) => a.localeCompare(b))
+
+		if (assigned.length === 0) return []
+
+		const cwd = this._getWorktreeCwd(element)
+		if (!cwd) {
+			// No rootUri (test context) — return flat list without grouping
+			return assigned.map((rel) => new FileNode(rel, branchName))
+		}
+
+		return git.statusPorcelain(cwd).then((statusMap) => {
+			// Filter out git-ignored files
+			assigned = assigned.filter((rel) => statusMap.get(rel) !== '!!')
+			if (assigned.length === 0) return []
+			return this._groupByStatus(branchName, assigned, statusMap)
+		})
+	}
+
+	/**
+	 * Group a list of relative paths by their porcelain git status and return
+	 * the appropriate tree nodes.  Populates `_statusCache` as a side-effect
+	 * so that `getParent` can reconstruct group nodes without re-running git.
+	 * When all files share the same status the group wrapper is omitted and
+	 * FileNode items are returned directly (avoids single-item nesting).
+	 */
+	private _groupByStatus(
+		branchName: string,
+		assigned: string[],
+		statusMap: Map<string, string>,
+	): StackTreeNode[] {
+		const grouped = { staged: [] as string[], modified: [] as string[], new: [] as string[], committed: [] as string[] }
+		for (const rel of assigned) {
+			grouped[_categorizeXY(statusMap.get(rel))].push(rel)
+		}
+		this._statusCache.set(branchName, grouped)
+
+		const statuses: FileStatus[] = ['modified', 'staged', 'new', 'committed']
+		const nonEmpty = statuses.filter((s) => grouped[s].length > 0)
+		if (nonEmpty.length <= 1) {
+			return assigned.map((rel) => new FileNode(rel, branchName))
+		}
+		return nonEmpty.map((s) => new FileStatusGroupNode(s, branchName, grouped[s]))
+	}
+
+	/**
 	 * Returns the children of the project/root node: the active branch first
-	 * (if it is not already a managed stack entry), then managed stack branches
-	 * sorted alphabetically, then the floating group at the end.
+	 * (if it is not already a managed stack entry), then managed stack branches	 * sorted alphabetically, then the floating group at the end.
 	 */
 	private _branchChildren(): StackTreeNode[] {
 		const stack = this._config.getStack()
@@ -503,7 +625,17 @@ export class BranchStackTreeProvider
 		if (element.kind === 'branch' || element.kind === 'floatingGroup') {
 			return this._rootUri ? new ProjectNode(this._rootUri) : undefined
 		}
+		if (element.kind === 'fileStatusGroup') {
+			const entry = this._config.getBranch(element.branchName)
+			return entry ? new BranchNode(entry) : undefined
+		}
 		if (element.kind === 'file') {
+			if (element.parentGroupStatus !== undefined) {
+				// File lives inside a status group — reconstruct the group node from cache
+				const cached = this._statusCache.get(element.branchName)
+				const files = cached?.[element.parentGroupStatus] ?? [element.relativePath]
+				return new FileStatusGroupNode(element.parentGroupStatus, element.branchName, files)
+			}
 			const entry = this._config.getBranch(element.branchName)
 			return entry ? new BranchNode(entry) : undefined
 		}

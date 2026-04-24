@@ -192,5 +192,47 @@ export function registerViewCommands(deps: CommandDeps): vscode.Disposable[] {
 			await git.worktree.unlock(ctx.branchStack.getWorktreePath(branchName).fsPath)
 			await vscode.window.showInformationMessage(`Unlocked worktree for "${branchName}"`)
 		})),
+
+		vscode.commands.registerCommand('gitbraid.copyStackDiagram', cmd(async () => {
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('GitBraid: stack is empty — nothing to copy.')
+				return
+			}
+			const assignments = ctx.config.getAllAssignments()
+
+			const fileCounts: Record<string, number> = {}
+			for (const branch of Object.values(assignments)) {
+				fileCounts[branch] = (fileCounts[branch] ?? 0) + 1
+			}
+
+			const sorted = [...stack].sort((a, b) => a.order - b.order)
+			const children: Record<string, string[]> = {}
+			for (const entry of sorted) {
+				if (!children[entry.base]) children[entry.base] = []
+				children[entry.base].push(entry.name)
+			}
+
+			const rootBase = sorted[0].base
+			const lines: string[] = [rootBase]
+
+			function renderChildren(parent: string, prefix: string): void {
+				const kids = children[parent] ?? []
+				for (let i = 0; i < kids.length; i++) {
+					const last = i === kids.length - 1
+					const branchName = kids[i]
+					const count = fileCounts[branchName] ?? 0
+					const fileLabel = count === 1 ? '1 file' : `${count} files`
+					const countStr = count > 0 ? `  [${fileLabel}]` : ''
+					lines.push(`${prefix}${last ? '└── ' : '├── '}${branchName}${countStr}`)
+					renderChildren(branchName, prefix + (last ? '    ' : '│   '))
+				}
+			}
+
+			renderChildren(rootBase, '')
+			await vscode.env.clipboard.writeText(lines.join('\n'))
+			vscode.window.setStatusBarMessage('GitBraid: stack diagram copied to clipboard.', 3000)
+		})),
 	]
 }
