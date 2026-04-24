@@ -2,9 +2,13 @@
 
 **Inspiration:** Graphite web app; GitButler panel; Sapling ISL.
 
-**Status:** **Implementing.** Wave A landed; Waves B and C queued.  See
+**Status:** **Implemented (Waves A/B/C).**  See
 `src/stackDashboardView.ts`, `src/dashboardSnapshot.ts`,
-`src/commands/dashboardCommands.ts`.  Depends on
+`src/dashboardMessages.ts`, and
+`src/commands/dashboardCommands.ts`.  Rich-PR-body preview and
+native context-menu polish remain as follow-ups; core
+functionality (data surface, actions, drill-down, search,
+persistence) ships now.  Depends on
 [plan 01](01-pr-creation.md) for PR-host integration.
 
 ## Goal

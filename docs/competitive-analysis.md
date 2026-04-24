@@ -1,21 +1,23 @@
 # GitBraid vs Other Stacked-Diff Tooling
 
-_Last updated: 2026-04-25. Descriptions are based on publicly available
+_Last updated: 2026-04-26. Descriptions are based on publicly available
 documentation current at the time of writing; verify against each
 project's own docs before making claims._
 
-> **What changed since 2026-04-24:** Main has landed the first-pass
-> PR host integration (`PRHostAdapter`, `SubmitStackService`, the
-> stacked-PR `gitbraid.submitStack` + `openStackedPR` commands), a
-> read-only stacked-PR dashboard webview (`gitbraid.stackDashboard`),
-> a merge-queue driver (`gitbraid.mergeStack` using GitHub's
-> `enqueuePullRequest` GraphQL), a Sapling-style `gitbraid.absorbHunks`,
-> an in-process MCP server (`src/mcpServer.ts`), a `CommitListService`
-> data source for the per-branch commit inspector, the
-> `singleCommit` branch flag with a toggle command (invariant not
-> yet enforced at push/commit time), and a persistent JSONL undo
-> log with `gitbraid.showUndoLog`. Several capability-matrix cells
-> move from ❌ → 🟡 or ✅ as a result.
+> **What changed since 2026-04-25:** The dashboard webview has been
+> reworked across three waves — data surface (current-branch
+> marker, ahead/behind counts, checks pill, floating banner,
+> single-commit icon, assigned-files count, adapter strip), action
+> surface (typed message contract, per-row ⋯ menu covering ~15
+> actions, delta row patching), and drill-down (collapsible Commits
+> + Files drawers per row backed by `CommitListService`, search
+> filter, webview state persistence).  The three "gaps" flagged on
+> 2026-04-25 also closed: single-commit mode now enforces amend at
+> commit time and offers squash-to-one at push time; the
+> CommitListService tree nodes are wired into the stack tree view;
+> persistent undo supports replay-through-an-action via
+> `gitbraid.showUndoLog`.  Matrix cells move from 🟡 → ✅
+> accordingly.
 
 ## Landscape at a glance
 
@@ -46,13 +48,13 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
 | Auto-rebase child branches on parent advance | ✅ | ✅ | ✅ | ✅ | 🟡 | 🟡 (`RebaseSuggestionService` + `RebaseRecovery`) |
 | One-click "push whole stack" | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (`gitbraid.pushStack`) |
 | PR creation / sync | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 (`gitbraid.submitStack`; GitHub-only, Octokit + extension adapters; GitLab deferred) |
-| PR stack visualisation (web UI or panel) | ✅ (web) | ❌ | ❌ | ❌ | 🟡 | 🟡 (`gitbraid.stackDashboard` webview; reviews/checks UI deferred) |
+| PR stack visualisation (web UI or panel) | ✅ (web) | ❌ | ❌ | ❌ | 🟡 | ✅ (`gitbraid.stackDashboard` webview with per-row action menu, commits/files drawers, search + state persistence) |
 | Stacked-PR body linkage (cross-PR references) | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (idempotent `<!-- gitbraid:stack-* -->` block) |
 | Merge queue integration | ✅ | ❌ | ❌ | ❌ | ❌ | 🟡 (`gitbraid.mergeStack` drives GitHub merge queue; tree-view queue decoration pending) |
 | Per-commit identity that survives rewrites | ✅ (`gt`) | ✅ (trailer) | ❌ | ✅ | 🟡 | 🟡 (hunk anchors; no commit-level trailer yet) |
-| Single-commit-per-PR enforcement | ❌ | ✅ | ❌ | ❌ | ❌ | 🟡 (flag + toggle command; commit/push invariant pending) |
-| Per-branch commit inspector / graph | ✅ | ❌ | ❌ | ✅ (`sl`) | ✅ | 🟡 (`CommitListService` data source; tree nodes pending) |
-| Persistent undo across sessions | ❌ | ❌ | ❌ | 🟡 (`sl undo`) | ❌ | 🟡 (`.worktrees/undo-log.jsonl` + `gitbraid.showUndoLog`; full replay pending) |
+| Single-commit-per-PR enforcement | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ (flag + toggle + amend on commit + squash-on-push prompt) |
+| Per-branch commit inspector / graph | ✅ | ❌ | ❌ | ✅ (`sl`) | ✅ | ✅ (tree-view CommitNodes + dashboard commits drawer) |
+| Persistent undo across sessions | ❌ | ❌ | ❌ | 🟡 (`sl undo`) | ❌ | ✅ (replay through action via `gitbraid.showUndoLog`) |
 | VS Code tree view | 🟡 (extension) | ❌ | ❌ | 🟡 (ISL) | ❌ | ✅ |
 | AI / LM tool integration | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (VS Code LM tools + in-process MCP server) |
 | MCP / external agent control | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (`src/mcpServer.ts`, token-auth local socket) |
@@ -175,6 +177,11 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
   Sapling `sl absorb` heuristic, but scoped to each file's assigned
   branch — so a single editor buffer can produce fixups on N
   different branches in one command.
+- **Typed webview contract + delta patching.** The dashboard
+  persists scroll, search-query, and drawer-open state across
+  reloads; updates to a single branch row patch in place without
+  blowing away the user's interaction state.  Not common in
+  editor-embedded stack UIs.
 
 ## Where GitBraid is behind
 
@@ -183,27 +190,17 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
   extension. GitLab is deferred; no Bitbucket / Azure DevOps
   adapters. Graphite / git-spr / ghstack / GitButler all cover
   more ground.
-- **No native stack-review web UI** to match Graphite's dashboard —
-  the in-editor `stackDashboard` webview is read-only for now
-  (inline `Submit` / `Rebase` / `Open PR` / `Refresh` only; review
-  decisions and check-run summaries deferred until the adapter
-  exposes them).
-- **Single-commit-per-PR mode is a flag, not a contract.** The
-  `singleCommit` branch property is persisted and a toggle command
-  exists, but `commitBranch` doesn't yet amend and the push path
-  doesn't yet validate the invariant. git-spr / ghstack enforce
-  this end-to-end.
-- **Per-branch commit inspector is not yet in the tree.**
-  `CommitListService` computes the data; the tree-provider
-  integration (`CommitGroupNode` / `CommitNode` under each
-  `BranchNode`) hasn't landed. GitButler and Sapling ship this
-  polished.
-- **Persistent undo is informational only.** `.worktrees/undo-log.jsonl`
-  survives restarts and `gitbraid.showUndoLog` reveals it, but the
-  "replay through this action" UX is pending — git-branchless
-  remains the gold standard here.
+- **No review-UI polish in the dashboard yet.**  `stackDashboard`
+  now covers full actions (per-row menu, submit / merge /
+  checkpoint / undo, commits + files drawers, search) but the
+  review-decisions and check-run detail panels still need the
+  adapter to expose that data.  Graphite's web UI remains richer
+  here.
 - **No virtual branches without a worktree each.** GitButler's
   signature feature is still future work for GitBraid (plan 08).
+- **Rich PR-body preview.**  The idempotent stacked-PR block is
+  written by `submitStack`, but the dashboard doesn't yet show a
+  preview of what Submit would write.  Small follow-up.
 
 ## Positioning summary
 
