@@ -1056,9 +1056,6 @@
 			}
 		]
 	},
-	"dependencies": {
-		"@modelcontextprotocol/sdk": "^1.29.0"
-	},
 	"scripts": {
 		"vscode:prepublish": "npm run lint && npm run compile",
 		"build": "node esbuild.js",
@@ -1072,6 +1069,7 @@
 		"refresh": "npm run install-vsix"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.29.0",
 		"minimatch": "^9.0.9"
 	},
 	"devDependencies": {
