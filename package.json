@@ -379,6 +379,12 @@
 				"icon": "$(cloud-download)"
 			},
 			{
+				"command": "gitbraid.importStackedTool",
+				"title": "Import Stack from External Tool…",
+				"category": "GitBraid",
+				"icon": "$(git-fetch)"
+			},
+			{
 				"command": "gitbraid.refreshPRStatus",
 				"title": "Refresh PR Status",
 				"category": "GitBraid",
@@ -930,7 +936,10 @@
 							"description": "Branch name to assign the matched files to"
 						}
 					},
-					"required": ["pattern", "branch"],
+					"required": [
+						"pattern",
+						"branch"
+					],
 					"additionalProperties": false
 				}
 			},
@@ -976,6 +985,18 @@
 				"when": "editorTextFocus || explorerViewletFocus"
 			},
 			{
+				"command": "gitbraid.unassignFile",
+				"key": "ctrl+alt+u",
+				"mac": "cmd+alt+u",
+				"when": "editorTextFocus || explorerViewletFocus"
+			},
+			{
+				"command": "gitbraid.assignHunk",
+				"key": "ctrl+alt+h",
+				"mac": "cmd+alt+h",
+				"when": "editorTextFocus"
+			},
+			{
 				"command": "gitbraid.routeHunks",
 				"key": "ctrl+alt+r",
 				"mac": "cmd+alt+r",
@@ -986,6 +1007,21 @@
 				"key": "ctrl+alt+t",
 				"mac": "cmd+alt+t",
 				"when": "editorTextFocus"
+			},
+			{
+				"command": "gitbraid.focusStackView",
+				"key": "ctrl+alt+s",
+				"mac": "cmd+alt+s"
+			},
+			{
+				"command": "gitbraid.pushStack",
+				"key": "ctrl+alt+shift+p",
+				"mac": "cmd+alt+shift+p"
+			},
+			{
+				"command": "gitbraid.rebaseBranch",
+				"key": "ctrl+alt+shift+r",
+				"mac": "cmd+alt+shift+r"
 			},
 			{
 				"command": "gitbraid.undoLastAssignment",
@@ -1020,6 +1056,9 @@
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
 		"refresh": "npm run install-vsix"
+	},
+	"dependencies": {
+		"minimatch": "^9.0.9"
 	},
 	"devDependencies": {
 		"@stylistic/eslint-plugin": "^2.11.0",

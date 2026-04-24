@@ -11,6 +11,18 @@ import type { CommandDeps } from './types'
 
 const cmd = withErrorHandler
 
+function _toolDisplayName(
+	tool: 'graphite' | 'git-spr' | 'git-stack' | 'gitbutler' | 'upstream',
+): string {
+	switch (tool) {
+		case 'graphite':  return 'Graphite'
+		case 'git-spr':   return 'git-spr'
+		case 'git-stack': return 'git-stack'
+		case 'gitbutler': return 'GitButler'
+		case 'upstream':  return 'Upstream tracking'
+	}
+}
+
 /**
  * Best-effort detection of the repository's default branch.  Checks, in order:
  * 1. `git config init.defaultBranch` (user override / symbolic ref)
@@ -377,6 +389,85 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 				`GitBraid: imported ${String(summary.addedBranches)} new branch(es), ${String(summary.addedAssignments)} new assignment(s), ` +
 				`updated ${String(summary.updatedBranches)}/${String(summary.updatedAssignments)}, skipped ${String(summary.skipped)}.`,
 			)
+		})),
+
+		// ─── Cross-tool stack importer (RM-012) ─────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.importStackedTool', cmd(async () => {
+			const ctx = activeContext()
+			const detected = await ctx.stackedToolImporter.detectAll()
+			if (detected.length === 0) {
+				await vscode.window.showInformationMessage(
+					'GitBraid: no stacked-PR tooling detected in this repository. ' +
+					'Supported: Graphite, git-stack, git-spr, GitButler, or plain upstream tracking.',
+				)
+				return
+			}
+
+			let chosen = detected[0]
+			if (detected.length > 1) {
+				const pick = await vscode.window.showQuickPick(
+					detected.map((d) => ({
+						label: _toolDisplayName(d.tool),
+						description: `${String(d.branches.length)} branch(es)`,
+						detail: d.source,
+						stack: d,
+					})),
+					{ placeHolder: 'Multiple stacked-PR tools detected — choose one to import from' },
+				)
+				if (!pick) return
+				chosen = pick.stack
+			}
+
+			const preview = ctx.stackedToolImporter.preview(chosen)
+			const lines: string[] = []
+			lines.push(`Detected ${String(chosen.branches.length)} branch(es) via ${_toolDisplayName(chosen.tool)} (${chosen.source}).`)
+			lines.push('')
+			if (preview.newBranches.length > 0) {
+				lines.push(`Will add ${String(preview.newBranches.length)} new branch(es):`)
+				for (const b of preview.newBranches) lines.push(`  + ${b.name} → ${b.base}`)
+			}
+			if (preview.conflicts.length > 0) {
+				lines.push('')
+				lines.push(`Will skip ${String(preview.conflicts.length)} branch(es) already in the stack.`)
+			}
+			if (preview.unknownBases.length > 0) {
+				lines.push('')
+				lines.push(`Warning: ${String(preview.unknownBases.length)} unknown base(s): ${preview.unknownBases.join(', ')}`)
+			}
+			if (preview.warnings.length > 0) {
+				lines.push('')
+				lines.push('Detection warnings:')
+				for (const w of preview.warnings) lines.push(`  • ${w}`)
+			}
+
+			if (preview.newBranches.length === 0) {
+				await vscode.window.showInformationMessage(
+					`GitBraid: ${String(chosen.branches.length)} branch(es) detected but all of them are already in the stack.`,
+				)
+				return
+			}
+
+			const proceed = await vscode.window.showInformationMessage(
+				lines.join('\n'),
+				{ modal: true },
+				'Import',
+			)
+			if (proceed !== 'Import') return
+
+			const summary = await ctx.stackedToolImporter.apply(chosen, false)
+			const errorText = summary.errors.length > 0
+				? ` (${String(summary.errors.length)} error(s); see Output)`
+				: ''
+			await vscode.window.showInformationMessage(
+				`GitBraid: imported ${String(summary.addedBranches)} branch(es), ` +
+				`skipped ${String(summary.skipped)}${errorText}.`,
+			)
+			if (summary.errors.length > 0) {
+				for (const err of summary.errors) {
+					log.error(`stackedToolImporter: ${err.branch}: ${err.message}`)
+				}
+			}
 		})),
 
 		// ─── Checkpoints ─────────────────────────────────────────────────────────
