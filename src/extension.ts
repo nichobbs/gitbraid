@@ -16,6 +16,7 @@ import { withErrorHandler, showError } from './errorSurfacer'
 import { registerAllCommands } from './commands'
 import type { CommandDeps } from './commands'
 import { GitBraidMcpServer } from './mcpServer'
+import { CommitDetailProvider, COMMIT_SCHEME, buildCommitUri } from './commitDetailProvider'
 export { showError }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -122,6 +123,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		},
 		prAwareness,
 		primary.root,
+		primary.healthSvc,
+		primary.commitList,
 	)
 	const stackView = vscode.window.createTreeView('gitbraid.stackView', {
 		treeDataProvider: stackTreeProvider,
@@ -198,6 +201,23 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
 	const stackContentProvider = new StackContentProvider(registry, workspaceRoot, stackResolver)
 	context.subscriptions.push(stackContentProvider)
+
+	// Plan 06 — read-only virtual documents for "git show <sha>" when a
+	// CommitNode is clicked in the tree.
+	const commitDetailProvider = new CommitDetailProvider()
+	context.subscriptions.push(
+		commitDetailProvider,
+		vscode.workspace.registerTextDocumentContentProvider(COMMIT_SCHEME, commitDetailProvider),
+		vscode.commands.registerCommand(
+			'gitbraid.showCommit',
+			withErrorHandler(async (arg: { sha: string, worktreeDir: string, branch?: string } | undefined) => {
+				if (!arg || !arg.sha || !arg.worktreeDir) return
+				const uri = buildCommitUri(arg.worktreeDir, arg.sha)
+				const doc = await vscode.workspace.openTextDocument(uri)
+				await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false })
+			}),
+		),
+	)
 
 	const contentRefreshSubs = new Map<string, vscode.Disposable>()
 	const wireContentRefresh = (ctx: FolderContext) => {

@@ -246,6 +246,12 @@
 				"icon": "$(git-compare)"
 			},
 			{
+				"command": "gitbraid.showCommit",
+				"title": "Show Commit Diff",
+				"category": "GitBraid",
+				"icon": "$(git-commit)"
+			},
+			{
 				"command": "gitbraid.showStackDiff",
 				"title": "Show Cumulative Stack Diff",
 				"category": "GitBraid",

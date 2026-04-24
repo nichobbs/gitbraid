@@ -8,12 +8,21 @@ import { codiconForState, stateLabel } from './prAwareness'
 import type { WorktreeHealthService } from './worktreeHealthService'
 import { git } from './gitFunctions'
 import { worktreePath } from './branchStackService'
+import type { CommitListService, CommitSummary } from './commitListService'
 
 // ─── Tree node types ──────────────────────────────────────────────────────────
 
 export type FileStatus = 'modified' | 'staged' | 'new' | 'committed'
 
-export type StackTreeNode = ProjectNode | BranchNode | FileNode | FileStatusGroupNode | FloatingGroupNode | FloatingFileNode
+export type StackTreeNode =
+	| ProjectNode
+	| BranchNode
+	| FileNode
+	| FileStatusGroupNode
+	| FloatingGroupNode
+	| FloatingFileNode
+	| CommitGroupNode
+	| CommitNode
 
 /**
  * Root-level node representing the workspace folder (project).  Branch nodes
@@ -125,6 +134,59 @@ export class CurrentBranchNode extends BranchNode {
 		this.iconPath = new vscode.ThemeIcon('folder-active')
 		this.tooltip = `Current branch: ${name} — files stay in the workspace`
 		this.contextValue = 'currentBranch'
+	}
+}
+
+/**
+ * Plan 06 — a collapsible "Commits" bucket under each BranchNode that
+ * lists the commits unique to that branch vs its parent.  Acts only as a
+ * grouping container: children are rendered by the provider via
+ * {@link CommitListService.listCommits}.
+ */
+export class CommitGroupNode extends vscode.TreeItem {
+	readonly kind = 'commitGroup' as const
+	constructor(
+		public readonly branchName: string,
+		public readonly base: string,
+		public readonly worktreeDir: string,
+		count: number,
+	) {
+		super('Commits', vscode.TreeItemCollapsibleState.Collapsed)
+		this.contextValue = 'commitGroup'
+		this.iconPath = new vscode.ThemeIcon('git-commit')
+		this.description = count > 0 ? `${String(count)}` : undefined
+		this.tooltip = `${String(count)} commit(s) on ${branchName} ahead of ${base}`
+	}
+}
+
+/**
+ * A single commit shown under a {@link CommitGroupNode}.  Clicking opens a
+ * read-only editor with `git show --patch <sha>` output via the
+ * `gitbraid-commit:` content provider.
+ */
+export class CommitNode extends vscode.TreeItem {
+	readonly kind = 'commit' as const
+	constructor(
+		public readonly summary: CommitSummary,
+		public readonly branchName: string,
+		public readonly worktreeDir: string,
+	) {
+		super(summary.shortSha, vscode.TreeItemCollapsibleState.None)
+		this.contextValue = 'commit'
+		this.iconPath = new vscode.ThemeIcon('git-commit')
+		this.description = summary.subject
+		const date = summary.date.toLocaleString()
+		this.tooltip = new vscode.MarkdownString(
+			`**${summary.shortSha}** · ${date}\n\n${summary.subject}\n\n*by ${summary.author}*`,
+		)
+		// Delegate to a command — the content provider lives in the
+		// extension host, so we can't give the tree item an openable URI
+		// directly (the scheme isn't registered in sub-contexts).
+		this.command = {
+			command: 'gitbraid.showCommit',
+			title: 'Show commit',
+			arguments: [{ sha: summary.sha, worktreeDir, branch: branchName }],
+		}
 	}
 }
 
@@ -272,6 +334,7 @@ export class BranchStackTreeProvider
 		private readonly _prAwareness?: PRAwareness,
 		rootUri?: vscode.Uri,
 		healthSvc?: WorktreeHealthService,
+		private readonly _commitList?: CommitListService,
 	) {
 		this._config = config
 		this._sync = sync
@@ -527,6 +590,15 @@ export class BranchStackTreeProvider
 			return this._sync.getFloatingDirty().map((rel) => new FloatingFileNode(rel, this._sync.getFloatingSince(rel)))
 		}
 
+		if (element.kind === 'commitGroup') {
+			if (!this._commitList) return []
+			const entry = this._config.getBranch(element.branchName)
+			if (!entry) return []
+			return this._commitList
+				.listCommits(element.worktreeDir, element.branchName, element.base)
+				.then((commits) => commits.map((c) => new CommitNode(c, element.branchName, element.worktreeDir)))
+		}
+
 		return []
 	}
 
@@ -556,19 +628,41 @@ export class BranchStackTreeProvider
 			.map(([rel]) => rel)
 			.sort((a, b) => a.localeCompare(b))
 
-		if (assigned.length === 0) return []
-
 		const cwd = this._getWorktreeCwd(element)
+
+		// Plan 06 — when we have a worktree and a CommitListService wired in,
+		// prepend a "Commits" bucket listing commits unique to this branch.
+		// Only consult the service for *managed* stack branches (the
+		// current-branch pseudo-entry has no base and is skipped).
+		const commitGroupP = (async (): Promise<CommitGroupNode | undefined> => {
+			if (!cwd || !this._commitList) return undefined
+			if (element.contextValue === 'currentBranch') return undefined
+			const base = element.entry.base
+			if (!base) return undefined
+			try {
+				const commits = await this._commitList.listCommits(cwd.fsPath, branchName, base)
+				if (commits.length === 0) return undefined
+				return new CommitGroupNode(branchName, base, cwd.fsPath, commits.length)
+			} catch {
+				return undefined
+			}
+		})()
+
+		if (assigned.length === 0) {
+			return commitGroupP.then((grp) => grp ? [grp] : [])
+		}
+
 		if (!cwd) {
 			// No rootUri (test context) — return flat list without grouping
 			return assigned.map((rel) => new FileNode(rel, branchName))
 		}
 
-		return git.statusPorcelain(cwd).then((statusMap) => {
+		return Promise.all([commitGroupP, git.statusPorcelain(cwd)]).then(([grp, statusMap]) => {
 			// Filter out git-ignored files
 			assigned = assigned.filter((rel) => statusMap.get(rel) !== '!!')
-			if (assigned.length === 0) return []
-			return this._groupByStatus(branchName, assigned, statusMap)
+			const children: StackTreeNode[] = grp ? [grp] : []
+			if (assigned.length === 0) return children
+			return [...children, ...this._groupByStatus(branchName, assigned, statusMap)]
 		})
 	}
 
