@@ -788,6 +788,11 @@
 					"default": true,
 					"description": "Warn when committing a branch that has floating (unassigned) files."
 				},
+				"gitbraid.singleCommit.confirmAmend": {
+					"type": "boolean",
+					"default": true,
+					"description": "Prompt before amending the existing commit on a branch that is in single-commit mode.  Disable once you trust the behaviour."
+				},
 				"gitbraid.prDecorationsEnabled": {
 					"type": "boolean",
 					"default": true,

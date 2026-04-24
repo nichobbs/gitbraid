@@ -51,7 +51,13 @@ const config = {
                 '--no-xshm',
             ],
             mocha: mochaOpts,
-            workspaceFolder: './test_projects/proj1/'
+            workspaceFolder: './test_projects/proj1/',
+            // Honour `GITBRAID_VSCODE_TEST_VERSION` so offline / sandboxed
+            // environments can pin the cached binary under `.vscode-test/`
+            // without a network round-trip to update.code.visualstudio.com.
+            ...(process.env.GITBRAID_VSCODE_TEST_VERSION
+                ? { version: process.env.GITBRAID_VSCODE_TEST_VERSION }
+                : {}),
         },
     ],
     /** @type {import('@vscode/test-cli').ICoverageConfiguration} */
