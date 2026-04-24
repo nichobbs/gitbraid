@@ -35,6 +35,15 @@ export interface CreatePRInput {
 	draft?: boolean
 }
 
+/** Snapshot of a PR's merge-queue membership for the dashboard + status bar. */
+export interface QueueStatus {
+	inQueue: boolean
+	/** 1-based position within the queue; undefined when `inQueue` is false. */
+	position?: number
+	/** `state` on the PR's most recent check suite, if the host exposes it. */
+	checksStatus?: ChecksStatus
+}
+
 /** Per-repo adapter the command layer uses to submit + refresh PRs. */
 export interface PRHostAdapter {
 	/** Human-readable name — shown in the output channel for diagnostics. */
@@ -49,6 +58,17 @@ export interface PRHostAdapter {
 	updatePR(prNumber: number, patch: Partial<CreatePRInput>): Promise<PRMetadata>
 	/** List the PRs the host considers open, keyed by head branch. */
 	listOpen(): Promise<PRMetadata[]>
+	// ── Merge-queue (Plan 05) ───────────────────────────────────────────────
+	/**
+	 * Add `prNumber` to the host's merge queue.  Adapters that don't support
+	 * merge queues should throw a user-visible error rather than silently
+	 * succeeding.  Returns the 1-based queue position after enqueue.
+	 */
+	enqueue(prNumber: number): Promise<{ position: number }>
+	/** Remove `prNumber` from the merge queue. */
+	dequeue(prNumber: number): Promise<void>
+	/** Snapshot queue membership for the PR. */
+	queueStatus(prNumber: number): Promise<QueueStatus>
 }
 
 // ─── NullAdapter ─────────────────────────────────────────────────────────────
@@ -70,6 +90,13 @@ export class NullPRHostAdapter implements PRHostAdapter {
 		throw new Error('GitBraid: no PR host is configured for this repository.')
 	}
 	async listOpen(): Promise<PRMetadata[]> { return [] }
+	async enqueue(): Promise<{ position: number }> {
+		throw new Error('GitBraid: no PR host is configured — cannot enqueue.')
+	}
+	async dequeue(): Promise<void> {
+		throw new Error('GitBraid: no PR host is configured — cannot dequeue.')
+	}
+	async queueStatus(): Promise<QueueStatus> { return { inQueue: false } }
 }
 
 // ─── GitHubVSCodeAdapter ─────────────────────────────────────────────────────
@@ -158,6 +185,25 @@ export class GitHubVSCodeAdapter implements PRHostAdapter {
 		}
 		log.info(`GitHubVSCodeAdapter.updatePR: opened PR #${String(prNumber)} for user to apply patch ${JSON.stringify(patch)}`)
 		return match
+	}
+
+	async enqueue(_prNumber: number): Promise<{ position: number }> {
+		// The PR extension doesn't expose the merge-queue GraphQL mutation
+		// programmatically, so direct the user to the GitHub UI.  Once
+		// `GitHubOctokitAdapter` is available (token stored), switch to it —
+		// `pickAdapter` does that automatically on `invalidatePRAdapter`.
+		throw new Error(
+			'GitBraid: the GitHub Pull Requests extension does not expose the merge queue. ' +
+			'Store a token via "GitBraid: Set GitHub Token…" so the Octokit adapter can enqueue.',
+		)
+	}
+
+	async dequeue(_prNumber: number): Promise<void> {
+		throw new Error('GitBraid: the GitHub Pull Requests extension cannot dequeue — use a stored token.')
+	}
+
+	async queueStatus(_prNumber: number): Promise<QueueStatus> {
+		return { inQueue: false }
 	}
 
 	private async _api(): Promise<Record<string, unknown> | undefined> {
@@ -263,6 +309,77 @@ export class GitHubOctokitAdapter implements PRHostAdapter {
 		const pr = coercePullRequest(res)
 		if (!pr) throw new Error('GitHub: updatePR returned an unrecognised payload.')
 		return pr
+	}
+
+	/**
+	 * Add the PR to GitHub Merge Queue via GraphQL.  There is no REST endpoint
+	 * for `enqueuePullRequest`, so we issue a GraphQL mutation.  We need the
+	 * PR's node id (GraphQL-typed), which we fetch first.
+	 */
+	async enqueue(prNumber: number): Promise<{ position: number }> {
+		const { token } = await this._ctx()
+		const nodeId = await this._prNodeId(prNumber)
+		const mutation = `mutation($pr: ID!) {
+			enqueuePullRequest(input: { pullRequestId: $pr }) {
+				mergeQueueEntry { position }
+			}
+		}`
+		const res = await graphql<{ enqueuePullRequest: { mergeQueueEntry: { position: number } | null } }>(
+			token, mutation, { pr: nodeId },
+		)
+		const position = res.enqueuePullRequest.mergeQueueEntry?.position ?? 0
+		return { position }
+	}
+
+	async dequeue(prNumber: number): Promise<void> {
+		const { token } = await this._ctx()
+		const nodeId = await this._prNodeId(prNumber)
+		const mutation = `mutation($pr: ID!) {
+			dequeuePullRequest(input: { pullRequestId: $pr }) { clientMutationId }
+		}`
+		await graphql<unknown>(token, mutation, { pr: nodeId })
+	}
+
+	async queueStatus(prNumber: number): Promise<QueueStatus> {
+		const { token } = await this._ctx()
+		const nodeId = await this._prNodeId(prNumber)
+		const query = `query($pr: ID!) {
+			node(id: $pr) {
+				... on PullRequest {
+					isInMergeQueue
+					mergeQueueEntry { position }
+					commits(last: 1) {
+						nodes { commit { statusCheckRollup { state } } }
+					}
+				}
+			}
+		}`
+		try {
+			const res = await graphql<{ node: {
+				isInMergeQueue?: boolean,
+				mergeQueueEntry?: { position: number } | null,
+				commits?: { nodes?: Array<{ commit?: { statusCheckRollup?: { state?: string } | null } }> },
+			} | null }>(token, query, { pr: nodeId })
+			const node = res.node ?? {}
+			const inQueue = node.isInMergeQueue === true
+			const position = node.mergeQueueEntry?.position
+			const rawState = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state
+			const checksStatus = coerceChecksState(rawState)
+			return { inQueue, position, checksStatus }
+		} catch (e) {
+			log.warn('GitHubOctokitAdapter.queueStatus: ' + errMsg(e))
+			return { inQueue: false }
+		}
+	}
+
+	private async _prNodeId(prNumber: number): Promise<string> {
+		const { owner, repo, token } = await this._ctx()
+		const res = await fetchJson<{ node_id?: string }>(
+			`https://api.github.com/repos/${owner}/${repo}/pulls/${String(prNumber)}`,
+			{ token },
+		)
+		if (!res.node_id) throw new Error(`GitBraid: PR #${String(prNumber)} has no node_id.`)
+		return res.node_id
 	}
 
 	private async _ctx(): Promise<{ owner: string, repo: string, token: string }> {
@@ -416,6 +533,35 @@ interface FetchOptions {
 	method?: string
 	token?: string
 	body?: unknown
+}
+
+async function graphql<T>(
+	token: string,
+	query: string,
+	variables: Record<string, unknown>,
+): Promise<T> {
+	type GraphqlResponse<R> = { data?: R, errors?: Array<{ message: string }> }
+	const res = await fetchJson<GraphqlResponse<T>>(
+		'https://api.github.com/graphql',
+		{ method: 'POST', token, body: { query, variables } },
+	)
+	if (res.errors && res.errors.length > 0) {
+		throw new Error('GitHub GraphQL: ' + res.errors.map((e) => e.message).join('; '))
+	}
+	if (!res.data) throw new Error('GitHub GraphQL: empty data')
+	return res.data
+}
+
+function coerceChecksState(state: string | undefined): ChecksStatus | undefined {
+	if (!state) return undefined
+	switch (state.toUpperCase()) {
+		case 'SUCCESS':  return 'success'
+		case 'FAILURE':  return 'failure'
+		case 'ERROR':    return 'failure'
+		case 'PENDING':  return 'pending'
+		case 'EXPECTED': return 'pending'
+		default:         return undefined
+	}
 }
 
 async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {

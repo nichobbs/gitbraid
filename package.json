@@ -402,6 +402,12 @@
 				"icon": "$(git-pull-request-create)"
 			},
 			{
+				"command": "gitbraid.mergeStack",
+				"title": "Merge Stack via Queue",
+				"category": "GitBraid",
+				"icon": "$(list-ordered)"
+			},
+			{
 				"command": "gitbraid.absorbHunks",
 				"title": "Absorb Hunks Into Owning Commits",
 				"category": "GitBraid",
@@ -840,6 +846,12 @@
 					"default": 500,
 					"minimum": 10,
 					"description": "Maximum number of entries retained in the persistent undo log (.worktrees/undo-log.jsonl)."
+				},
+				"gitbraid.mergeQueuePollSeconds": {
+					"type": "number",
+					"default": 30,
+					"minimum": 5,
+					"description": "Polling interval (seconds) used by Merge Stack when waiting for each queued PR to merge."
 				}
 			}
 		},

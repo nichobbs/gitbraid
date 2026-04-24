@@ -7,6 +7,7 @@ import { runAbsorbUi } from '../absorb'
 import { worktreePath } from '../branchStackService'
 import { getDefaultGitRunner } from '../gitRunner'
 import { PersistentUndoLog } from '../persistentUndoLog'
+import { MergeQueueService, progressFromVsCode } from '../mergeQueueService'
 import type { CommandDeps } from './types'
 
 const cmd = withErrorHandler
@@ -142,6 +143,58 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 					allowPushed,
 				})
 			}
+		})),
+
+		vscode.commands.registerCommand('gitbraid.mergeStack', cmd(async () => {
+			const ctx = activeContext()
+			if (ctx.config.getStack().length === 0) {
+				await vscode.window.showInformationMessage('GitBraid: stack is empty — nothing to merge.')
+				return
+			}
+			const adapter = await ctx.getPRAdapter()
+			if (adapter.name === 'none') {
+				await vscode.window.showWarningMessage(
+					'GitBraid: no PR host configured. Run "Set GitHub Token…" or install the GitHub Pull Requests extension first.',
+				)
+				return
+			}
+			const pollSeconds = vscode.workspace.getConfiguration('gitbraid').get<number>('mergeQueuePollSeconds', 30)
+			const svc = new MergeQueueService(ctx.config, adapter)
+			const abort = new AbortController()
+			const results = await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: 'GitBraid: queueing stack for merge…',
+					cancellable: true,
+				},
+				async (progress, token) => {
+					token.onCancellationRequested(() => abort.abort())
+					return svc.mergeStack(
+						{ pollIntervalMs: pollSeconds * 1000 },
+						progressFromVsCode(progress),
+						abort.signal,
+					)
+				},
+			)
+
+			const ok = results.filter((r) => r.ok).length
+			const failed = results.filter((r) => !r.ok)
+			const summary = `GitBraid merge-stack: ${String(ok)} merged, ${String(failed.length)} failed`
+			log.info(summary)
+			if (failed.length === 0) {
+				await vscode.window.showInformationMessage(summary)
+				return
+			}
+			const detail = failed.slice(0, 3)
+				.map((r) => `• ${r.branch}: ${r.message ?? 'unknown'}`)
+				.join('\n')
+			const more = failed.length > 3 ? `\n(+${String(failed.length - 3)} more in Output)` : ''
+			const pick = await vscode.window.showWarningMessage(
+				`${summary}\n${detail}${more}`,
+				{ modal: false },
+				'Open Output',
+			)
+			if (pick === 'Open Output') log.show()
 		})),
 
 		vscode.commands.registerCommand('gitbraid.toggleSingleCommitMode', cmd(async (arg?: BranchNode | string) => {

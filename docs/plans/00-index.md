@@ -17,7 +17,7 @@ documents — update them as decisions are made and link from
 | [02-pr-stack-visualisation.md](02-pr-stack-visualisation.md) | Stacked-PR dashboard in-editor | Graphite web app | **Implementing (read-only webview)** |
 | [03-single-commit-per-pr.md](03-single-commit-per-pr.md) | Optional one-commit-per-PR mode | git-spr, ghstack | **Implementing (data model + toggle; commit rewrite pending)** |
 | [04-absorb-equivalent.md](04-absorb-equivalent.md) | `gitbraid.absorb` — route hunks into existing commits | Sapling `sl absorb` | **Implementing** |
-| [05-merge-queue.md](05-merge-queue.md) | Merge-queue aware push | Graphite | Planned (deferred until plan 01 usage data) |
+| [05-merge-queue.md](05-merge-queue.md) | Merge-queue aware push | Graphite | **Implementing** |
 | [06-richer-stack-graph.md](06-richer-stack-graph.md) | Graphical stack view + commit inspector | GitButler | **Implementing (CommitListService data source)** |
 | [07-import-from-tools.md](07-import-from-tools.md) | RM-012 — import stacks from Graphite/git-spr/git-stack/GitButler | n/a | **Implementing** |
 | [08-virtual-branches.md](08-virtual-branches.md) | Virtual branches without a worktree each | GitButler | Planned |

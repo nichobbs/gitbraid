@@ -2,7 +2,13 @@
 
 **Inspiration:** Graphite merge queue; GitHub Merge Queue.
 
-**Status:** Planned. Depends on [plan 01](01-pr-creation.md).
+**Status:** **Implementing.** `PRHostAdapter` now exposes
+`enqueue` / `dequeue` / `queueStatus` and `GitHubOctokitAdapter` implements
+them via GitHub GraphQL (`enqueuePullRequest` / `dequeuePullRequest`).
+`MergeQueueService` in `src/mergeQueueService.ts` drives the stack
+bottom-up with a poll loop; `gitbraid.mergeStack` wires it through
+`withProgress(..., { cancellable: true })`.  Tree-view `queued #N`
+decoration still pending.
 
 ## Goal
 
