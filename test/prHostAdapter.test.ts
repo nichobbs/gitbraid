@@ -3,6 +3,8 @@ import {
 	renderStackBlock,
 	mergeStackBlock,
 	parseGithubSlug,
+	parseGitlabSlug,
+	parseBitbucketSlug,
 	NullPRHostAdapter,
 } from '../src/prHostAdapter'
 
@@ -92,6 +94,56 @@ suite('prHostAdapter: parseGithubSlug', () => {
 	test('returns undefined for non-github remotes', () => {
 		assert.strictEqual(parseGithubSlug(''), undefined)
 		assert.strictEqual(parseGithubSlug('https://gitlab.com/foo/bar'), undefined)
+	})
+})
+
+suite('prHostAdapter: parseGitlabSlug', () => {
+	test('parses gitlab.com https', () => {
+		assert.deepStrictEqual(
+			parseGitlabSlug('https://gitlab.com/foo/bar.git'),
+			{ projectId: 'foo/bar', host: 'https://gitlab.com' },
+		)
+	})
+
+	test('parses ssh URL', () => {
+		assert.deepStrictEqual(
+			parseGitlabSlug('git@gitlab.com:foo/bar.git'),
+			{ projectId: 'foo/bar', host: 'https://gitlab.com' },
+		)
+	})
+
+	test('preserves nested group path', () => {
+		assert.deepStrictEqual(
+			parseGitlabSlug('https://gitlab.example.com/group/subgroup/project.git'),
+			{ projectId: 'group/subgroup/project', host: 'https://gitlab.example.com' },
+		)
+	})
+
+	test('rejects non-gitlab hosts', () => {
+		assert.strictEqual(parseGitlabSlug('https://github.com/foo/bar'), undefined)
+		assert.strictEqual(parseGitlabSlug('git@bitbucket.org:foo/bar.git'), undefined)
+		assert.strictEqual(parseGitlabSlug(''), undefined)
+	})
+})
+
+suite('prHostAdapter: parseBitbucketSlug', () => {
+	test('parses https', () => {
+		assert.deepStrictEqual(
+			parseBitbucketSlug('https://bitbucket.org/myteam/myrepo.git'),
+			{ workspace: 'myteam', repo: 'myrepo' },
+		)
+	})
+
+	test('parses ssh', () => {
+		assert.deepStrictEqual(
+			parseBitbucketSlug('git@bitbucket.org:myteam/myrepo.git'),
+			{ workspace: 'myteam', repo: 'myrepo' },
+		)
+	})
+
+	test('rejects non-bitbucket hosts', () => {
+		assert.strictEqual(parseBitbucketSlug('https://github.com/foo/bar'), undefined)
+		assert.strictEqual(parseBitbucketSlug('https://gitlab.com/foo/bar'), undefined)
 	})
 })
 

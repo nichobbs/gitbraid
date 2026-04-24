@@ -11,7 +11,7 @@ Control panel.
 
 | Term | Meaning |
 |------|---------|
-| **Stack** | An ordered list of branches, each building on the one below. Stored in `.worktrees/local-config.json` (never committed to the repo). |
+| **Stack** | An ordered list of branches, each building on the one below. Stored in `.worktrees/gitbraid-config.json` (never committed to the repo). If an older `.worktrees/local-config.json` exists, GitBraid migrates it on first load. |
 | **Floating file** | A file with uncommitted changes that has not yet been assigned to any branch. Shown under **Floating (unassigned)** in the Branch Stack view. |
 | **Assignment** | A mapping from a file path (or individual diff hunk) to a branch name. |
 | **Worktree** | A separate Git working tree on disk, one per stacked branch. GitBraid creates and manages these automatically under `.worktrees/`. |
@@ -217,7 +217,7 @@ Before a risky rebase or large re-assignment, save a checkpoint:
   branch count and assignment count per snapshot. Restoring requires confirmation
   and replaces the current stack and assignments entirely.
 
-Checkpoint files use the same JSON schema as `local-config.json` and can be
+Checkpoint files use the same JSON schema as `gitbraid-config.json` and can be
 opened and inspected directly.
 
 ---
@@ -342,6 +342,90 @@ Settings are under `gitbraid.*` in VS Code preferences.
 | `gitbraid.maxSyncFileSizeKb` | `10240` | Files larger than this (KB) are skipped during sync. |
 | `gitbraid.rebaseCheckIntervalMinutes` | `5` | How often (minutes) to check whether a parent branch has advanced. Set to `0` to disable polling (checks happen on stack change and window focus). |
 | `gitbraid.bidirectionalSync` | `false` | *(Experimental)* Sync changes made directly inside a worktree back to the primary workspace. |
+| `gitbraid.mcpWriteEnabled` | `false` | Allow external MCP clients to call write tools. Read-only tools are always available while the MCP server is running. |
+| `gitbraid.prHost` | `"auto"` | PR host: `auto`, `github`, `gitlab`, `bitbucket`, or `none`. `auto` detects from the `origin` remote. |
+| `gitbraid.suggestImportOnActivate` | `false` | Offer to import a stack detected from Graphite / git-spr / git-stack / GitButler on activation. |
+| `gitbraid.absorbRewritePushed` | `false` | Allow `Absorb Hunks` to rewrite commits already pushed to a remote. Dangerous. |
+| `gitbraid.undoLogMaxEntries` | `500` | Entries retained in the persistent undo log (`.worktrees/undo-log.jsonl`). |
+| `gitbraid.mergeQueuePollSeconds` | `30` | Polling interval for `Merge Stack` while waiting for each queued PR to land. |
+| `gitbraid.telemetry.enabled` | `false` | Opt-in anonymous usage counters (command names only — never file contents or branch names). Also requires VS Code's global telemetry setting to be enabled. |
+
+---
+
+## Stacked PRs
+
+GitBraid supports GitHub, GitLab, and Bitbucket as PR hosts. The host is picked
+automatically from the `origin` remote; override with the `gitbraid.prHost` setting.
+
+### Submit the stack as PRs
+
+`GitBraid: Submit / Update Stacked PRs` (`gitbraid.submitStack`) pushes every branch
+and opens (or updates) one PR per layer, wiring the `head` / `base` refs to stack
+them. Each PR body is prefixed with a `<!-- gitbraid:stack-start -->` block that
+lists every PR in the stack so reviewers can navigate without leaving the host.
+Insert `<!-- gitbraid:no-touch -->` at the top of a PR body to tell GitBraid to
+leave it alone.
+
+### Set a token for non-extension hosts
+
+Run `GitBraid: Set GitHub Token…` to store a PAT in VS Code's secret storage. For
+GitLab and Bitbucket, use the same command — GitBraid prompts for which host you
+are setting the token for (stored under `gitbraid.gitlabToken` or
+`gitbraid.bitbucketToken`). Required scopes:
+
+| Host | Scope |
+|------|-------|
+| GitHub | `repo` (add `workflow` if you need merge-queue enqueue) |
+| GitLab | `api` (read + write merge requests) |
+| Bitbucket | App password with `Pull requests: Write` and `Repositories: Read` |
+
+### Merge queue
+
+`GitBraid: Merge Stack via Queue` enqueues the topmost unmerged PR and polls for
+completion before enqueuing the next. Support varies by host:
+
+- **GitHub** — uses the native Merge Queue (requires queue to be enabled on the repo).
+- **GitLab** — uses Merge Trains when available (paid tier); otherwise falls back to
+  auto-merge when the pipeline succeeds.
+- **Bitbucket** — no native queue; GitBraid surfaces a clear error and leaves the
+  user to merge in order manually.
+
+---
+
+## Import a stack from another tool
+
+Run `GitBraid: Import Stack from External Tool…` (`gitbraid.importStackedTool`).
+GitBraid probes the repository for:
+
+- Graphite (`.graphite_cache_persist`)
+- git-stack (`.git/stack.json`)
+- git-spr (PR-id trailer lines in commit messages)
+- GitButler (`.git/gitbutler`)
+- Plain-upstream (branches with `branch.<name>.merge` set)
+
+…shows a preview of the inferred stack, then seeds `.worktrees/gitbraid-config.json`
+so you do not have to rebuild the stack by hand. If the active tool is
+auto-detected at activation, and `gitbraid.suggestImportOnActivate` is true, the
+same prompt surfaces automatically.
+
+---
+
+## MCP server (external tools)
+
+GitBraid ships with a Model Context Protocol server so AI agents and CLIs outside
+VS Code can inspect and mutate the stack over stdio/JSON-RPC.
+
+- **Start / stop** — `GitBraid: Start / Stop MCP Server` toggles a server that
+  reuses the same service graph as the extension.
+- **Read-only by default** — only `getStack`, `getFloatingFiles`,
+  `getBranchStatus`, and `getStackDiagram` are exposed unless
+  `gitbraid.mcpWriteEnabled` is set, at which point `addBranch`, `assignFile`,
+  `assignHunk`, `assignGlob`, and `commitBranch` become available too.
+- **Connect an agent** — point your MCP client (Claude Desktop, mcp-inspector,
+  etc.) at the stdio endpoint the command reports.
+
+The MCP surface is a strict subset of the extension's LM tools — the same
+validation rules and audit logging apply.
 
 ---
 
