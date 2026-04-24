@@ -219,7 +219,10 @@ export async function dominantCommitForHunk(
 
 	const [topSha, topCount] = filtered[0]
 	const runner2 = filtered[1]?.[1] ?? 0
-	if (topCount >= shas.length / 2 || topCount >= runner2 * 2) {
+	// A strict majority (>50% of the blamed lines) wins outright.  Otherwise
+	// we require at least a 2x margin over the runner-up — a 50/50 split is
+	// intentionally unresolved so we don't silently pick one side.
+	if (topCount > shas.length / 2 || topCount >= runner2 * 2) {
 		return { kind: 'ok', sha: topSha }
 	}
 	return { kind: 'unresolved', reason: 'blame is ambiguous — no dominant commit' }

@@ -74,8 +74,6 @@ suite('PersistentUndoLog', () => {
 	test('clear removes the file', async () => {
 		await logInstance.append({ ts: 'a', action: 'a', detail: {} })
 		await logInstance.clear()
-		assert.strictEqual(await (async () => {
-			try { return await (await import('node:fs')).promises.stat(logInstance.path).then(() => 'exists') } catch { return 'gone' }
-		})(), 'gone')
+		assert.strictEqual(fs.existsSync(logInstance.path), false)
 	})
 })

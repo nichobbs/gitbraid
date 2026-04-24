@@ -44,10 +44,14 @@ suite('CommitListService', () => {
 	})
 
 	test('caches results until invalidated', async () => {
+		const SEP = '\x1f'
 		const runner = new FakeGitRunner()
+		// Full exact match — FakeGitRunner only prefix-matches on word
+		// boundaries, which wouldn't hit here because the args join without
+		// a space between `--format=…` and `main..b`.
 		runner.fixture(
-			'log --first-parent --format=',
-			{ stdout: 'abcdef1\x1ffirst\x1f2026-01-01T00:00:00Z\x1fAlice' },
+			`log --first-parent --format=%H${SEP}%s${SEP}%aI${SEP}%an main..b`,
+			{ stdout: `abcdef1${SEP}first${SEP}2026-01-01T00:00:00Z${SEP}Alice` },
 		)
 		const svc = new CommitListService(runner)
 		await svc.listCommits('/tmp', 'b', 'main')
