@@ -60,16 +60,13 @@ const config = {
         // regardless of the `output` setting, so don't mislead by
         // specifying one.  CI reads `coverage/lcov.info` directly.
         reporter: [ 'text', 'lcovonly' ],
-        // Restrict coverage to our own source — otherwise V8 follows
-        // `.ts` source maps shipped inside `node_modules` packages
-        // (e.g. ajv nested under @modelcontextprotocol/sdk) and
-        // inflates the denominator of the coverage floor check.  `include`
-        // whitelists what's reported; `exclude` is the belt-and-braces
-        // safety net for anything that slips through.
-        include: [ 'src/**' ],
+        // @vscode/test-cli sets `relativePath: false` on c8's test-exclude,
+        // which means include/exclude patterns are tested against ABSOLUTE
+        // paths.  Using a leading `**/` makes them match regardless of the
+        // runner's cwd.  Without this, `src/**` silently matches nothing
+        // and c8 emits an empty report.
         exclude: [
             '**/node_modules/**',
-            'node_modules/**',
             '**/.vscode-test/**',
             '**/dist/**',
             '**/out/**',
