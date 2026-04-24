@@ -3,7 +3,9 @@ import { log } from './channelLogger'
 import { FolderRegistry } from './folderRegistry'
 import { FolderContext } from './folderContext'
 import { PRAwareness } from './prAwareness'
-import { BranchStackEntry } from './configTypes'
+import { buildSnapshot, ChecksStatus } from './dashboardSnapshot'
+import { git } from './gitFunctions'
+import { worktreePath } from './branchStackService'
 
 /**
  * Plan 02 — the stacked-PR dashboard webview.
@@ -19,6 +21,12 @@ import { BranchStackEntry } from './configTypes'
  *
  * The rendering pipeline is split so `buildDashboardHtml` can be called
  * without a real webview (used in unit tests).
+ *
+ * Wave A (2026-04-25) extended the rendering with: current-branch
+ * marker, assigned-files count, ahead/behind commit badges, single-
+ * commit icon, floating-files banner, checks-status pill, and an
+ * adapter-identity strip at the bottom of the view.  See
+ * `docs/plans/02-pr-stack-visualisation.md`.
  */
 
 export interface DashboardBranchRow {
@@ -32,11 +40,28 @@ export interface DashboardBranchRow {
 	prTitle?: string
 	prUrl?: string
 	behindCount?: number
+
+	// ── Wave A additions (all optional, all surface gracefully) ─────────
+	isCurrent?: boolean
+	assignedFilesCount?: number
+	singleCommit?: boolean
+	aheadCount?: number
+	checksStatus?: ChecksStatus
+}
+
+export interface DashboardBanners {
+	floatingCount?: number
+}
+
+export interface DashboardAdapter {
+	label: string
 }
 
 export interface DashboardData {
 	workspaceName: string
 	branches: DashboardBranchRow[]
+	banners?: DashboardBanners
+	adapter?: DashboardAdapter
 }
 
 export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -69,8 +94,14 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 	}
 
 	refresh(): void {
+		void this._refreshAsync()
+	}
+
+	private async _refreshAsync(): Promise<void> {
 		if (!this._view) return
-		const data = this._collect()
+		const data = await this._collect()
+		// `_view` may have been disposed between the await and now.
+		if (!this._view) return
 		this._view.webview.html = buildDashboardHtml(data, this._view.webview.cspSource)
 	}
 
@@ -91,29 +122,54 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 		}))
 	}
 
-	private _collect(): DashboardData {
+	private async _collect(): Promise<DashboardData> {
 		const ctx = this._registry.getActive() ?? this._registry.getAll()[0]
 		if (!ctx) {
 			return { workspaceName: 'no folder', branches: [] }
 		}
-		const entries = ctx.config.getStack().filter((e) => !e.scratch)
-		const sorted = [...entries].sort((a, b) => a.order - b.order)
-		const rows: DashboardBranchRow[] = sorted.map((e: BranchStackEntry) => {
-			const pr = this._prAwareness.getForBranch(e.name)
-			return {
-				name: e.name,
-				base: e.base,
-				order: e.order,
-				color: e.color,
-				prNumber: pr?.number ?? e.prNumber,
-				prState: pr?.state,
-				prTitle: pr?.title,
-				prUrl: pr?.url,
-			}
+		let currentBranch: string | undefined
+		try {
+			const raw = await git.branch(ctx.root)
+			currentBranch = typeof raw === 'string' && raw.length > 0 ? raw.trim() : undefined
+		} catch { /* best effort */ }
+
+		const adapter = await ctx.getPRAdapter().catch(() => undefined)
+		const adapterLabel = adapter ? describeAdapter(adapter.name) : 'None'
+
+		const snapshot = await buildSnapshot({
+			config: ctx.config,
+			sync: ctx.workspaceSync,
+			prAwareness: this._prAwareness,
+			workspaceRootFsPath: ctx.root.fsPath,
+			worktreeDirOf: (b) =>
+				ctx.branchStack.worktreeExists(b)
+					? worktreePath(ctx.root, b).fsPath
+					: undefined,
+			currentBranch,
+			adapter: { name: adapter?.name ?? 'none', label: adapterLabel },
 		})
+
 		return {
-			workspaceName: ctx.root.fsPath.split(/[\\/]/).filter(Boolean).pop() ?? 'workspace',
-			branches: rows,
+			workspaceName: snapshot.workspaceName,
+			branches: snapshot.branches.map((b) => ({
+				name: b.name,
+				base: b.base,
+				order: b.order,
+				color: b.color,
+				scratch: b.scratch,
+				prNumber: b.prNumber,
+				prState: b.prState,
+				prTitle: b.prTitle,
+				prUrl: b.prUrl,
+				behindCount: b.behindCount,
+				isCurrent: b.isCurrent,
+				assignedFilesCount: b.assignedFilesCount,
+				singleCommit: b.singleCommit,
+				aheadCount: b.aheadCount,
+				checksStatus: b.checksStatus,
+			})),
+			banners: { floatingCount: snapshot.banners.floatingCount },
+			adapter: snapshot.adapter ? { label: snapshot.adapter.label } : undefined,
 		}
 	}
 
@@ -150,6 +206,14 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): string {
 	const safe = escapeHtml
 	const nonce = simpleNonce()
+	const floating = data.banners?.floatingCount ?? 0
+
+	const banner = floating > 0
+		? `<div class="banner floating" data-testid="floating-banner">
+			<span class="icon">$(warning)</span>
+			<span>${String(floating)} floating file${floating === 1 ? '' : 's'} — not assigned to any branch.</span>
+		</div>`
+		: ''
 
 	const rows = data.branches.length === 0
 		? `<p class="empty">Stack is empty. Run <code>gitbraid.addStackBranch</code> to get started.</p>`
@@ -157,16 +221,34 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 			const pr = b.prNumber ? `#${String(b.prNumber)}` : '—'
 			const state = b.prState ?? 'no PR'
 			const stateClass = b.prState ?? 'none'
+
+			const currentMarker = b.isCurrent
+				? `<span class="current" title="Currently checked out" data-testid="current-marker">●</span>`
+				: ''
+			const singleCommitIcon = b.singleCommit
+				? `<span class="singleCommit" title="Single-commit mode" data-testid="single-commit-icon">⦿</span>`
+				: ''
+			const filesCount = (b.assignedFilesCount ?? 0) > 0
+				? `<span class="files" data-testid="files-count" title="${String(b.assignedFilesCount)} file(s) assigned">📄 ${String(b.assignedFilesCount)}</span>`
+				: ''
+			const aheadBehind = formatAheadBehind(b.aheadCount, b.behindCount)
+			const checksPill = b.checksStatus
+				? `<span class="checks checks-${safe(b.checksStatus)}" data-testid="checks-${safe(b.checksStatus)}" title="Checks: ${safe(b.checksStatus)}">${checksGlyph(b.checksStatus)}</span>`
+				: ''
+
 			return `
-				<li class="row">
+				<li class="row" data-branch="${safe(b.name)}">
 					<div class="connector ${i === 0 ? 'first' : ''} ${i === data.branches.length - 1 ? 'last' : ''}"></div>
-					<div class="node" style="border-color:${safe(b.color)}">
+					<div class="node ${b.isCurrent ? 'current-branch' : ''}" style="border-color:${safe(b.color)}">
 						<div class="title">
-							<span class="branch">${safe(b.name)}</span>
+							<span class="branch">${currentMarker}${safe(b.name)}${singleCommitIcon}</span>
 							<span class="base">→ ${safe(b.base)}</span>
 						</div>
 						<div class="meta">
 							<span class="pr state-${safe(stateClass)}">${safe(pr)} · ${safe(state)}</span>
+							${checksPill}
+							${aheadBehind}
+							${filesCount}
 							${b.prTitle ? `<span class="prtitle">${safe(b.prTitle)}</span>` : ''}
 						</div>
 						<div class="actions">
@@ -176,6 +258,10 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 					</div>
 				</li>`
 		}).join('\n')
+
+	const adapterStrip = data.adapter
+		? `<footer class="adapter" data-testid="adapter-strip">PR host: ${safe(data.adapter.label)}</footer>`
+		: ''
 
 	return `<!doctype html>
 <html>
@@ -187,22 +273,35 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	.header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
 	.header h2 { font-size: 13px; font-weight: 600; margin: 0; }
 	.toolbar button { font-size: 11px; padding: 2px 8px; }
+	.banner { display: flex; gap: 6px; align-items: center; padding: 6px 8px; margin-bottom: 8px; border-radius: 3px; font-size: 11px; }
+	.banner.floating { background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground); border: 1px solid var(--vscode-inputValidation-warningBorder); }
 	ul.stack { list-style: none; padding: 0; margin: 0; }
 	li.row { display: flex; align-items: stretch; margin-bottom: 8px; }
 	.connector { width: 12px; border-left: 2px solid var(--vscode-panel-border); margin-right: 8px; }
 	.connector.first { border-top: none; }
 	.node { flex: 1; border: 1px solid var(--vscode-panel-border); border-left-width: 4px; padding: 6px 8px; border-radius: 3px; background: var(--vscode-sideBar-background); }
+	.node.current-branch { box-shadow: 0 0 0 1px var(--vscode-focusBorder); }
 	.title { display: flex; justify-content: space-between; font-weight: 600; font-size: 12px; }
+	.title .branch { display: inline-flex; align-items: center; gap: 4px; }
 	.title .base { color: var(--vscode-descriptionForeground); font-weight: normal; }
-	.meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 2px; display: flex; gap: 6px; }
+	.current { color: var(--vscode-charts-green); }
+	.singleCommit { color: var(--vscode-charts-purple); font-size: 14px; line-height: 1; }
+	.meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; }
 	.meta .pr { padding: 0 4px; border-radius: 2px; }
+	.meta .files { padding: 0 4px; }
+	.meta .aheadBehind { font-family: var(--vscode-editor-font-family); }
 	.state-open { color: var(--vscode-charts-green); }
 	.state-draft { color: var(--vscode-charts-yellow); }
 	.state-merged { color: var(--vscode-charts-purple); }
 	.state-closed { color: var(--vscode-charts-red); }
+	.checks { padding: 0 4px; border-radius: 2px; font-weight: 600; }
+	.checks-success { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
+	.checks-pending { color: var(--vscode-testing-iconQueued, var(--vscode-charts-yellow)); }
+	.checks-failure { color: var(--vscode-testing-iconFailed, var(--vscode-charts-red)); }
 	.actions { margin-top: 4px; display: flex; gap: 4px; }
 	.actions button { font-size: 11px; padding: 1px 6px; }
 	.empty { color: var(--vscode-descriptionForeground); font-size: 12px; }
+	footer.adapter { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--vscode-panel-border); font-size: 10px; color: var(--vscode-descriptionForeground); }
 </style>
 </head>
 <body>
@@ -213,9 +312,11 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 			<button data-cmd="submit">Submit</button>
 		</div>
 	</div>
+	${banner}
 	<ul class="stack">
 		${rows}
 	</ul>
+	${adapterStrip}
 	<script nonce="${nonce}">
 		const vscode = acquireVsCodeApi()
 		document.body.addEventListener('click', (e) => {
@@ -226,6 +327,29 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	</script>
 </body>
 </html>`
+}
+
+function formatAheadBehind(ahead: number | undefined, behind: number | undefined): string {
+	const parts: string[] = []
+	if (ahead !== undefined && ahead > 0) parts.push(`↑${String(ahead)}`)
+	if (behind !== undefined && behind > 0) parts.push(`↓${String(behind)}`)
+	if (parts.length === 0) return ''
+	return `<span class="aheadBehind" data-testid="ahead-behind" title="ahead / behind parent">${parts.join(' ')}</span>`
+}
+
+function checksGlyph(s: 'pending' | 'success' | 'failure'): string {
+	switch (s) {
+		case 'success': return '✓'
+		case 'failure': return '✗'
+		case 'pending': return '⌛'
+	}
+}
+
+function describeAdapter(name: string): string {
+	if (name === 'none') return 'None'
+	if (name.toLowerCase().includes('octokit')) return 'GitHub (Octokit)'
+	if (name.toLowerCase().includes('vscode')) return 'GitHub (VS Code)'
+	return name
 }
 
 function escapeHtml(s: string): string {
