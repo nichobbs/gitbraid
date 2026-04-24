@@ -684,6 +684,140 @@ export class BitbucketAdapter implements PRHostAdapter {
 	}
 }
 
+// ─── AzureDevOpsAdapter ──────────────────────────────────────────────────────
+
+/**
+ * Azure DevOps Services REST v7.1 adapter.  Authenticates with a Personal
+ * Access Token stored under `gitbraid.azureDevOpsToken`.  ADO PATs are used
+ * via HTTP Basic with an empty username (`:<PAT>`) — the adapter prepends
+ * the colon internally so the user stores just the raw PAT.
+ *
+ * Remote URL support: modern `dev.azure.com/<org>/<project>/_git/<repo>`,
+ * legacy `<org>.visualstudio.com/<project>/_git/<repo>`, and SSH v3
+ * (`git@ssh.dev.azure.com:v3/<org>/<project>/<repo>`).
+ *
+ * Azure DevOps has no native "merge queue" concept.  The closest analogue
+ * is the auto-complete flag, which instructs ADO to merge once branch
+ * policies pass — but that is not a queue and exposes no position.  We
+ * therefore throw a clear error from `enqueue`, matching the Bitbucket
+ * adapter.  A dedicated "Auto-complete stack" command can be added later
+ * if the demand is there.
+ */
+export class AzureDevOpsAdapter implements PRHostAdapter {
+	readonly name = 'azure-devops'
+
+	constructor(
+		private readonly _secrets: vscode.SecretStorage,
+		private readonly _runner: IGitRunner = getDefaultGitRunner(),
+	) {}
+
+	async detect(repoRoot: string): Promise<boolean> {
+		const token = await this._token()
+		if (!token) return false
+		const slug = await this._slug(repoRoot)
+		return slug !== undefined
+	}
+
+	async getPR(branch: string): Promise<PRMetadata | undefined> {
+		const all = await this.listOpen()
+		return all.find((p) => p.head === branch)
+	}
+
+	async listOpen(): Promise<PRMetadata[]> {
+		const { baseUrl, project, repo, token } = await this._ctx()
+		const res = await fetchJson<{ value?: unknown[] }>(
+			`${baseUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullrequests?searchCriteria.status=active&api-version=7.1`,
+			{ token, authScheme: 'Basic' },
+		)
+		const values = Array.isArray(res.value) ? res.value : []
+		const out: PRMetadata[] = []
+		for (const raw of values) {
+			const pr = coerceAzureDevOpsPullRequest(raw)
+			if (pr) out.push(pr)
+		}
+		return out
+	}
+
+	async createPR(input: CreatePRInput): Promise<PRMetadata> {
+		const { baseUrl, project, repo, token } = await this._ctx()
+		const body = {
+			sourceRefName: _toFullRef(input.head),
+			targetRefName: _toFullRef(input.base),
+			title: input.title,
+			description: input.body,
+			isDraft: input.draft === true,
+		}
+		const res = await fetchJson<unknown>(
+			`${baseUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullrequests?api-version=7.1`,
+			{ method: 'POST', token, authScheme: 'Basic', body },
+		)
+		const pr = coerceAzureDevOpsPullRequest(res)
+		if (!pr) throw new Error('Azure DevOps: createPR returned an unrecognised payload.')
+		return pr
+	}
+
+	async updatePR(prNumber: number, patch: Partial<CreatePRInput>): Promise<PRMetadata> {
+		const { baseUrl, project, repo, token } = await this._ctx()
+		const body: Record<string, unknown> = {}
+		if (patch.title !== undefined) body.title = patch.title
+		if (patch.body !== undefined) body.description = patch.body
+		if (patch.base !== undefined) body.targetRefName = _toFullRef(patch.base)
+		const res = await fetchJson<unknown>(
+			`${baseUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullrequests/${String(prNumber)}?api-version=7.1`,
+			{ method: 'PATCH', token, authScheme: 'Basic', body },
+		)
+		const pr = coerceAzureDevOpsPullRequest(res)
+		if (!pr) throw new Error('Azure DevOps: updatePR returned an unrecognised payload.')
+		return pr
+	}
+
+	async enqueue(_prNumber: number): Promise<{ position: number }> {
+		throw new Error(
+			'GitBraid: Azure DevOps has no native merge queue API. ' +
+			'Enable auto-complete on the PR in the Azure DevOps UI, or merge the stack manually.',
+		)
+	}
+
+	async dequeue(_prNumber: number): Promise<void> {
+		throw new Error('GitBraid: Azure DevOps has no merge queue to dequeue from.')
+	}
+
+	async queueStatus(_prNumber: number): Promise<QueueStatus> {
+		return { inQueue: false }
+	}
+
+	private async _ctx(): Promise<{ baseUrl: string, org: string, project: string, repo: string, token: string }> {
+		const raw = await this._token()
+		if (!raw) throw new Error('GitBraid: no Azure DevOps token in secret storage (gitbraid.azureDevOpsToken).')
+		// ADO PAT auth is HTTP Basic with an empty username; prepend the
+		// separator so the shared `Basic` branch of `fetchJson` base64-encodes
+		// `:<PAT>` as required.
+		const token = ':' + raw
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+		if (!root) throw new Error('GitBraid: no workspace folder — cannot determine Azure DevOps repo.')
+		const slug = await this._slug(root)
+		if (!slug) throw new Error('GitBraid: this workspace has no Azure DevOps remote.')
+		const baseUrl = slug.host === 'dev.azure.com'
+			? `https://dev.azure.com/${encodeURIComponent(slug.org)}`
+			: `https://${encodeURIComponent(slug.org)}.visualstudio.com`
+		return { baseUrl, org: slug.org, project: slug.project, repo: slug.repo, token }
+	}
+
+	private async _token(): Promise<string | undefined> {
+		try {
+			return await this._secrets.get('gitbraid.azureDevOpsToken')
+		} catch {
+			return undefined
+		}
+	}
+
+	private async _slug(repoRoot: string): Promise<AzureDevOpsSlug | undefined> {
+		const r = await this._runner.run(['config', '--get', 'remote.origin.url'], { cwd: repoRoot })
+		if (r.exitCode !== 0) return undefined
+		return parseAzureDevOpsSlug(r.stdout.trim())
+	}
+}
+
 // ─── Stacked-body rendering ──────────────────────────────────────────────────
 
 const STACK_BLOCK_START = '<!-- gitbraid:stack-start -->'
@@ -767,6 +901,11 @@ export async function pickAdapter(
 		if (await bb.detect(repoRoot)) return bb
 		return new NullPRHostAdapter()
 	}
+	if (setting === 'azure') {
+		const ado = new AzureDevOpsAdapter(secrets)
+		if (await ado.detect(repoRoot)) return ado
+		return new NullPRHostAdapter()
+	}
 	if (setting === 'github') {
 		const vs = new GitHubVSCodeAdapter()
 		if (await vs.detect(repoRoot)) return vs
@@ -788,6 +927,10 @@ export async function pickAdapter(
 		const bb = new BitbucketAdapter(secrets)
 		if (await bb.detect(repoRoot)) return bb
 	}
+	if (host === 'azure') {
+		const ado = new AzureDevOpsAdapter(secrets)
+		if (await ado.detect(repoRoot)) return ado
+	}
 	if (host === 'github' || host === undefined) {
 		const vs = new GitHubVSCodeAdapter()
 		if (await vs.detect(repoRoot)) return vs
@@ -797,7 +940,7 @@ export async function pickAdapter(
 	return new NullPRHostAdapter()
 }
 
-async function _detectRemoteHost(repoRoot: string): Promise<'github' | 'gitlab' | 'bitbucket' | undefined> {
+async function _detectRemoteHost(repoRoot: string): Promise<'github' | 'gitlab' | 'bitbucket' | 'azure' | undefined> {
 	try {
 		const r = await getDefaultGitRunner().run(['config', '--get', 'remote.origin.url'], { cwd: repoRoot })
 		if (r.exitCode !== 0) return undefined
@@ -805,6 +948,7 @@ async function _detectRemoteHost(repoRoot: string): Promise<'github' | 'gitlab' 
 		if (url.includes('github.com')) return 'github'
 		if (url.includes('gitlab')) return 'gitlab'
 		if (url.includes('bitbucket.org')) return 'bitbucket'
+		if (url.includes('dev.azure.com') || url.includes('visualstudio.com')) return 'azure'
 	} catch {
 		// fall through
 	}
@@ -892,6 +1036,99 @@ export function parseBitbucketSlug(remoteUrl: string): { workspace: string, repo
 	const https = /^https?:\/\/(?:[^@]+@)?bitbucket\.org\/([^/]+)\/(.+?)(?:\.git)?\/?$/i.exec(remoteUrl)
 	if (https) return { workspace: https[1], repo: https[2] }
 	return undefined
+}
+
+/**
+ * Identifies an Azure DevOps repo.  `host` is `'dev.azure.com'` for the
+ * modern URL scheme and `'visualstudio.com'` for legacy tenants; the
+ * adapter switches base URL on that flag because the two hostings differ
+ * in path shape.
+ */
+export interface AzureDevOpsSlug {
+	org: string
+	project: string
+	repo: string
+	host: 'dev.azure.com' | 'visualstudio.com'
+}
+
+/**
+ * Parse an Azure DevOps remote URL into org / project / repo.  Supports:
+ *   - modern https: https://dev.azure.com/<org>/<project>/_git/<repo>(.git)?
+ *   - with user:   https://<org>@dev.azure.com/<org>/<project>/_git/<repo>
+ *   - legacy https: https://<org>.visualstudio.com/<project>/_git/<repo>
+ *   - ssh v3:       git@ssh.dev.azure.com:v3/<org>/<project>/<repo>
+ *
+ * Project and repo names allow spaces in ADO; they arrive URL-encoded in
+ * https remotes (e.g. `My%20Project`) and unencoded in ssh remotes.  We
+ * decode to a consistent internal form and let `_ctx` re-encode for the
+ * API call.
+ */
+export function parseAzureDevOpsSlug(remoteUrl: string): AzureDevOpsSlug | undefined {
+	if (!remoteUrl) return undefined
+	// ssh v3: git@ssh.dev.azure.com:v3/<org>/<project>/<repo>
+	const ssh = /^git@ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/(.+?)(?:\.git)?$/i.exec(remoteUrl)
+	if (ssh) {
+		return {
+			org: decodeURIComponent(ssh[1]),
+			project: decodeURIComponent(ssh[2]),
+			repo: decodeURIComponent(ssh[3]),
+			host: 'dev.azure.com',
+		}
+	}
+	// modern https: https://[user@]dev.azure.com/<org>/<project>/_git/<repo>
+	const modern = /^https?:\/\/(?:[^@]+@)?dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/(.+?)(?:\.git)?\/?$/i.exec(remoteUrl)
+	if (modern) {
+		return {
+			org: decodeURIComponent(modern[1]),
+			project: decodeURIComponent(modern[2]),
+			repo: decodeURIComponent(modern[3]),
+			host: 'dev.azure.com',
+		}
+	}
+	// legacy https: https://<org>.visualstudio.com/<project>/_git/<repo>
+	const legacy = /^https?:\/\/(?:[^@]+@)?([^./]+)\.visualstudio\.com\/([^/]+)\/_git\/(.+?)(?:\.git)?\/?$/i.exec(remoteUrl)
+	if (legacy) {
+		return {
+			org: decodeURIComponent(legacy[1]),
+			project: decodeURIComponent(legacy[2]),
+			repo: decodeURIComponent(legacy[3]),
+			host: 'visualstudio.com',
+		}
+	}
+	return undefined
+}
+
+function _toFullRef(branch: string): string {
+	return branch.startsWith('refs/') ? branch : 'refs/heads/' + branch
+}
+
+function coerceAzureDevOpsPullRequest(raw: unknown): PRMetadata | undefined {
+	if (typeof raw !== 'object' || raw === null) return undefined
+	const r = raw as Record<string, unknown>
+	const number = typeof r.pullRequestId === 'number' ? r.pullRequestId : undefined
+	const sourceRef = typeof r.sourceRefName === 'string' ? r.sourceRefName : undefined
+	const targetRef = typeof r.targetRefName === 'string' ? r.targetRefName : ''
+	if (number === undefined || !sourceRef) return undefined
+	const headRef = sourceRef.replace(/^refs\/heads\//, '')
+	const baseRef = targetRef.replace(/^refs\/heads\//, '')
+	const title = typeof r.title === 'string' ? r.title : '(untitled)'
+	const body = typeof r.description === 'string' ? r.description : ''
+	// ADO doesn't return a browser URL on the PR object directly; construct
+	// one from the `repository.webUrl` when available, falling back to the
+	// `_links.web` href if present.
+	const links = r._links as Record<string, unknown> | undefined
+	const webLink = links?.web as Record<string, unknown> | undefined
+	const url = typeof webLink?.href === 'string' ? webLink.href
+		: typeof r.url === 'string' ? r.url
+		: ''
+	const isDraft = r.isDraft === true
+	const rawStatus = typeof r.status === 'string' ? r.status.toLowerCase() : ''
+	let state: PRState
+	if (rawStatus === 'completed') state = 'merged'
+	else if (rawStatus === 'abandoned') state = 'closed'
+	else if (isDraft) state = 'draft'
+	else state = 'open'
+	return { number, url, state, base: baseRef, head: headRef, title, body }
 }
 
 function coerceGitlabMergeRequest(raw: unknown): PRMetadata | undefined {

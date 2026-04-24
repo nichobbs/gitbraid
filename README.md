@@ -25,11 +25,11 @@ the commits it should.
   a dedicated commit message box and file list.
 - **Push / sync stack** — push all branches to origin in one command, or rebase
   each branch onto its parent to keep the whole stack up-to-date.
-- **Stacked PRs on GitHub, GitLab, and Bitbucket** — `gitbraid.submitStack`
-  creates one PR per layer with the right `head`/`base` refs, injects a shared
-  "Stacked PRs" block into every body, and (on GitHub Merge Queue / GitLab
-  Merge Trains) can enqueue the stack for a queue-driven land via
-  `gitbraid.mergeStack`.
+- **Stacked PRs on GitHub, GitLab, Bitbucket, and Azure DevOps** —
+  `gitbraid.submitStack` creates one PR per layer with the right `head`/`base`
+  refs, injects a shared "Stacked PRs" block into every body, and (on GitHub
+  Merge Queue / GitLab Merge Trains) can enqueue the stack for a queue-driven
+  land via `gitbraid.mergeStack`.
 - **Absorb hunks** — `gitbraid.absorbHunks` amends existing commits that touch
   the same lines you just edited, so fix-ups land in the right commit instead
   of piling up as new ones.

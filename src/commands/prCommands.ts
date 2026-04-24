@@ -238,18 +238,21 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 					{ label: 'GitHub', description: 'Personal access token with `repo` scope', id: 'github' as const },
 					{ label: 'GitLab', description: 'Personal access token with `api` scope', id: 'gitlab' as const },
 					{ label: 'Bitbucket', description: 'App password as `username:app_password`', id: 'bitbucket' as const },
+					{ label: 'Azure DevOps', description: 'Personal access token with `Code (read & write)` and `Pull request (read & write)`', id: 'azure' as const },
 				],
 				{ placeHolder: 'Which host is this token for?', ignoreFocusOut: true },
 			)
 			if (!host) return
 			const secretKey = host.id === 'github' ? 'gitbraid.githubToken'
 				: host.id === 'gitlab' ? 'gitbraid.gitlabToken'
-				: 'gitbraid.bitbucketToken'
+				: host.id === 'bitbucket' ? 'gitbraid.bitbucketToken'
+				: 'gitbraid.azureDevOpsToken'
 			const existing = await secrets.get(secretKey)
 			const placeholders: Record<typeof host.id, string> = {
 				github: 'ghp_…',
 				gitlab: 'glpat-…',
 				bitbucket: 'username:app_password',
+				azure: 'azdo-…',
 			}
 			const input = await vscode.window.showInputBox({
 				prompt: host.description,

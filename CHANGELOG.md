@@ -4,12 +4,15 @@
 
 ### Added
 - **Multi-host PR support** — `prHostAdapter.ts` now ships `GitLabAdapter`
-  (REST v4, including Merge Train enqueue) and `BitbucketAdapter` (Cloud REST
-  v2). `pickAdapter()` detects the host from the `origin` remote, and the
-  `gitbraid.prHost` setting accepts `gitlab` / `bitbucket` in addition to
-  `github` / `none` / `auto`. Tokens are stored in
+  (REST v4, including Merge Train enqueue), `BitbucketAdapter` (Cloud REST
+  v2), and `AzureDevOpsAdapter` (REST v7.1 for dev.azure.com and the
+  legacy `*.visualstudio.com` tenants, including the SSH v3 remote
+  shape). `pickAdapter()` detects the host from the `origin` remote, and
+  the `gitbraid.prHost` setting accepts `gitlab` / `bitbucket` / `azure`
+  in addition to `github` / `none` / `auto`. Tokens are stored in
   `SecretStorage` under `gitbraid.gitlabToken` / `gitbraid.bitbucketToken`
-  via the existing `GitBraid: Set GitHub Token…` command (now asks which host).
+  / `gitbraid.azureDevOpsToken` via the renamed `GitBraid: Set PR Host
+  Token…` command (now asks which host).
 - **Submit Stack + Merge Stack across hosts** — `SubmitStackService` and
   `MergeQueueService` route through whichever adapter `pickAdapter` returns,
   so the user flow is identical on GitHub, GitLab, and Bitbucket. Bitbucket

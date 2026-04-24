@@ -71,7 +71,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`McpServer` / `McpTools`** (`src/mcpServer.ts`, `src/mcpTools.ts`) — Hosts a Model Context Protocol server over stdio so non-VS-Code clients can drive the same stack. Read-only by default; mutation tools appear only when `gitbraid.mcpWriteEnabled` is true. Toggled by `GitBraid: Start / Stop MCP Server`.
 
-**`PrHostAdapter`** (`src/prHostAdapter.ts`) — Provider-agnostic interface with five built-in implementations: `GitHubVSCodeAdapter`, `GitHubOctokitAdapter`, `GitLabAdapter`, `BitbucketAdapter`, `NullPRHostAdapter`. `pickAdapter()` detects the host from the `origin` remote; override via `gitbraid.prHost` (`auto`, `github`, `gitlab`, `bitbucket`, `none`). Tokens live in `SecretStorage` under `gitbraid.githubToken` / `gitbraid.gitlabToken` / `gitbraid.bitbucketToken`.
+**`PrHostAdapter`** (`src/prHostAdapter.ts`) — Provider-agnostic interface with six built-in implementations: `GitHubVSCodeAdapter`, `GitHubOctokitAdapter`, `GitLabAdapter`, `BitbucketAdapter`, `AzureDevOpsAdapter`, `NullPRHostAdapter`. `pickAdapter()` detects the host from the `origin` remote; override via `gitbraid.prHost` (`auto`, `github`, `gitlab`, `bitbucket`, `azure`, `none`). Tokens live in `SecretStorage` under `gitbraid.githubToken` / `gitbraid.gitlabToken` / `gitbraid.bitbucketToken` / `gitbraid.azureDevOpsToken`.
 
 **`SubmitStackService`** (`src/submitStackService.ts`) — Pushes every layer and calls the selected adapter's `createPR` / `updatePR` to keep the stack's PRs in sync, rewriting each body with the `renderStackBlock` sentinel.
 

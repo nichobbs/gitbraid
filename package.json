@@ -828,10 +828,11 @@
 						"github",
 						"gitlab",
 						"bitbucket",
+						"azure",
 						"none"
 					],
 					"default": "auto",
-					"description": "Pull/merge-request host used by Submit Stack. `auto` dispatches by the origin remote (github.com → GitHub, gitlab → GitLab, bitbucket.org → Bitbucket). Override to pin a specific host for self-hosted or ambiguous remotes."
+					"description": "Pull/merge-request host used by Submit Stack. `auto` dispatches by the origin remote (github.com → GitHub, gitlab → GitLab, bitbucket.org → Bitbucket, dev.azure.com / visualstudio.com → Azure DevOps). Override to pin a specific host for self-hosted or ambiguous remotes."
 				},
 				"gitbraid.suggestImportOnActivate": {
 					"type": "boolean",

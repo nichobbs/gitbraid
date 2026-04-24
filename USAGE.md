@@ -343,7 +343,7 @@ Settings are under `gitbraid.*` in VS Code preferences.
 | `gitbraid.rebaseCheckIntervalMinutes` | `5` | How often (minutes) to check whether a parent branch has advanced. Set to `0` to disable polling (checks happen on stack change and window focus). |
 | `gitbraid.bidirectionalSync` | `false` | *(Experimental)* Sync changes made directly inside a worktree back to the primary workspace. |
 | `gitbraid.mcpWriteEnabled` | `false` | Allow external MCP clients to call write tools. Read-only tools are always available while the MCP server is running. |
-| `gitbraid.prHost` | `"auto"` | PR host: `auto`, `github`, `gitlab`, `bitbucket`, or `none`. `auto` detects from the `origin` remote. |
+| `gitbraid.prHost` | `"auto"` | PR host: `auto`, `github`, `gitlab`, `bitbucket`, `azure`, or `none`. `auto` detects from the `origin` remote. |
 | `gitbraid.suggestImportOnActivate` | `false` | Offer to import a stack detected from Graphite / git-spr / git-stack / GitButler on activation. |
 | `gitbraid.absorbRewritePushed` | `false` | Allow `Absorb Hunks` to rewrite commits already pushed to a remote. Dangerous. |
 | `gitbraid.undoLogMaxEntries` | `500` | Entries retained in the persistent undo log (`.worktrees/undo-log.jsonl`). |
@@ -354,8 +354,9 @@ Settings are under `gitbraid.*` in VS Code preferences.
 
 ## Stacked PRs
 
-GitBraid supports GitHub, GitLab, and Bitbucket as PR hosts. The host is picked
-automatically from the `origin` remote; override with the `gitbraid.prHost` setting.
+GitBraid supports GitHub, GitLab, Bitbucket, and Azure DevOps as PR hosts. The
+host is picked automatically from the `origin` remote; override with the
+`gitbraid.prHost` setting.
 
 ### Submit the stack as PRs
 
@@ -368,16 +369,17 @@ leave it alone.
 
 ### Set a token for non-extension hosts
 
-Run `GitBraid: Set GitHub Token…` to store a PAT in VS Code's secret storage. For
-GitLab and Bitbucket, use the same command — GitBraid prompts for which host you
-are setting the token for (stored under `gitbraid.gitlabToken` or
-`gitbraid.bitbucketToken`). Required scopes:
+Run `GitBraid: Set PR Host Token…` to store a PAT in VS Code's secret storage.
+GitBraid prompts for which host the token is for and saves it under the matching
+key (`gitbraid.githubToken`, `gitbraid.gitlabToken`, `gitbraid.bitbucketToken`,
+or `gitbraid.azureDevOpsToken`). Required scopes:
 
 | Host | Scope |
 |------|-------|
 | GitHub | `repo` (add `workflow` if you need merge-queue enqueue) |
 | GitLab | `api` (read + write merge requests) |
 | Bitbucket | App password with `Pull requests: Write` and `Repositories: Read` |
+| Azure DevOps | PAT with `Code (read & write)` and `Pull request (read & write)` |
 
 ### Merge queue
 
@@ -389,6 +391,8 @@ completion before enqueuing the next. Support varies by host:
   auto-merge when the pipeline succeeds.
 - **Bitbucket** — no native queue; GitBraid surfaces a clear error and leaves the
   user to merge in order manually.
+- **Azure DevOps** — no native queue; GitBraid surfaces a clear error and suggests
+  enabling auto-complete on the PR in the Azure DevOps UI.
 
 ---
 

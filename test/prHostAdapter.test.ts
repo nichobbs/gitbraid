@@ -5,6 +5,7 @@ import {
 	parseGithubSlug,
 	parseGitlabSlug,
 	parseBitbucketSlug,
+	parseAzureDevOpsSlug,
 	NullPRHostAdapter,
 } from '../src/prHostAdapter'
 
@@ -144,6 +145,56 @@ suite('prHostAdapter: parseBitbucketSlug', () => {
 	test('rejects non-bitbucket hosts', () => {
 		assert.strictEqual(parseBitbucketSlug('https://github.com/foo/bar'), undefined)
 		assert.strictEqual(parseBitbucketSlug('https://gitlab.com/foo/bar'), undefined)
+	})
+})
+
+suite('prHostAdapter: parseAzureDevOpsSlug', () => {
+	test('parses modern dev.azure.com https', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://dev.azure.com/contoso/MyProject/_git/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('parses dev.azure.com https with .git suffix', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://dev.azure.com/contoso/MyProject/_git/myrepo.git'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('parses dev.azure.com https with embedded user', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://contoso@dev.azure.com/contoso/MyProject/_git/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('url-decodes project names with spaces', () => {
+		const parsed = parseAzureDevOpsSlug('https://dev.azure.com/contoso/My%20Project/_git/My%20Repo')
+		assert.strictEqual(parsed?.project, 'My Project')
+		assert.strictEqual(parsed?.repo, 'My Repo')
+	})
+
+	test('parses legacy visualstudio.com https', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://contoso.visualstudio.com/MyProject/_git/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'visualstudio.com' },
+		)
+	})
+
+	test('parses ssh v3', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('git@ssh.dev.azure.com:v3/contoso/MyProject/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('rejects non-azure hosts', () => {
+		assert.strictEqual(parseAzureDevOpsSlug('https://github.com/foo/bar'), undefined)
+		assert.strictEqual(parseAzureDevOpsSlug('https://gitlab.com/foo/bar'), undefined)
+		assert.strictEqual(parseAzureDevOpsSlug('https://bitbucket.org/foo/bar'), undefined)
+		assert.strictEqual(parseAzureDevOpsSlug(''), undefined)
 	})
 })
 
