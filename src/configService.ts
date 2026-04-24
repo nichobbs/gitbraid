@@ -14,9 +14,11 @@ import {
 	migrateConfig,
 } from './configTypes'
 
-const CONFIG_FILENAME = 'local-config.json'
+const CONFIG_FILENAME = 'gitbraid-config.json'
+/** Legacy filename — migrated automatically to `gitbraid-config.json` on first load. */
+const LEGACY_CONFIG_FILENAME = 'local-config.json'
 const WORKTREES_DIR = '.worktrees'
-/** Max retries when another writer races us on local-config.json. */
+/** Max retries when another writer races us on gitbraid-config.json. */
 const MAX_WRITE_RETRIES = 3
 /** Debounce window for coalescing rapid mutations into one flush (T48). */
 const FLUSH_DEBOUNCE_MS = 50
@@ -52,7 +54,7 @@ function mergeConfigs(external: BranchConfig, ours: BranchConfig): BranchConfig 
 }
 
 /**
- * Manages reading and writing `.worktrees/local-config.json`.
+ * Manages reading and writing `.worktrees/gitbraid-config.json`.
  *
  * The file is never committed to the repository. A missing file is treated
  * as an empty (but valid) config — not an error.
@@ -127,17 +129,36 @@ export class ConfigService implements vscode.Disposable {
 	/**
 	 * Load config from disk. Call once at extension activation.
 	 * Subsequent writes keep the in-memory state in sync; no need to reload.
+	 * Automatically migrates the legacy `local-config.json` filename on first load.
 	 */
 	async load(workspaceRoot: vscode.Uri): Promise<void> {
 		const worktreesDir = vscode.Uri.joinPath(workspaceRoot, WORKTREES_DIR)
 		this._configPath = path.join(worktreesDir.fsPath, CONFIG_FILENAME)
+		await this._migrateLegacyConfig(worktreesDir.fsPath)
 		this._config = await this._readFromDisk()
 		log.info('ConfigService loaded (' + this._config.stack.length + ' branches, ' +
 			Object.keys(this._config.assignments).length + ' assignments)')
 	}
 
 	/**
-	 * Re-read `local-config.json` from disk and fire change events for any
+	 * If the old `local-config.json` exists and the new `gitbraid-config.json`
+	 * does not, rename it so existing users are migrated transparently.
+	 */
+	private async _migrateLegacyConfig(worktreesDir: string): Promise<void> {
+		const oldPath = path.join(worktreesDir, LEGACY_CONFIG_FILENAME)
+		const newPath = path.join(worktreesDir, CONFIG_FILENAME)
+		if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+			try {
+				fs.renameSync(oldPath, newPath)
+				log.info('ConfigService: migrated local-config.json → gitbraid-config.json')
+			} catch (e) {
+				log.warn('ConfigService: migration rename failed: ' + (e instanceof Error ? e.message : String(e)))
+			}
+		}
+	}
+
+	/**
+	 * Re-read `gitbraid-config.json` from disk and fire change events for any
 	 * differences.  Safe to call at any time — used when the file is edited
 	 * externally (e.g. manually removing stale entries).
 	 */
@@ -454,7 +475,7 @@ export class ConfigService implements vscode.Disposable {
 	 * Write the current in-memory config to disk atomically.
 	 *
 	 * Optimistic concurrency (T21): if another VS Code window writes to
-	 * `local-config.json` between our last read and this write, we reload
+	 * `gitbraid-config.json` between our last read and this write, we reload
 	 * from disk, merge the external changes conservatively, and retry.
 	 *
 	 * Merge strategy (best-effort, non-interactive):
@@ -547,7 +568,7 @@ export class ConfigService implements vscode.Disposable {
 			}
 
 			throw new ConfigError(
-				`Failed to write local-config.json after ${String(MAX_WRITE_RETRIES)} retries due to concurrent modification. ` +
+				`Failed to write gitbraid-config.json after ${String(MAX_WRITE_RETRIES)} retries due to concurrent modification. ` +
 				'Close other VS Code windows on this repository or edit the file manually.',
 			)
 		} finally {
@@ -586,8 +607,8 @@ export class ConfigService implements vscode.Disposable {
 			}
 		}
 		throw new ConfigError(
-			`ConfigService: could not acquire write lock on local-config.json after ${String(LOCK_MAX_RETRIES)} attempts. ` +
-			'Another VS Code window may be unresponsive. Delete .worktrees/local-config.json.lock to recover.',
+			`ConfigService: could not acquire write lock on gitbraid-config.json after ${String(LOCK_MAX_RETRIES)} attempts. ` +
+			'Another VS Code window may be unresponsive. Delete .worktrees/gitbraid-config.json.lock to recover.',
 		)
 	}
 

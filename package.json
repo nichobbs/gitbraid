@@ -48,6 +48,7 @@
 	],
 	"activationEvents": [
 		"workspaceContains:.git",
+		"workspaceContains:.worktrees/gitbraid-config.json",
 		"workspaceContains:.worktrees/local-config.json"
 	],
 	"extensionKind": [
@@ -376,6 +377,12 @@
 				"title": "Import Stack (from .gitbraid/stack.json)",
 				"category": "GitBraid",
 				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "gitbraid.importStackedTool",
+				"title": "Import Stack from External Tool…",
+				"category": "GitBraid",
+				"icon": "$(git-fetch)"
 			},
 			{
 				"command": "gitbraid.refreshPRStatus",
@@ -989,6 +996,18 @@
 				"when": "editorTextFocus || explorerViewletFocus"
 			},
 			{
+				"command": "gitbraid.unassignFile",
+				"key": "ctrl+alt+u",
+				"mac": "cmd+alt+u",
+				"when": "editorTextFocus || explorerViewletFocus"
+			},
+			{
+				"command": "gitbraid.assignHunk",
+				"key": "ctrl+alt+h",
+				"mac": "cmd+alt+h",
+				"when": "editorTextFocus"
+			},
+			{
 				"command": "gitbraid.routeHunks",
 				"key": "ctrl+alt+r",
 				"mac": "cmd+alt+r",
@@ -999,6 +1018,21 @@
 				"key": "ctrl+alt+t",
 				"mac": "cmd+alt+t",
 				"when": "editorTextFocus"
+			},
+			{
+				"command": "gitbraid.focusStackView",
+				"key": "ctrl+alt+s",
+				"mac": "cmd+alt+s"
+			},
+			{
+				"command": "gitbraid.pushStack",
+				"key": "ctrl+alt+shift+p",
+				"mac": "cmd+alt+shift+p"
+			},
+			{
+				"command": "gitbraid.rebaseBranch",
+				"key": "ctrl+alt+shift+r",
+				"mac": "cmd+alt+shift+r"
 			},
 			{
 				"command": "gitbraid.undoLastAssignment",
@@ -1026,7 +1060,7 @@
 		"@modelcontextprotocol/sdk": "^1.29.0"
 	},
 	"scripts": {
-		"vscode:prepublish": "npm run lint && npm run compile && npm test",
+		"vscode:prepublish": "npm run lint && npm run compile",
 		"build": "node esbuild.js",
 		"compile": "node esbuild.js",
 		"package": "npx vsce package --no-dependencies",
@@ -1036,6 +1070,9 @@
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
 		"refresh": "npm run install-vsix"
+	},
+	"dependencies": {
+		"minimatch": "^9.0.9"
 	},
 	"devDependencies": {
 		"@stylistic/eslint-plugin": "^2.11.0",

@@ -21,7 +21,7 @@ export interface CheckpointMeta {
 }
 
 /**
- * Saves and restores named snapshots of `.worktrees/local-config.json`.
+ * Saves and restores named snapshots of `.worktrees/gitbraid-config.json`.
  *
  * Snapshots are written to `.worktrees/checkpoints/<ISO-timestamp>[label].json`.
  * The format is identical to `local-config.json` so they can be inspected and
