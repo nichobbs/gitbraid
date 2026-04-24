@@ -233,22 +233,43 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 		})),
 
 		vscode.commands.registerCommand('gitbraid.setGithubToken', cmd(async () => {
-			const existing = await secrets.get('gitbraid.githubToken')
+			const host = await vscode.window.showQuickPick(
+				[
+					{ label: 'GitHub', description: 'Personal access token with `repo` scope', id: 'github' as const },
+					{ label: 'GitLab', description: 'Personal access token with `api` scope', id: 'gitlab' as const },
+					{ label: 'Bitbucket', description: 'App password as `username:app_password`', id: 'bitbucket' as const },
+					{ label: 'Azure DevOps', description: 'Personal access token with `Code (read & write)` and `Pull request (read & write)`', id: 'azure' as const },
+				],
+				{ placeHolder: 'Which host is this token for?', ignoreFocusOut: true },
+			)
+			if (!host) return
+			const secretKey = host.id === 'github' ? 'gitbraid.githubToken'
+				: host.id === 'gitlab' ? 'gitbraid.gitlabToken'
+				: host.id === 'bitbucket' ? 'gitbraid.bitbucketToken'
+				: 'gitbraid.azureDevOpsToken'
+			const existing = await secrets.get(secretKey)
+			const placeholders: Record<typeof host.id, string> = {
+				github: 'ghp_…',
+				gitlab: 'glpat-…',
+				bitbucket: 'username:app_password',
+				azure: 'azdo-…',
+			}
 			const input = await vscode.window.showInputBox({
-				prompt: 'GitHub personal access token (classic or fine-grained; repo scope)',
-				placeHolder: existing ? '••••••• (replace)' : 'ghp_…',
+				prompt: host.description,
+				placeHolder: existing ? '••••••• (replace)' : placeholders[host.id],
 				password: true,
 				ignoreFocusOut: true,
 			})
 			if (input === undefined) return
 			if (input === '') {
-				await secrets.delete('gitbraid.githubToken')
-				await vscode.window.showInformationMessage('GitBraid: GitHub token cleared.')
+				await secrets.delete(secretKey)
+				await vscode.window.showInformationMessage(`GitBraid: ${host.label} token cleared.`)
+				for (const ctx of deps.registry.getAll()) ctx.invalidatePRAdapter()
 				return
 			}
-			await secrets.store('gitbraid.githubToken', input)
+			await secrets.store(secretKey, input)
 			for (const ctx of deps.registry.getAll()) ctx.invalidatePRAdapter()
-			await vscode.window.showInformationMessage('GitBraid: GitHub token stored.')
+			await vscode.window.showInformationMessage(`GitBraid: ${host.label} token stored.`)
 		})),
 	]
 }

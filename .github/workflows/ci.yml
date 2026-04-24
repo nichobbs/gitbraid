@@ -62,16 +62,17 @@ jobs:
       # coverage as Linux so there's no value in running this three times).
       # `@vscode/test-cli` writes the lcovonly report to `coverage/` by
       # default regardless of the `coverage.output` hint, so point the
-      # gate and the upload at the real location.  Thresholds
-      # intentionally left conservative for 0.1; they should be
-      # ratcheted up as the test suite grows.  Failures are blocking.
+      # gate and the upload at the real location.  Failures are blocking.
+      # Ratchet policy: raise these floors whenever a release lands new
+      # tests for a previously uncovered area.  Never lower without a
+      # clear note in CHANGELOG explaining why.
       - name: Check coverage floor
         if: matrix.os == 'ubuntu-latest'
         run: |
           node scripts/check-coverage.mjs \
-            --lines 55 \
-            --branches 45 \
-            --functions 55 \
+            --lines 60 \
+            --branches 50 \
+            --functions 60 \
             coverage/lcov.info
 
       # `vsce package` invokes the `vscode:prepublish` script, which

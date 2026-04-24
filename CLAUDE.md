@@ -25,7 +25,7 @@ npm test                # macOS / Windows
 
 To run a single test file, pass `--grep` or a file path via the vscode-test CLI — see `@vscode/test-cli` docs. The pre-test script (`scripts/setup-test-fixture.js`) creates `test_projects/proj1/` automatically.
 
-CI enforces coverage minimums (Linux only): **lines ≥55%, branches ≥45%, functions ≥55%** via `scripts/check-coverage.mjs`.
+CI enforces coverage minimums (Linux only): **lines ≥60%, branches ≥50%, functions ≥60%** via `scripts/check-coverage.mjs`. These floors ratchet up as tests land; never lower them without a CHANGELOG note explaining why.
 
 ## Code Style
 
@@ -67,7 +67,23 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`BranchScmProvider`** (`src/branchScmProvider.ts`) — Creates one `vscode.SourceControl` instance per branch so each branch gets its own SCM panel with independent staging and commit UI.
 
-**`LmTools`** (`src/lmTools.ts`) — Registers 7 VS Code Language Model tools (`gitbraid_getStack`, `gitbraid_getFloatingFiles`, `gitbraid_getBranchStatus`, `gitbraid_addBranch`, `gitbraid_assignFile`, `gitbraid_assignHunk`, `gitbraid_commitBranch`) that allow AI chat to inspect and mutate the stack.
+**`LmTools`** (`src/lmTools.ts`) — Registers 9 VS Code Language Model tools (`gitbraid_getStack`, `gitbraid_getFloatingFiles`, `gitbraid_getBranchStatus`, `gitbraid_addBranch`, `gitbraid_assignFile`, `gitbraid_assignHunk`, `gitbraid_commitBranch`, `gitbraid_getStackDiagram`, `gitbraid_assignGlob`) that allow AI chat to inspect and mutate the stack.
+
+**`McpServer` / `McpTools`** (`src/mcpServer.ts`, `src/mcpTools.ts`) — Hosts a Model Context Protocol server over stdio so non-VS-Code clients can drive the same stack. Read-only by default; mutation tools appear only when `gitbraid.mcpWriteEnabled` is true. Toggled by `GitBraid: Start / Stop MCP Server`.
+
+**`PrHostAdapter`** (`src/prHostAdapter.ts`) — Provider-agnostic interface with six built-in implementations: `GitHubVSCodeAdapter`, `GitHubOctokitAdapter`, `GitLabAdapter`, `BitbucketAdapter`, `AzureDevOpsAdapter`, `NullPRHostAdapter`. `pickAdapter()` detects the host from the `origin` remote; override via `gitbraid.prHost` (`auto`, `github`, `gitlab`, `bitbucket`, `azure`, `none`). Tokens live in `SecretStorage` under `gitbraid.githubToken` / `gitbraid.gitlabToken` / `gitbraid.bitbucketToken` / `gitbraid.azureDevOpsToken`.
+
+**`SubmitStackService`** (`src/submitStackService.ts`) — Pushes every layer and calls the selected adapter's `createPR` / `updatePR` to keep the stack's PRs in sync, rewriting each body with the `renderStackBlock` sentinel.
+
+**`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`.
+
+**`Absorb`** (`src/absorb.ts`) — Plans and applies `git commit --fixup + rebase --autosquash` for hunks that belong to an earlier commit. Guarded by `gitbraid.absorbRewritePushed` when the target commits have already been pushed.
+
+**`PersistentUndoLog`** (`src/persistentUndoLog.ts`) — Append-only JSON-Lines log at `.worktrees/undo-log.jsonl` that survives VS Code restarts. Bounded by `gitbraid.undoLogMaxEntries`.
+
+**`StackedPRToolImporter`** (`src/stackedPRToolImporter.ts`) — Detects Graphite / git-spr / git-stack / GitButler / plain-upstream metadata and seeds `gitbraid-config.json` with the inferred stack.
+
+**`Telemetry`** (`src/telemetry.ts`) — Opt-in (`gitbraid.telemetry.enabled` + `vscode.env.isTelemetryEnabled`) event counter. Records command names and anonymous stack shape only; never file paths, branch names, or remote URLs. Ships with a no-op sink; a real reporter plugs in via `setTelemetrySink()`.
 
 ### Multi-Root Workspace Support
 
@@ -96,4 +112,4 @@ Never write this file directly — always go through `ConfigService`.
 
 ## Extension Activation
 
-The extension activates when VS Code detects `.git` or `.worktrees/gitbraid-config.json` in the workspace. The `activate()` function in `src/extension.ts` runs six sequential phases: workspace trust check → folder service graph → SCM/UI → hunk CodeLens → command registration → LM tool registration. All disposables are pushed to `context.subscriptions`.
+The extension activates when VS Code detects `.git`, `.worktrees/gitbraid-config.json`, or the legacy `.worktrees/local-config.json` in the workspace (the legacy filename triggers an automatic one-time migration on load). The `activate()` function in `src/extension.ts` runs six sequential phases: workspace trust check → folder service graph → SCM/UI → hunk CodeLens → command registration → LM tool + MCP registration. All disposables are pushed to `context.subscriptions`.

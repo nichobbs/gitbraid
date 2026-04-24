@@ -3,12 +3,51 @@
 ## [Unreleased]
 
 ### Added
+- **Multi-host PR support** — `prHostAdapter.ts` now ships `GitLabAdapter`
+  (REST v4, including Merge Train enqueue), `BitbucketAdapter` (Cloud REST
+  v2), and `AzureDevOpsAdapter` (REST v7.1 for dev.azure.com and the
+  legacy `*.visualstudio.com` tenants, including the SSH v3 remote
+  shape). `pickAdapter()` detects the host from the `origin` remote, and
+  the `gitbraid.prHost` setting accepts `gitlab` / `bitbucket` / `azure`
+  in addition to `github` / `none` / `auto`. Tokens are stored in
+  `SecretStorage` under `gitbraid.gitlabToken` / `gitbraid.bitbucketToken`
+  / `gitbraid.azureDevOpsToken` via the renamed `GitBraid: Set PR Host
+  Token…` command (now asks which host).
+- **Submit Stack + Merge Stack across hosts** — `SubmitStackService` and
+  `MergeQueueService` route through whichever adapter `pickAdapter` returns,
+  so the user flow is identical on GitHub, GitLab, and Bitbucket. Bitbucket
+  surfaces a clear "no native merge queue" error instead of silently
+  succeeding.
+- **Opt-in telemetry** (`gitbraid.telemetry.enabled`, default `false`) — a
+  lightweight, anonymous event counter gated behind both the GitBraid setting
+  and `vscode.env.isTelemetryEnabled`. Records command names and anonymous
+  stack shape only; never file paths, branch names, or remote URLs. Ships
+  with a no-op sink (`src/telemetry.ts`); downstream reporters plug in via
+  `setTelemetrySink()`.
+- **Plans 01–06 + 09 landed** — from `docs/plans/00-index.md`:
+  - `01` PR creation (`submitStackService.ts`, `gitbraid.submitStack`).
+  - `02` Stack visualisation (`stackDashboardView.ts` webview).
+  - `03` Single-commit-per-PR mode (`gitbraid.toggleSingleCommitMode`).
+  - `04` Absorb-equivalent (`absorb.ts`, `gitbraid.absorbHunks`).
+  - `05` Merge-queue-aware push (`mergeQueueService.ts`,
+    `gitbraid.mergeStack`).
+  - `06` Richer stack graph (dashboard renders PR state + checks + queue pos).
+  - `09` Persistent undo log (`persistentUndoLog.ts`, bounded by
+    `gitbraid.undoLogMaxEntries`).
+- **MCP server** (ADR 0001) — `gitbraid.startMcpServer` launches a stdio MCP
+  server so external agents and CLIs can drive GitBraid without VS Code.
+  Read-only by default; mutation tools appear only when
+  `gitbraid.mcpWriteEnabled` is set. Modules: `src/mcpServer.ts`,
+  `src/mcpTools.ts`.
 - **Cross-tool stack importer** (`gitbraid.importStackedTool`, RM-012) — detect
   Graphite / git-stack / git-spr / GitButler / plain-upstream metadata in the
   active repository, preview the inferred stack, and seed GitBraid's
-  `.worktrees/local-config.json` so users migrating from another tool don't
+  `.worktrees/gitbraid-config.json` so users migrating from another tool don't
   have to rebuild their stack by hand. New module:
   `src/stackedPRToolImporter.ts`. Plan: `docs/plans/07-import-from-tools.md`.
+- **Config migration** — `.worktrees/local-config.json` is now called
+  `.worktrees/gitbraid-config.json`. Existing files are migrated once on load
+  (commit `52b576f`).
 - **Expanded default keybindings** (RM-009) — adds bindings for
   `gitbraid.unassignFile` (Ctrl/Cmd+Alt+U), `gitbraid.assignHunk`
   (Ctrl/Cmd+Alt+H), `gitbraid.focusStackView` (Ctrl/Cmd+Alt+S),
@@ -133,7 +172,7 @@
 - **Commit message templates** (`gitbraid.setCommitTemplate`): set a per-branch
   template that pre-populates the SCM input box. Variables: `{branch}` (full
   name), `{issue}` (first JIRA-style token e.g. `PROJ-123`), `{scope}` (last
-  path segment after `/`). Template is stored in `local-config.json` and
+  path segment after `/`). Template is stored in `gitbraid-config.json` and
   survives rebuilds.
 - **Team stack templates** (`gitbraid.exportStackTemplate`): export the stack
   with `template: true` and optional `instructions` to `.gitbraid/stack.json`.

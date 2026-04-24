@@ -3,6 +3,9 @@ import {
 	renderStackBlock,
 	mergeStackBlock,
 	parseGithubSlug,
+	parseGitlabSlug,
+	parseBitbucketSlug,
+	parseAzureDevOpsSlug,
 	NullPRHostAdapter,
 } from '../src/prHostAdapter'
 
@@ -92,6 +95,106 @@ suite('prHostAdapter: parseGithubSlug', () => {
 	test('returns undefined for non-github remotes', () => {
 		assert.strictEqual(parseGithubSlug(''), undefined)
 		assert.strictEqual(parseGithubSlug('https://gitlab.com/foo/bar'), undefined)
+	})
+})
+
+suite('prHostAdapter: parseGitlabSlug', () => {
+	test('parses gitlab.com https', () => {
+		assert.deepStrictEqual(
+			parseGitlabSlug('https://gitlab.com/foo/bar.git'),
+			{ projectId: 'foo/bar', host: 'https://gitlab.com' },
+		)
+	})
+
+	test('parses ssh URL', () => {
+		assert.deepStrictEqual(
+			parseGitlabSlug('git@gitlab.com:foo/bar.git'),
+			{ projectId: 'foo/bar', host: 'https://gitlab.com' },
+		)
+	})
+
+	test('preserves nested group path', () => {
+		assert.deepStrictEqual(
+			parseGitlabSlug('https://gitlab.example.com/group/subgroup/project.git'),
+			{ projectId: 'group/subgroup/project', host: 'https://gitlab.example.com' },
+		)
+	})
+
+	test('rejects non-gitlab hosts', () => {
+		assert.strictEqual(parseGitlabSlug('https://github.com/foo/bar'), undefined)
+		assert.strictEqual(parseGitlabSlug('git@bitbucket.org:foo/bar.git'), undefined)
+		assert.strictEqual(parseGitlabSlug(''), undefined)
+	})
+})
+
+suite('prHostAdapter: parseBitbucketSlug', () => {
+	test('parses https', () => {
+		assert.deepStrictEqual(
+			parseBitbucketSlug('https://bitbucket.org/myteam/myrepo.git'),
+			{ workspace: 'myteam', repo: 'myrepo' },
+		)
+	})
+
+	test('parses ssh', () => {
+		assert.deepStrictEqual(
+			parseBitbucketSlug('git@bitbucket.org:myteam/myrepo.git'),
+			{ workspace: 'myteam', repo: 'myrepo' },
+		)
+	})
+
+	test('rejects non-bitbucket hosts', () => {
+		assert.strictEqual(parseBitbucketSlug('https://github.com/foo/bar'), undefined)
+		assert.strictEqual(parseBitbucketSlug('https://gitlab.com/foo/bar'), undefined)
+	})
+})
+
+suite('prHostAdapter: parseAzureDevOpsSlug', () => {
+	test('parses modern dev.azure.com https', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://dev.azure.com/contoso/MyProject/_git/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('parses dev.azure.com https with .git suffix', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://dev.azure.com/contoso/MyProject/_git/myrepo.git'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('parses dev.azure.com https with embedded user', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://contoso@dev.azure.com/contoso/MyProject/_git/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('url-decodes project names with spaces', () => {
+		const parsed = parseAzureDevOpsSlug('https://dev.azure.com/contoso/My%20Project/_git/My%20Repo')
+		assert.strictEqual(parsed?.project, 'My Project')
+		assert.strictEqual(parsed?.repo, 'My Repo')
+	})
+
+	test('parses legacy visualstudio.com https', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('https://contoso.visualstudio.com/MyProject/_git/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'visualstudio.com' },
+		)
+	})
+
+	test('parses ssh v3', () => {
+		assert.deepStrictEqual(
+			parseAzureDevOpsSlug('git@ssh.dev.azure.com:v3/contoso/MyProject/myrepo'),
+			{ org: 'contoso', project: 'MyProject', repo: 'myrepo', host: 'dev.azure.com' },
+		)
+	})
+
+	test('rejects non-azure hosts', () => {
+		assert.strictEqual(parseAzureDevOpsSlug('https://github.com/foo/bar'), undefined)
+		assert.strictEqual(parseAzureDevOpsSlug('https://gitlab.com/foo/bar'), undefined)
+		assert.strictEqual(parseAzureDevOpsSlug('https://bitbucket.org/foo/bar'), undefined)
+		assert.strictEqual(parseAzureDevOpsSlug(''), undefined)
 	})
 })
 
