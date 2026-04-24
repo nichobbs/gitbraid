@@ -65,6 +65,12 @@ class FakeAdapter implements PRHostAdapter {
 		}
 		throw new Error('PR not found: ' + String(number))
 	}
+
+	// Merge-queue methods — not exercised by these tests; stubbed to satisfy
+	// the interface (Plan 05 added them).
+	async enqueue(): Promise<{ position: number }> { return { position: 0 } }
+	async dequeue(): Promise<void> { /* noop */ }
+	async queueStatus(): Promise<{ inQueue: boolean }> { return { inQueue: false } }
 }
 
 /**
