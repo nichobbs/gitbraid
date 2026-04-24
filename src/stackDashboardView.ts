@@ -49,6 +49,10 @@ export interface DashboardBranchRow {
 	singleCommit?: boolean
 	aheadCount?: number
 	checksStatus?: ChecksStatus
+
+	// ── Wave C drill-down (optional; sections hide when absent/empty) ──
+	commits?: ReadonlyArray<{ shortSha: string, subject: string, sha: string }>
+	assignedFiles?: readonly string[]
 }
 
 export interface DashboardBanners {
@@ -149,6 +153,8 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 					: undefined,
 			currentBranch,
 			adapter: { name: adapter?.name ?? 'none', label: adapterLabel },
+			loadCommits: (branch, base, worktreeDir) =>
+				ctx.commitList.listCommits(worktreeDir, branch, base),
 		})
 
 		return {
@@ -169,6 +175,10 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 				singleCommit: b.singleCommit,
 				aheadCount: b.aheadCount,
 				checksStatus: b.checksStatus,
+				commits: b.commits?.map((c) => ({
+					shortSha: c.shortSha, subject: c.subject, sha: c.sha,
+				})),
+				assignedFiles: b.assignedFiles,
 			})),
 			banners: { floatingCount: snapshot.banners.floatingCount },
 			adapter: snapshot.adapter ? { label: snapshot.adapter.label } : undefined,
@@ -229,49 +239,7 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 
 	const rows = data.branches.length === 0
 		? `<p class="empty">Stack is empty. Run <code>gitbraid.addStackBranch</code> to get started.</p>`
-		: data.branches.map((b, i) => {
-			const pr = b.prNumber ? `#${String(b.prNumber)}` : '—'
-			const state = b.prState ?? 'no PR'
-			const stateClass = b.prState ?? 'none'
-
-			const currentMarker = b.isCurrent
-				? `<span class="current" title="Currently checked out" data-testid="current-marker">●</span>`
-				: ''
-			const singleCommitIcon = b.singleCommit
-				? `<span class="singleCommit" title="Single-commit mode" data-testid="single-commit-icon">⦿</span>`
-				: ''
-			const filesCount = (b.assignedFilesCount ?? 0) > 0
-				? `<span class="files" data-testid="files-count" title="${String(b.assignedFilesCount)} file(s) assigned">📄 ${String(b.assignedFilesCount)}</span>`
-				: ''
-			const aheadBehind = formatAheadBehind(b.aheadCount, b.behindCount)
-			const checksPill = b.checksStatus
-				? `<span class="checks checks-${safe(b.checksStatus)}" data-testid="checks-${safe(b.checksStatus)}" title="Checks: ${safe(b.checksStatus)}">${checksGlyph(b.checksStatus)}</span>`
-				: ''
-
-			return `
-				<li class="row" data-branch="${safe(b.name)}">
-					<div class="${connectorClass(i, data.branches.length)}"></div>
-					<div class="node ${b.isCurrent ? 'current-branch' : ''}" style="border-color:${safe(b.color)}">
-						<div class="title">
-							<span class="branch">${currentMarker}${safe(b.name)}${singleCommitIcon}</span>
-							<span class="base">→ ${safe(b.base)}</span>
-						</div>
-						<div class="meta">
-							<span class="pr state-${safe(stateClass)}">${safe(pr)} · ${safe(state)}</span>
-							${checksPill}
-							${aheadBehind}
-							${filesCount}
-							${b.prTitle ? `<span class="prtitle">${safe(b.prTitle)}</span>` : ''}
-						</div>
-						<div class="actions">
-							<button data-kind="openPr" data-branch="${safe(b.name)}" ${b.prNumber ? '' : 'disabled'}>Open PR</button>
-							<button data-kind="rebase" data-branch="${safe(b.name)}">Rebase</button>
-							<button data-kind="commit" data-branch="${safe(b.name)}" title="Commit to this branch">Commit</button>
-							<button class="more" data-testid="row-menu-button-${safe(b.name)}" data-more-branch="${safe(b.name)}" data-branch-pr-url="${safe(b.prUrl ?? '')}" aria-haspopup="menu" aria-label="More actions for ${safe(b.name)}">⋯</button>
-						</div>
-					</div>
-				</li>`
-		}).join('\n')
+		: data.branches.map((b, i) => buildBranchRowHtml(b, i, data.branches.length)).join('\n')
 
 	const adapterStrip = data.adapter
 		? `<footer class="adapter" data-testid="adapter-strip">PR host: ${safe(data.adapter.label)}</footer>`
@@ -315,6 +283,15 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	.actions { margin-top: 4px; display: flex; gap: 4px; align-items: center; }
 	.actions button { font-size: 11px; padding: 1px 6px; }
 	.actions button.more { margin-left: auto; padding: 1px 7px; font-weight: bold; }
+	.toolbar input#search { font-size: 11px; padding: 2px 6px; margin-right: 4px; min-width: 100px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 2px; }
+	details.drawer { margin-top: 6px; font-size: 11px; }
+	details.drawer summary { cursor: pointer; user-select: none; color: var(--vscode-descriptionForeground); }
+	details.drawer summary .count { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); border-radius: 8px; padding: 0 6px; font-size: 10px; margin-left: 4px; }
+	details.drawer ul.drawer-list { list-style: none; padding: 2px 0 0 8px; margin: 0; max-height: 160px; overflow-y: auto; }
+	details.drawer li { padding: 1px 0; }
+	details.drawer li button.commit { background: transparent; color: inherit; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; }
+	details.drawer li button.commit:hover { text-decoration: underline; }
+	details.drawer code { font-family: var(--vscode-editor-font-family); font-size: 11px; }
 	.empty { color: var(--vscode-descriptionForeground); font-size: 12px; }
 	footer.adapter { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--vscode-panel-border); font-size: 10px; color: var(--vscode-descriptionForeground); }
 	#menu { position: fixed; display: none; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 2px 8px rgba(0,0,0,0.3); border-radius: 2px; padding: 2px 0; z-index: 100; min-width: 180px; font-size: 12px; }
@@ -328,6 +305,7 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	<div class="header">
 		<h2>Stack — ${safe(data.workspaceName)}</h2>
 		<div class="toolbar">
+			<input type="search" id="search" placeholder="Filter…" aria-label="Filter branches" data-testid="search-input" />
 			<button data-kind="addBranch"      title="Add a branch to the stack">Add</button>
 			<button data-kind="refresh"        title="Refresh PR status">Refresh</button>
 			<button data-kind="submit"         title="Submit / update stacked PRs">Submit</button>
@@ -345,6 +323,31 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	<script nonce="${nonce}">
 		const vscode = acquireVsCodeApi()
 		const menu = document.getElementById('menu')
+		const searchInput = document.getElementById('search')
+
+		// ── State persistence (Wave C) ────────────────────────────────
+		// Shape: { query: string, openDrawers: Record<stateKey, boolean> }
+		let state = vscode.getState() || { query: '', openDrawers: {} }
+		function saveState() { vscode.setState(state) }
+
+		function applyFilter() {
+			const q = (state.query || '').toLowerCase().trim()
+			const rows = document.querySelectorAll('li.row')
+			for (const row of rows) {
+				const hay = row.dataset.search || ''
+				row.style.display = !q || hay.includes(q) ? '' : 'none'
+			}
+		}
+
+		function restoreDrawers() {
+			const drawers = document.querySelectorAll('details.drawer[data-state-key]')
+			for (const d of drawers) {
+				const key = d.dataset.stateKey
+				if (!key) continue
+				const open = state.openDrawers && state.openDrawers[key]
+				if (open) d.setAttribute('open', 'open')
+			}
+		}
 
 		function post(req) { vscode.postMessage(req) }
 
@@ -433,6 +436,32 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 			}
 		})
 
+		// ── Search (Wave C) ────────────────────────────────────────────
+		if (searchInput) {
+			searchInput.value = state.query || ''
+			searchInput.addEventListener('input', () => {
+				state.query = searchInput.value
+				applyFilter()
+				saveState()
+			})
+		}
+
+		// ── Drawer persistence (Wave C) ────────────────────────────────
+		document.body.addEventListener('toggle', (e) => {
+			const target = e.target
+			if (!target || target.tagName !== 'DETAILS') return
+			const key = target.dataset.stateKey
+			if (!key) return
+			state.openDrawers = state.openDrawers || {}
+			state.openDrawers[key] = target.hasAttribute('open')
+			saveState()
+		}, true)
+
+		// Initial restore — run after DOM settles so <details> elements
+		// exist before we flip them open.
+		restoreDrawers()
+		applyFilter()
+
 		// Delta-patch path — swap a single row's markup in place without
 		// a full re-hydrate so the user's scroll/focus state survives.
 		window.addEventListener('message', (ev) => {
@@ -444,7 +473,11 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 				const tpl = document.createElement('template')
 				tpl.innerHTML = msg.html.trim()
 				const next = tpl.content.firstElementChild
-				if (next) target.replaceWith(next)
+				if (next) {
+					target.replaceWith(next)
+					restoreDrawers()
+					applyFilter()
+				}
 			}
 		})
 	</script>
@@ -480,7 +513,26 @@ export function buildBranchRowHtml(b: DashboardBranchRow, i: number, total: numb
 	const checksPill = b.checksStatus
 		? `<span class="checks checks-${safe(b.checksStatus)}" data-testid="checks-${safe(b.checksStatus)}" title="Checks: ${safe(b.checksStatus)}">${checksGlyph(b.checksStatus)}</span>`
 		: ''
-	return `<li class="row" data-branch="${safe(b.name)}">
+
+	const commitsSection = (b.commits && b.commits.length > 0)
+		? `<details class="drawer commits" data-testid="commits-drawer-${safe(b.name)}" data-state-key="commits:${safe(b.name)}">
+			<summary>Commits <span class="count">${String(b.commits.length)}</span></summary>
+			<ul class="drawer-list">
+				${b.commits.map((c) => `<li><button class="commit" data-kind="openCommit" data-sha="${safe(c.sha)}" data-branch="${safe(b.name)}" title="${safe(c.sha)}"><code>${safe(c.shortSha)}</code> ${safe(c.subject)}</button></li>`).join('')}
+			</ul>
+		</details>`
+		: ''
+
+	const filesSection = (b.assignedFiles && b.assignedFiles.length > 0)
+		? `<details class="drawer files" data-testid="files-drawer-${safe(b.name)}" data-state-key="files:${safe(b.name)}">
+			<summary>Files <span class="count">${String(b.assignedFiles.length)}</span></summary>
+			<ul class="drawer-list">
+				${b.assignedFiles.map((f) => `<li><code>${safe(f)}</code></li>`).join('')}
+			</ul>
+		</details>`
+		: ''
+
+	return `<li class="row" data-branch="${safe(b.name)}" data-search="${safe(b.name.toLowerCase())}${b.prTitle ? ' ' + safe(b.prTitle.toLowerCase()) : ''}${b.prNumber ? ' #' + String(b.prNumber) : ''}">
 	<div class="${connectorClass(i, total)}"></div>
 	<div class="node ${b.isCurrent ? 'current-branch' : ''}" style="border-color:${safe(b.color)}">
 		<div class="title">
@@ -500,6 +552,8 @@ export function buildBranchRowHtml(b: DashboardBranchRow, i: number, total: numb
 			<button data-kind="commit" data-branch="${safe(b.name)}" title="Commit to this branch">Commit</button>
 			<button class="more" data-testid="row-menu-button-${safe(b.name)}" data-more-branch="${safe(b.name)}" data-branch-pr-url="${safe(b.prUrl ?? '')}" aria-haspopup="menu" aria-label="More actions for ${safe(b.name)}">⋯</button>
 		</div>
+		${commitsSection}
+		${filesSection}
 	</div>
 </li>`
 }

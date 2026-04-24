@@ -131,4 +131,19 @@ suite('dashboardCommands / dashboardMessages (Wave B)', () => {
 		assert.strictEqual(deps.toasts.length, 1)
 		assert.ok(deps.toasts[0].includes('feat/a'))
 	})
+
+	test('Wave C: parseRequest accepts openCommit with sha + branch', () => {
+		assert.strictEqual(parseRequest({ kind: 'openCommit', branch: 'feat/a' }), undefined)
+		assert.strictEqual(parseRequest({ kind: 'openCommit', sha: 'abc' }), undefined)
+		const got = parseRequest({ kind: 'openCommit', branch: 'feat/a', sha: 'abc123' })
+		assert.deepStrictEqual(got, { kind: 'openCommit', branch: 'feat/a', sha: 'abc123' })
+	})
+
+	test('Wave C: handleDashboardRequest(openCommit) delegates to gitbraid.openStackedCommit', async () => {
+		const deps = spyDeps()
+		await dispatch({ kind: 'openCommit', branch: 'feat/a', sha: 'abc123' }, deps)
+		assert.strictEqual(deps.commands.length, 1)
+		assert.strictEqual(deps.commands[0].cmd, 'gitbraid.openStackedCommit')
+		assert.deepStrictEqual(deps.commands[0].args, [{ branch: 'feat/a', sha: 'abc123' }])
+	})
 })

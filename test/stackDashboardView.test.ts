@@ -240,4 +240,67 @@ suite('stackDashboardView: buildDashboardHtml', () => {
 		assert.ok(!mid.includes('connector first'))
 		assert.ok(!mid.includes('connector last'))
 	})
+
+	// ── Wave C additions ───────────────────────────────────────────────────
+
+	test('Wave C: commits drawer renders when branch has commits', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+			commits: [
+				{ shortSha: 'abc1234', subject: 'first', sha: 'abc1234deadbeef' },
+				{ shortSha: 'def5678', subject: 'second', sha: 'def5678deadbeef' },
+			],
+		}, 0, 1)
+		assert.ok(row.includes('data-testid="commits-drawer-feat/a"'))
+		assert.ok(row.includes('first'))
+		assert.ok(row.includes('second'))
+		// One button per commit, each wiring the openCommit kind with its sha.
+		assert.ok(row.includes('data-kind="openCommit"'))
+		assert.ok(row.includes('data-sha="abc1234deadbeef"'))
+	})
+
+	test('Wave C: commits drawer hides when branch has no commits', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+			commits: [],
+		}, 0, 1)
+		assert.ok(!row.includes('data-testid="commits-drawer-feat/a"'))
+	})
+
+	test('Wave C: files drawer renders when branch has assigned files', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+			assignedFiles: ['src/a.ts', 'README.md'],
+		}, 0, 1)
+		assert.ok(row.includes('data-testid="files-drawer-feat/a"'))
+		assert.ok(row.includes('src/a.ts'))
+		assert.ok(row.includes('README.md'))
+	})
+
+	test('Wave C: row carries a data-search attribute scoping search', () => {
+		const row = buildBranchRowHtml({
+			name: 'Feat/A', base: 'main', order: 1, color: '#abc', prNumber: 42, prTitle: 'My Title',
+		}, 0, 1)
+		// Searchable content is lowercased and whitespace-joined.
+		assert.ok(row.includes('data-search="feat/a my title #42"'), `expected lowercased search haystack, got: ${row.match(/data-search="([^"]*)"/)?.[1]}`)
+	})
+
+	test('Wave C: toolbar includes a search input', () => {
+		const html = buildDashboardHtml({
+			workspaceName: 'proj',
+			branches: [{ name: 'feat/a', base: 'main', order: 1, color: '#abc' }],
+		})
+		assert.ok(html.includes('data-testid="search-input"'))
+		assert.ok(html.includes('type="search"'))
+	})
+
+	test('Wave C: script restores drawer state + applies filter on hydrate', () => {
+		const html = buildDashboardHtml({
+			workspaceName: 'proj',
+			branches: [],
+		})
+		assert.ok(html.includes('vscode.getState()'), 'state access should be present')
+		assert.ok(html.includes('restoreDrawers'))
+		assert.ok(html.includes('applyFilter'))
+	})
 })

@@ -217,6 +217,27 @@ export async function activate(context: vscode.ExtensionContext) {
 				await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false })
 			}),
 		),
+		// Wave C — dashboard openCommit request looks up the worktree
+		// for us and delegates to gitbraid.showCommit.
+		vscode.commands.registerCommand(
+			'gitbraid.openStackedCommit',
+			withErrorHandler(async (arg: { sha: string, branch: string } | undefined) => {
+				if (!arg || !arg.sha || !arg.branch) return
+				const ctx = activeContext()
+				if (!ctx.branchStack.worktreeExists(arg.branch)) {
+					await vscode.window.showWarningMessage(
+						`GitBraid: can't resolve "${arg.branch}" — no worktree on disk.`,
+					)
+					return
+				}
+				const worktreeDir = ctx.branchStack.getWorktreePath(arg.branch).fsPath
+				await vscode.commands.executeCommand('gitbraid.showCommit', {
+					sha: arg.sha,
+					worktreeDir,
+					branch: arg.branch,
+				})
+			}),
+		),
 	)
 
 	const contentRefreshSubs = new Map<string, vscode.Disposable>()

@@ -2,6 +2,7 @@ import { ConfigService } from './configService'
 import { WorkspaceSync } from './workspaceSync'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import type { PRAwareness } from './prAwareness'
+import type { CommitSummary } from './commitListService'
 
 /**
  * Plan 02 — Wave A/C: shared snapshot of the stack used by the dashboard
@@ -43,6 +44,12 @@ export interface SnapshotBranch {
 	prUrl?: string
 
 	checksStatus?: ChecksStatus
+
+	// ── Wave C drill-down payloads (all optional) ────────────────────
+	/** Commits unique to this branch vs its base. */
+	commits?: CommitSummary[]
+	/** Workspace-relative files assigned to this branch. */
+	assignedFiles?: string[]
 }
 
 /** Banner-level summary surfaced above the stack. */
@@ -77,6 +84,11 @@ export interface BuildSnapshotDeps {
 	runner?: IGitRunner
 	currentBranch?: string
 	adapter?: SnapshotAdapter
+	/**
+	 * Wave C — supplies the commit list for each branch (lazy).  When
+	 * omitted, the snapshot does not populate `branches[].commits`.
+	 */
+	loadCommits?: (branch: string, base: string, worktreeDir: string) => Promise<CommitSummary[]>
 }
 
 /**
@@ -103,7 +115,18 @@ export async function buildSnapshot(
 			behind = await countRevs(runner, cwd, `${e.name}..${e.base}`)
 		}
 
-		const assignedFilesCount = countAssignmentsFor(assignments, e.name)
+		const assignedFiles = assignmentsFor(assignments, e.name)
+
+		let commits: CommitSummary[] | undefined
+		if (cwd && deps.loadCommits) {
+			try {
+				commits = await deps.loadCommits(e.name, e.base, cwd)
+			} catch {
+				// Best-effort only; a commit-list failure shouldn't void the
+				// whole snapshot.
+				commits = undefined
+			}
+		}
 
 		rows.push({
 			name: e.name,
@@ -112,7 +135,9 @@ export async function buildSnapshot(
 			color: e.color,
 			scratch: e.scratch,
 			isCurrent: deps.currentBranch === e.name,
-			assignedFilesCount,
+			assignedFilesCount: assignedFiles.length,
+			assignedFiles,
+			commits,
 			singleCommit: e.singleCommit === true,
 			aheadCount: ahead,
 			behindCount: behind,
@@ -147,8 +172,9 @@ async function countRevs(runner: IGitRunner, cwd: string, range: string): Promis
 	return Number.isNaN(n) ? undefined : n
 }
 
-function countAssignmentsFor(assignments: Record<string, string>, branch: string): number {
-	let n = 0
-	for (const v of Object.values(assignments)) if (v === branch) n += 1
-	return n
+function assignmentsFor(assignments: Record<string, string>, branch: string): string[] {
+	const out: string[] = []
+	for (const [k, v] of Object.entries(assignments)) if (v === branch) out.push(k)
+	out.sort((a, b) => a.localeCompare(b))
+	return out
 }

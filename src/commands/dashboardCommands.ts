@@ -62,6 +62,14 @@ export async function handleDashboardRequest(req: DashboardRequest, deps: Dashbo
 			await deps.clipboard.writeText(req.url)
 			await deps.showInformationMessage(`GitBraid: copied PR URL for "${req.branch}".`)
 			return
+		case 'openCommit':
+			// The host resolves worktree → SHA and delegates to the
+			// existing gitbraid.showCommit content-provider flow.  We
+			// don't have the worktreeDir on the webview side, so we
+			// pass the branch name through and let the command handler
+			// (registered separately) do the lookup.
+			await deps.executeCommand('gitbraid.openStackedCommit', { branch: req.branch, sha: req.sha })
+			return
 
 		default: {
 			// Exhaustiveness — if a new DashboardRequest kind is added

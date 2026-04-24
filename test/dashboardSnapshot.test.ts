@@ -158,4 +158,45 @@ suite('dashboardSnapshot', () => {
 		})
 		assert.deepStrictEqual(snap.adapter, { name: 'GitHubOctokitAdapter', label: 'GitHub (Octokit)' })
 	})
+
+	test('Wave C: buildSnapshot populates commits + assignedFiles when callback supplied', async () => {
+		await config.addBranch({ name: 'feat/a', base: 'main', color: '#abc' })
+		await config.setAssignment('src/x.ts', 'feat/a')
+		await config.setAssignment('src/y.ts', 'feat/a')
+
+		const snap = await buildSnapshot({
+			config,
+			sync,
+			workspaceRootFsPath: wsRoot().fsPath,
+			worktreeDirOf: () => '/wt/feat-a',
+			runner: new FakeGitRunner(),
+			loadCommits: async (branch, base, cwd) => {
+				assert.strictEqual(branch, 'feat/a')
+				assert.strictEqual(base, 'main')
+				assert.strictEqual(cwd, '/wt/feat-a')
+				return [
+					{ sha: 'aaa', shortSha: 'aaa', subject: 'first',  date: new Date(), author: 'sam' },
+					{ sha: 'bbb', shortSha: 'bbb', subject: 'second', date: new Date(), author: 'sam' },
+				]
+			},
+		})
+		const b = snap.branches[0]
+		assert.ok(b.commits)
+		assert.strictEqual(b.commits!.length, 2)
+		assert.deepStrictEqual(b.assignedFiles, ['src/x.ts', 'src/y.ts'])
+		assert.strictEqual(b.assignedFilesCount, 2)
+	})
+
+	test('Wave C: buildSnapshot tolerates loadCommits throwing', async () => {
+		await config.addBranch({ name: 'feat/a', base: 'main', color: '#abc' })
+		const snap = await buildSnapshot({
+			config,
+			sync,
+			workspaceRootFsPath: wsRoot().fsPath,
+			worktreeDirOf: () => '/wt/feat-a',
+			runner: new FakeGitRunner(),
+			loadCommits: async () => { throw new Error('boom') },
+		})
+		assert.strictEqual(snap.branches[0].commits, undefined)
+	})
 })

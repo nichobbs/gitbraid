@@ -33,6 +33,7 @@ export type DashboardRequest =
 	| { kind: 'copyBranchName';      branch: string }
 	| { kind: 'copyPrUrl';           branch: string; url: string }
 	| { kind: 'openWorktree';        branch: string }
+	| { kind: 'openCommit';          branch: string; sha: string }
 
 /** Allowed kinds — single source of truth for parsing + action registry. */
 export const DASHBOARD_REQUEST_KINDS = [
@@ -41,7 +42,7 @@ export const DASHBOARD_REQUEST_KINDS = [
 	'openPr', 'rebase', 'switchBranch', 'moveBranchUp', 'moveBranchDown',
 	'removeBranch', 'commit', 'pushBranch', 'absorbHunks', 'routeHunks',
 	'toggleSingleCommit', 'setCommitTemplate', 'copyBranchName',
-	'copyPrUrl', 'openWorktree',
+	'copyPrUrl', 'openWorktree', 'openCommit',
 ] as const
 
 export type DashboardRequestKind = (typeof DASHBOARD_REQUEST_KINDS)[number]
@@ -51,7 +52,7 @@ const BRANCH_KINDS = new Set<DashboardRequestKind>([
 	'openPr', 'rebase', 'switchBranch', 'moveBranchUp', 'moveBranchDown',
 	'removeBranch', 'commit', 'pushBranch', 'absorbHunks', 'routeHunks',
 	'toggleSingleCommit', 'setCommitTemplate', 'copyBranchName',
-	'copyPrUrl', 'openWorktree',
+	'copyPrUrl', 'openWorktree', 'openCommit',
 ])
 
 /**
@@ -73,9 +74,15 @@ export function parseRequest(raw: unknown): DashboardRequest | undefined {
 			if (!url) return undefined
 			return { kind: 'copyPrUrl', branch, url }
 		}
+		if (kind === 'openCommit') {
+			const sha = typeof r.sha === 'string' ? r.sha : undefined
+			if (!sha) return undefined
+			return { kind: 'openCommit', branch, sha }
+		}
 		// TypeScript can't narrow a union via a Set membership check, so we
 		// cast through to the concrete shape.  All branch kinds share
-		// `{ kind, branch }`; only `copyPrUrl` has extra fields (handled above).
+		// `{ kind, branch }`; `copyPrUrl`/`openCommit` have extra fields
+		// handled above.
 		return { kind, branch } as DashboardRequest
 	}
 	// Stack-wide messages have no `branch`.
