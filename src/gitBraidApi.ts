@@ -8,6 +8,8 @@ import { GitError } from './errors'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import type { GitBraidExportedAPI, BranchOptions, CommitOptions } from './@types/GitBraidAPI'
 import { hideAssignedFile, unhideAssignedFile } from './gitIndex'
+import { HunkRouter } from './hunkRouter'
+import { DiffEngine } from './diffEngine'
 
 // ─── Git status helper ────────────────────────────────────────────────────────
 
@@ -50,13 +52,18 @@ async function _gitStatus(runner: IGitRunner, worktreeDir: string): Promise<Work
  */
 export class GitBraidApi implements GitBraidExportedAPI {
 
+	private readonly _hunkRouter: HunkRouter
+
 	constructor(
 		private readonly _config: ConfigService,
 		private readonly _branchStack: BranchStackService,
 		private readonly _sync: WorkspaceSync,
 		private readonly _workspaceRoot: vscode.Uri,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
-	) {}
+		hunkRouter?: HunkRouter,
+	) {
+		this._hunkRouter = hunkRouter ?? new HunkRouter(new DiffEngine())
+	}
 
 	// ── Stack management ──────────────────────────────────────────────────────
 
@@ -249,6 +256,48 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	/** Remove a single hunk assignment. */
 	async removeHunkAssignment(relativePath: string, hunkIndex: number): Promise<void> {
 		await this._config.removeHunkAssignment(relativePath, hunkIndex)
+	}
+
+	async rebaseBranch(branch: string): Promise<void> {
+		const entry = this._config.getBranch(branch)
+		if (!entry) throw new Error(`Branch "${branch}" is not in the stack`)
+		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
+		const { exitCode, stderr } = await this._runner.run(['rebase', entry.base], { cwd: wtDir })
+		if (exitCode !== 0) {
+			throw new GitError(`Rebase "${branch}" onto "${entry.base}" failed: ${stderr}`, exitCode)
+		}
+		log.info(`GitBraidApi.rebaseBranch: rebased "${branch}" onto "${entry.base}"`)
+	}
+
+	async routeHunks(relativePath: string): Promise<{ routed: number, skipped: number }> {
+		const assignments = this._config.getHunkAssignments(relativePath)
+		if (!assignments || assignments.size === 0) {
+			return { routed: 0, skipped: 0 }
+		}
+		const worktreeDirs = new Map<string, string>()
+		for (const entry of this._config.getStack()) {
+			worktreeDirs.set(entry.name, worktreePath(this._workspaceRoot, entry.name).fsPath)
+		}
+		const anchors = new Map<number, import('./configTypes').HunkAnchor>()
+		for (const idx of assignments.keys()) {
+			const a = this._config.getHunkAnchor(relativePath, idx)
+			if (a) anchors.set(idx, a)
+		}
+		const ok = await this._hunkRouter.routeFile(
+			this._workspaceRoot.fsPath,
+			relativePath,
+			worktreeDirs,
+			assignments,
+			anchors,
+		)
+		const total = assignments.size
+		if (ok) {
+			await this._config.clearHunkAssignments(relativePath)
+			log.info(`GitBraidApi.routeHunks: routed ${String(total)} hunk(s) for "${relativePath}"`)
+			return { routed: total, skipped: 0 }
+		}
+		log.warn(`GitBraidApi.routeHunks: routing failed for "${relativePath}"`)
+		return { routed: 0, skipped: total }
 	}
 
 	// ── Events ────────────────────────────────────────────────────────────────
