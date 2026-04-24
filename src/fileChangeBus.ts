@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import { matchGlob } from './globMatcher'
 
 /**
  * Domain-level events emitted by {@link FileChangeBus}.  Consumers subscribe
@@ -95,25 +96,7 @@ export class FileChangeBus implements IFileChangeBus {
 
 	private _isExcluded(rel: string): boolean {
 		if (this._excludeGlobs.length === 0) return false
-		return this._excludeGlobs.some((glob) => FileChangeBus._matchGlob(glob, rel))
-	}
-
-	/**
-	 * Minimal glob matcher covering the common `files.watcherExclude` patterns:
-	 * - `**​/node_modules/**` style double-star prefix/suffix
-	 * - `node_modules/**` leading directory
-	 * - `dist/` trailing slash (directory prefix)
-	 */
-	private static _matchGlob(glob: string, rel: string): boolean {
-		// Strip trailing slash — treat as directory prefix
-		const normalGlob = glob.endsWith('/') ? glob.slice(0, -1) : glob
-		// Convert glob to a simple regex: ** → .*  * → [^/]*  . → \.
-		const pattern = normalGlob
-			.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-			.replace(/\\\*\\\*/g, '.*')
-			.replace(/\*/g, '[^/]*')
-		const re = new RegExp(`^${pattern}(/|$)`)
-		return re.test(rel)
+		return this._excludeGlobs.some((glob) => matchGlob(glob, rel))
 	}
 
 	dispose(): void {

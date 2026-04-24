@@ -935,7 +935,10 @@
 							"description": "Branch name to assign the matched files to"
 						}
 					},
-					"required": ["pattern", "branch"],
+					"required": [
+						"pattern",
+						"branch"
+					],
 					"additionalProperties": false
 				}
 			},
@@ -1052,6 +1055,9 @@
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
 		"refresh": "npm run install-vsix"
+	},
+	"dependencies": {
+		"minimatch": "^9.0.9"
 	},
 	"devDependencies": {
 		"@stylistic/eslint-plugin": "^2.11.0",
