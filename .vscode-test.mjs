@@ -60,10 +60,21 @@ const config = {
         // regardless of the `output` setting, so don't mislead by
         // specifying one.  CI reads `coverage/lcov.info` directly.
         reporter: [ 'text', 'lcovonly' ],
-        // Exclude nested node_modules that ship TypeScript source maps (e.g.
-        // ajv inside @modelcontextprotocol/sdk) — V8 coverage follows those
-        // maps and inflates FNF counts, breaking the coverage floor check.
-        exclude: [ '**/node_modules/**' ],
+        // Restrict coverage to our own source — otherwise V8 follows
+        // `.ts` source maps shipped inside `node_modules` packages
+        // (e.g. ajv nested under @modelcontextprotocol/sdk) and
+        // inflates the denominator of the coverage floor check.  `include`
+        // whitelists what's reported; `exclude` is the belt-and-braces
+        // safety net for anything that slips through.
+        include: [ 'src/**' ],
+        exclude: [
+            '**/node_modules/**',
+            'node_modules/**',
+            '**/.vscode-test/**',
+            '**/dist/**',
+            '**/out/**',
+            '**/test/**',
+        ],
     }
 }
 
