@@ -222,6 +222,24 @@
 				"icon": "$(pinned)"
 			},
 			{
+				"command": "gitbraid.addVirtualBranch",
+				"title": "Add Virtual Branch — no worktree until materialised",
+				"category": "GitBraid",
+				"icon": "$(cloud)"
+			},
+			{
+				"command": "gitbraid.materialiseVirtualBranch",
+				"title": "Materialise Virtual Branch (create worktree)",
+				"category": "GitBraid",
+				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "gitbraid.discardVirtualBranch",
+				"title": "Discard Virtual Branch",
+				"category": "GitBraid",
+				"icon": "$(trash)"
+			},
+			{
 				"command": "gitbraid.removeStackBranch",
 				"title": "Remove Branch from Stack",
 				"category": "GitBraid",
@@ -573,6 +591,11 @@
 					"group": "navigation"
 				},
 				{
+					"command": "gitbraid.addVirtualBranch",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
+				},
+				{
 					"command": "gitbraid.addScratchWorktree",
 					"when": "view == gitbraid.stackView",
 					"group": "navigation"
@@ -771,6 +794,21 @@
 					"command": "gitbraid.resetBranch",
 					"when": "view == gitbraid.stackView && viewItem == scratchBranch",
 					"group": "scratch@1"
+				},
+				{
+					"command": "gitbraid.materialiseVirtualBranch",
+					"when": "view == gitbraid.stackView && viewItem == virtualBranch",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.discardVirtualBranch",
+					"when": "view == gitbraid.stackView && viewItem == virtualBranch",
+					"group": "virtual@1"
+				},
+				{
+					"command": "gitbraid.materialiseVirtualBranch",
+					"when": "view == gitbraid.stackView && viewItem == virtualBranch",
+					"group": "virtual@0"
 				}
 			]
 		},

@@ -57,6 +57,22 @@ export class ScratchNode extends vscode.TreeItem {
 	}
 }
 
+/**
+ * A virtual branch — no worktree on disk yet.  Visually it is a regular
+ * branch but with a `cloud` icon and a `(virtual)` suffix so the reader
+ * can tell at a glance it's not backed by `.worktrees/`.
+ */
+export class VirtualBranchNode extends vscode.TreeItem {
+	readonly kind = 'branch' as const
+	constructor(public readonly entry: BranchStackEntry) {
+		super(entry.name, vscode.TreeItemCollapsibleState.Collapsed)
+		this.contextValue = 'virtualBranch'
+		this.iconPath = new vscode.ThemeIcon('cloud')
+		this.tooltip = `Virtual branch: ${entry.name} (base: ${entry.base}) — no worktree yet`
+		this.description = `(virtual) ${entry.base}`
+	}
+}
+
 /** A file assigned to a branch — child of BranchNode or FileStatusGroupNode. */
 export class FileNode extends vscode.TreeItem {
 	readonly kind = 'file' as const
@@ -614,7 +630,9 @@ export class BranchStackTreeProvider
 		// scratch branches appended at the end (they are unordered parking areas).
 		const nonScratch = stack.filter(e => !e.scratch).sort((a, b) => b.order - a.order)
 		const scratchBranches = stack.filter(e => e.scratch)
-		for (const e of nonScratch) nodes.push(new BranchNode(e))
+		for (const e of nonScratch) {
+			nodes.push(e.virtual ? new VirtualBranchNode(e) : new BranchNode(e))
+		}
 		for (const e of scratchBranches) nodes.push(new ScratchNode(e))
 		nodes.push(new FloatingGroupNode(floating.length))
 		return nodes

@@ -286,6 +286,41 @@ that aren't ready to be committed to any real branch yet.
 
 ---
 
+### Virtual branches (no worktree until you commit)
+
+A **virtual branch** is a stack entry that has no git worktree yet.  Useful
+when you're still figuring out the shape of a feature and don't want to pay
+the cost of `git worktree add` for every speculative slice.
+
+**Commands:**
+
+- `GitBraid: Add Virtual Branch` (`gitbraid.addVirtualBranch`) — prompts for
+  a name and a base, then adds the branch to the stack with `virtual: true`.
+  No git objects are created.
+- `GitBraid: Materialise Virtual Branch` (`gitbraid.materialiseVirtualBranch`) —
+  creates the worktree, writes every file currently captured in the virtual
+  store into it, and flips the branch back to a regular stack entry.  Also
+  available as the **Materialise** button on the virtual branch's SCM panel.
+- `GitBraid: Discard Virtual Branch` (`gitbraid.discardVirtualBranch`) —
+  throws away the branch and its captured files (with a confirmation).
+
+**How it behaves:**
+
+- Files assigned to a virtual branch are captured in memory (and journalled
+  to `.worktrees/virtual/<slug>.jsonl`) on every save.  The primary
+  workspace shows the cumulative stack state exactly as before.
+- Branch Stack view marks virtual entries with a `$(cloud)` icon and a
+  `(virtual)` suffix.
+- Virtual branches do not appear in `git branch -a` until they are
+  materialised — that's by design.  The Materialise action is the first
+  button offered on the node for that reason.
+- Crash-safe: the JSONL log is append-only and atomic-enough that a VS Code
+  crash mid-edit loses at most the final in-flight save.
+
+See `docs/plans/08-virtual-branches.md` for the design rationale.
+
+---
+
 ### Import and export a stack layout
 
 **Export** (`gitbraid.exportStack`) — writes the current stack order and file

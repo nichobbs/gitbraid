@@ -105,6 +105,12 @@ export class GitBraidApiFacade implements GitBraidExportedAPI, vscode.Disposable
 	async removeBranch(name: string, force?: boolean): Promise<void> {
 		await this._api().removeBranch(name, force)
 	}
+	async materialiseBranch(name: string): Promise<void> {
+		await this._api().materialiseBranch(name)
+	}
+	getVirtualBranches(): string[] {
+		return this._api().getVirtualBranches()
+	}
 
 	getAssignment(relativePath: string): string | undefined {
 		return this._api().getAssignment(relativePath)

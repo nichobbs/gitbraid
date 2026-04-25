@@ -5,8 +5,10 @@ import * as vscode from 'vscode'
 import { ConfigService } from '../src/configService'
 import { BranchStackService } from '../src/branchStackService'
 import { WorkspaceSync } from '../src/workspaceSync'
+import { VirtualBranchStore } from '../src/virtualBranchStore'
 import { GitBraidApi } from '../src/gitBraidApi'
 import { git } from '../src/gitFunctions'
+import { BranchStackError } from '../src/errors'
 
 function wsRoot(): vscode.Uri {
 	return vscode.workspace.workspaceFolders![0].uri
@@ -166,6 +168,85 @@ suite('GitBraidApi', function () {
 
 	test('onDidChangeStack: is an event function', () => {
 		assert.ok(typeof api.onDidChangeStack === 'function')
+	})
+
+})
+
+// ─── Suite: virtual branches via the API ─────────────────────────────────────
+
+suite('GitBraidApi — virtual branches', function () {
+	this.timeout(15_000)
+
+	let config: ConfigService
+	let store: VirtualBranchStore
+	let branchStack: BranchStackService
+	let sync: WorkspaceSync
+	let api: GitBraidApi
+
+	suiteSetup(async () => {
+		await git.init()
+		try { await git.add(undefined, '.gitkeep') } catch { /* ignore */ }
+		try { await git.commit('initial commit', '--no-gpg-sign') } catch { /* ignore */ }
+	})
+
+	setup(async () => {
+		cleanup()
+		ConfigService.resetInstance()
+		BranchStackService.resetInstance()
+		WorkspaceSync.resetInstance()
+		config = ConfigService.getInstance()
+		await config.load(wsRoot())
+		store = new VirtualBranchStore()
+		await store.load(wsRoot(), config.getVirtualBranches())
+		branchStack = new BranchStackService(config, store)
+		await branchStack.initStack(wsRoot())
+		sync = WorkspaceSync.getInstance(config)
+		api = new GitBraidApi(config, branchStack, sync, wsRoot())
+	})
+
+	teardown(async () => {
+		sync.dispose()
+		store.dispose()
+		cleanup()
+		BranchStackService.resetInstance()
+		ConfigService.resetInstance()
+		WorkspaceSync.resetInstance()
+	})
+
+	test('addBranch({virtual:true}): records a virtual entry with no worktree', async () => {
+		await api.addBranch('feature/v-api', 'main', { virtual: true })
+		const entry = api.getStack().find((e) => e.name === 'feature/v-api')
+		assert.strictEqual(entry?.virtual, true)
+		assert.strictEqual(branchStack.worktreeExists('feature/v-api'), false)
+	})
+
+	test('getVirtualBranches: lists only virtual entries', async () => {
+		await api.addBranch('feature/v-api', 'main', { virtual: true })
+		await api.addBranch('feature/real-api', 'main')
+		const virtuals = api.getVirtualBranches()
+		assert.deepStrictEqual(virtuals, ['feature/v-api'])
+	})
+
+	test('materialiseBranch: promotes a virtual branch to a worktree', async () => {
+		await api.addBranch('feature/v-promote', 'main', { virtual: true })
+		await store.writeFile('feature/v-promote', 'src/promoted.ts', Buffer.from('ok\n'))
+
+		await api.materialiseBranch('feature/v-promote')
+
+		const wtDir = branchStack.getWorktreePath('feature/v-promote').fsPath
+		assert.strictEqual(branchStack.worktreeExists('feature/v-promote'), true)
+		assert.strictEqual(fs.readFileSync(path.join(wtDir, 'src/promoted.ts'), 'utf-8'), 'ok\n')
+		assert.notStrictEqual(config.getBranch('feature/v-promote')?.virtual, true)
+		assert.deepStrictEqual(api.getVirtualBranches(), [])
+	})
+
+	test('materialiseBranch: rejects a non-virtual branch with BranchStackError', async () => {
+		await api.addBranch('feature/real-api', 'main')
+		await assert.rejects(() => api.materialiseBranch('feature/real-api'), BranchStackError)
+	})
+
+	test('materialiseBranch: rejects an unknown branch with BranchStackError', async () => {
+		await assert.rejects(() => api.materialiseBranch('no-such-branch'), BranchStackError)
 	})
 
 })
