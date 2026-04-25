@@ -89,6 +89,9 @@ suite('extension: registered commands', function () {
 		'gitbraid.unlockWorktree',
 		'gitbraid.copyToWorktree',
 		'gitbraid.moveToWorktree',
+		'gitbraid.addVirtualBranch',
+		'gitbraid.materialiseVirtualBranch',
+		'gitbraid.discardVirtualBranch',
 	]
 
 	suiteSetup(async () => {
@@ -289,5 +292,96 @@ suite('extension: command execution', function () {
 		await assert.doesNotReject(
 			vscode.commands.executeCommand('gitbraid.showStackDiff'),
 		)
+	})
+
+	test('gitbraid.materialiseVirtualBranch: empty stack → info, does not throw', async () => {
+		await assert.doesNotReject(
+			vscode.commands.executeCommand('gitbraid.materialiseVirtualBranch'),
+		)
+	})
+
+	test('gitbraid.discardVirtualBranch: empty stack → info, does not throw', async () => {
+		await assert.doesNotReject(
+			vscode.commands.executeCommand('gitbraid.discardVirtualBranch'),
+		)
+	})
+
+	test('gitbraid.materialiseVirtualBranch: with non-virtual branch name shows error, does not throw', async () => {
+		await assert.doesNotReject(
+			vscode.commands.executeCommand('gitbraid.materialiseVirtualBranch', 'not-a-real-branch'),
+		)
+	})
+
+	test('gitbraid.addVirtualBranch: input cancelled → returns without creating a branch', async () => {
+		// showInputBox is stubbed to undefined in the suite setup — command should bail out cleanly.
+		await assert.doesNotReject(
+			vscode.commands.executeCommand('gitbraid.addVirtualBranch'),
+		)
+		assert.strictEqual(config.getStack().length, 0, 'stack should remain empty when input is cancelled')
+	})
+
+	test('gitbraid.addVirtualBranch: happy path — creates a virtual entry with no worktree', async () => {
+		const api = await getExt()
+		const win = vscode.window as unknown as {
+			showInputBox: (...args: unknown[]) => Promise<string | undefined>
+			showQuickPick: (...args: unknown[]) => Promise<unknown>
+			showInformationMessage: (...args: unknown[]) => Promise<undefined>
+		}
+		const prevInput = win.showInputBox
+		const prevQP = win.showQuickPick
+		const prevInfo = win.showInformationMessage
+		win.showInputBox = async () => 'feature/virt-smoke'
+		win.showQuickPick = async () => 'main'
+		win.showInformationMessage = async () => undefined
+		try {
+			await vscode.commands.executeCommand('gitbraid.addVirtualBranch')
+			// The extension holds its own ConfigService instance; query via the
+			// exported API rather than the legacy test singleton.
+			const stack: ReadonlyArray<{ name: string, virtual?: boolean }> = api.getStack()
+			const entry = stack.find((e) => e.name === 'feature/virt-smoke')
+			assert.ok(entry, 'branch should have been recorded in the stack via the API')
+			assert.strictEqual(entry?.virtual, true)
+			// No worktree on disk.
+			const wtDir = path.join(wsRoot().fsPath, '.worktrees')
+			const branchDir = fs.readdirSync(wtDir).find((d) => d.startsWith('feature-virt-smoke__'))
+			assert.strictEqual(branchDir, undefined, 'no worktree directory expected for a virtual branch')
+			// Clean up so the next test starts with an empty stack.
+			await api.removeBranch('feature/virt-smoke', true)
+		} finally {
+			win.showInputBox = prevInput
+			win.showQuickPick = prevQP
+			win.showInformationMessage = prevInfo
+		}
+	})
+
+	test('gitbraid.discardVirtualBranch: single-virtual-branch stack → auto-selects and discards', async () => {
+		const api = await getExt()
+		const win = vscode.window as unknown as {
+			showInputBox: (...args: unknown[]) => Promise<string | undefined>
+			showQuickPick: (...args: unknown[]) => Promise<unknown>
+			showInformationMessage: (...args: unknown[]) => Promise<undefined>
+			showWarningMessage: (...args: unknown[]) => Promise<string | undefined>
+		}
+		const prev = {
+			input: win.showInputBox,
+			qp: win.showQuickPick,
+			info: win.showInformationMessage,
+			warn: win.showWarningMessage,
+		}
+		win.showInputBox = async () => 'feature/virt-discard'
+		win.showQuickPick = async () => 'main'
+		win.showInformationMessage = async () => undefined
+		win.showWarningMessage = async () => 'Discard'
+		try {
+			await vscode.commands.executeCommand('gitbraid.addVirtualBranch')
+			await vscode.commands.executeCommand('gitbraid.discardVirtualBranch')
+			const entry = api.getStack().find((e: { name: string }) => e.name === 'feature/virt-discard')
+			assert.strictEqual(entry, undefined, 'virtual branch should be gone after discard')
+		} finally {
+			win.showInputBox = prev.input
+			win.showQuickPick = prev.qp
+			win.showInformationMessage = prev.info
+			win.showWarningMessage = prev.warn
+		}
 	})
 })

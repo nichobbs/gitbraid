@@ -72,7 +72,15 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	}
 
 	async addBranch(name: string, base: string, options?: BranchOptions): Promise<void> {
-		await this._branchStack.addBranchToStack(name, base, options?.color)
+		await this._branchStack.addBranchToStack(name, base, options?.color, { virtual: options?.virtual === true })
+	}
+
+	async materialiseBranch(name: string): Promise<void> {
+		await this._branchStack.materialiseBranch(name)
+	}
+
+	getVirtualBranches(): string[] {
+		return this._config.getVirtualBranches()
 	}
 
 	async removeBranch(name: string, force = false): Promise<void> {

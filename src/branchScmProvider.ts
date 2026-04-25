@@ -217,6 +217,21 @@ class BranchScmEntry implements vscode.Disposable {
 			// Scratch worktrees are parking areas — hide the commit input box
 			// and all commit/push action buttons.
 			this._sc.inputBox.visible = false
+		} else if (_entry.virtual) {
+			// Virtual branches have no worktree — expose a Materialise button
+			// where the commit one would normally live.  The command handler
+			// creates the worktree, applies the virtual store, and then the
+			// user commits through the regular SCM flow.
+			this._sc.inputBox.visible = false
+			this._sc.actionButton = {
+				command: {
+					command: 'gitbraid.materialiseVirtualBranch',
+					title: 'Materialise',
+					shortTitle: 'Materialise',
+					arguments: [_entry.name],
+				},
+				enabled: true,
+			}
 		} else {
 			this._sc.inputBox.placeholder = `Commit to ${_entry.name} (message)`
 			this._sc.acceptInputCommand = {
@@ -315,6 +330,18 @@ class BranchScmEntry implements vscode.Disposable {
 			return
 		}
 		this._lastRefreshAt = now
+		// Virtual branches have no worktree and no `git status` surface — leave
+		// the resource groups empty.  Content (file count) lives in the branch
+		// stack tree view instead.
+		if (this._entry.virtual) {
+			this._statusDir = ''
+			if (this._lastStatusHash !== 'virtual') {
+				this._staged.resourceStates = []
+				this._changes.resourceStates = []
+				this._lastStatusHash = 'virtual'
+			}
+			return
+		}
 		// If the worktree directory does not exist the branch is the currently
 		// checked-out branch whose files live in the primary workspace.  Fall
 		// back to the workspace root so its changes are visible in the SCM view

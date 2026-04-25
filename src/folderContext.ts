@@ -22,6 +22,7 @@ import { SubmitStackService } from './submitStackService'
 import { PRHostAdapter, pickAdapter, NullPRHostAdapter } from './prHostAdapter'
 import { PersistentUndoLog } from './persistentUndoLog'
 import { CommitListService } from './commitListService'
+import { VirtualBranchStore } from './virtualBranchStore'
 import * as path from 'node:path'
 
 // `StackContentProvider` is deliberately NOT created here — it registers
@@ -58,6 +59,7 @@ export class FolderContext implements vscode.Disposable {
 	readonly root: vscode.Uri
 	readonly bus: FileChangeBus
 	readonly config: ConfigService
+	readonly virtualStore: VirtualBranchStore
 	readonly branchStack: BranchStackService
 	readonly workspaceSync: WorkspaceSync
 	readonly diffEngine: DiffEngine
@@ -89,11 +91,12 @@ export class FolderContext implements vscode.Disposable {
 		this.root = root
 		this.bus = new FileChangeBus(root)
 		this.config = new ConfigService()
-		this.branchStack = new BranchStackService(this.config)
-		this.workspaceSync = new WorkspaceSync(this.config)
+		this.virtualStore = new VirtualBranchStore()
+		this.branchStack = new BranchStackService(this.config, this.virtualStore)
+		this.workspaceSync = new WorkspaceSync(this.config, this.virtualStore)
 		this.diffEngine = new DiffEngine()
 		this.hunkRouter = new HunkRouter(this.diffEngine)
-		this.stackResolver = new StackResolver(this.config, this.branchStack)
+		this.stackResolver = new StackResolver(this.config, this.branchStack, undefined, this.virtualStore)
 		this.rebaseSvc = new RebaseSuggestionService(this.config, this.branchStack)
 		this.stackCommands = new StackCommands(this.config, this.branchStack, this.rebaseSvc, root)
 		this.rebaseRecovery = new RebaseRecovery()
@@ -153,6 +156,10 @@ export class FolderContext implements vscode.Disposable {
 		log.info(`FolderContext: initialising for ${this.root.fsPath}`)
 
 		await this.config.load(this.root)
+		// Hydrate the virtual-branch store from `.worktrees/virtual/*.jsonl`
+		// before any worktree work runs so a save-during-startup doesn't race
+		// an un-seeded store.
+		await this.virtualStore.load(this.root, this.config.getVirtualBranches())
 
 		// Watch the config file for external edits (e.g. manually removing
 		// stale assignments) and reload automatically.
@@ -203,6 +210,7 @@ export class FolderContext implements vscode.Disposable {
 		this.stackResolver.dispose()
 		this.workspaceSync.dispose()
 		this.branchStack.dispose()
+		this.virtualStore.dispose()
 		this.config.dispose()
 		this.undoStack.dispose()
 		this.bus.dispose()

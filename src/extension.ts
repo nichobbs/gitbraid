@@ -17,6 +17,7 @@ import { registerAllCommands } from './commands'
 import type { CommandDeps } from './commands'
 import { GitBraidMcpServer } from './mcpServer'
 import { CommitDetailProvider, COMMIT_SCHEME, buildCommitUri } from './commitDetailProvider'
+import { reportEvent, disposeTelemetry } from './telemetry'
 export { showError }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -36,6 +37,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	log.info('activating gitbraid (version=' + context.extension.packageJSON.version + ')')
+
+	context.subscriptions.push({ dispose: () => { void disposeTelemetry() } })
+	reportEvent('activation', {}, { count: 1 })
 
 	// ─── Phase 1: Per-folder service graph ────────────────────────────────────
 	const registry = new FolderRegistry()

@@ -11,7 +11,7 @@ Control panel.
 
 | Term | Meaning |
 |------|---------|
-| **Stack** | An ordered list of branches, each building on the one below. Stored in `.worktrees/local-config.json` (never committed to the repo). |
+| **Stack** | An ordered list of branches, each building on the one below. Stored in `.worktrees/gitbraid-config.json` (never committed to the repo). If an older `.worktrees/local-config.json` exists, GitBraid migrates it on first load. |
 | **Floating file** | A file with uncommitted changes that has not yet been assigned to any branch. Shown under **Floating (unassigned)** in the Branch Stack view. |
 | **Assignment** | A mapping from a file path (or individual diff hunk) to a branch name. |
 | **Worktree** | A separate Git working tree on disk, one per stacked branch. GitBraid creates and manages these automatically under `.worktrees/`. |
@@ -217,7 +217,7 @@ Before a risky rebase or large re-assignment, save a checkpoint:
   branch count and assignment count per snapshot. Restoring requires confirmation
   and replaces the current stack and assignments entirely.
 
-Checkpoint files use the same JSON schema as `local-config.json` and can be
+Checkpoint files use the same JSON schema as `gitbraid-config.json` and can be
 opened and inspected directly.
 
 ---
@@ -286,6 +286,41 @@ that aren't ready to be committed to any real branch yet.
 
 ---
 
+### Virtual branches (no worktree until you commit)
+
+A **virtual branch** is a stack entry that has no git worktree yet.  Useful
+when you're still figuring out the shape of a feature and don't want to pay
+the cost of `git worktree add` for every speculative slice.
+
+**Commands:**
+
+- `GitBraid: Add Virtual Branch` (`gitbraid.addVirtualBranch`) — prompts for
+  a name and a base, then adds the branch to the stack with `virtual: true`.
+  No git objects are created.
+- `GitBraid: Materialise Virtual Branch` (`gitbraid.materialiseVirtualBranch`) —
+  creates the worktree, writes every file currently captured in the virtual
+  store into it, and flips the branch back to a regular stack entry.  Also
+  available as the **Materialise** button on the virtual branch's SCM panel.
+- `GitBraid: Discard Virtual Branch` (`gitbraid.discardVirtualBranch`) —
+  throws away the branch and its captured files (with a confirmation).
+
+**How it behaves:**
+
+- Files assigned to a virtual branch are captured in memory (and journalled
+  to `.worktrees/virtual/<slug>.jsonl`) on every save.  The primary
+  workspace shows the cumulative stack state exactly as before.
+- Branch Stack view marks virtual entries with a `$(cloud)` icon and a
+  `(virtual)` suffix.
+- Virtual branches do not appear in `git branch -a` until they are
+  materialised — that's by design.  The Materialise action is the first
+  button offered on the node for that reason.
+- Crash-safe: the JSONL log is append-only and atomic-enough that a VS Code
+  crash mid-edit loses at most the final in-flight save.
+
+See `docs/plans/08-virtual-branches.md` for the design rationale.
+
+---
+
 ### Import and export a stack layout
 
 **Export** (`gitbraid.exportStack`) — writes the current stack order and file
@@ -342,6 +377,94 @@ Settings are under `gitbraid.*` in VS Code preferences.
 | `gitbraid.maxSyncFileSizeKb` | `10240` | Files larger than this (KB) are skipped during sync. |
 | `gitbraid.rebaseCheckIntervalMinutes` | `5` | How often (minutes) to check whether a parent branch has advanced. Set to `0` to disable polling (checks happen on stack change and window focus). |
 | `gitbraid.bidirectionalSync` | `false` | *(Experimental)* Sync changes made directly inside a worktree back to the primary workspace. |
+| `gitbraid.mcpWriteEnabled` | `false` | Allow external MCP clients to call write tools. Read-only tools are always available while the MCP server is running. |
+| `gitbraid.prHost` | `"auto"` | PR host: `auto`, `github`, `gitlab`, `bitbucket`, `azure`, or `none`. `auto` detects from the `origin` remote. |
+| `gitbraid.suggestImportOnActivate` | `false` | Offer to import a stack detected from Graphite / git-spr / git-stack / GitButler on activation. |
+| `gitbraid.absorbRewritePushed` | `false` | Allow `Absorb Hunks` to rewrite commits already pushed to a remote. Dangerous. |
+| `gitbraid.undoLogMaxEntries` | `500` | Entries retained in the persistent undo log (`.worktrees/undo-log.jsonl`). |
+| `gitbraid.mergeQueuePollSeconds` | `30` | Polling interval for `Merge Stack` while waiting for each queued PR to land. |
+| `gitbraid.telemetry.enabled` | `false` | Opt-in anonymous usage counters (command names only — never file contents or branch names). Also requires VS Code's global telemetry setting to be enabled. |
+
+---
+
+## Stacked PRs
+
+GitBraid supports GitHub, GitLab, Bitbucket, and Azure DevOps as PR hosts. The
+host is picked automatically from the `origin` remote; override with the
+`gitbraid.prHost` setting.
+
+### Submit the stack as PRs
+
+`GitBraid: Submit / Update Stacked PRs` (`gitbraid.submitStack`) pushes every branch
+and opens (or updates) one PR per layer, wiring the `head` / `base` refs to stack
+them. Each PR body is prefixed with a `<!-- gitbraid:stack-start -->` block that
+lists every PR in the stack so reviewers can navigate without leaving the host.
+Insert `<!-- gitbraid:no-touch -->` at the top of a PR body to tell GitBraid to
+leave it alone.
+
+### Set a token for non-extension hosts
+
+Run `GitBraid: Set PR Host Token…` to store a PAT in VS Code's secret storage.
+GitBraid prompts for which host the token is for and saves it under the matching
+key (`gitbraid.githubToken`, `gitbraid.gitlabToken`, `gitbraid.bitbucketToken`,
+or `gitbraid.azureDevOpsToken`). Required scopes:
+
+| Host | Scope |
+|------|-------|
+| GitHub | `repo` (add `workflow` if you need merge-queue enqueue) |
+| GitLab | `api` (read + write merge requests) |
+| Bitbucket | App password with `Pull requests: Write` and `Repositories: Read` |
+| Azure DevOps | PAT with `Code (read & write)` and `Pull request (read & write)` |
+
+### Merge queue
+
+`GitBraid: Merge Stack via Queue` enqueues the topmost unmerged PR and polls for
+completion before enqueuing the next. Support varies by host:
+
+- **GitHub** — uses the native Merge Queue (requires queue to be enabled on the repo).
+- **GitLab** — uses Merge Trains when available (paid tier); otherwise falls back to
+  auto-merge when the pipeline succeeds.
+- **Bitbucket** — no native queue; GitBraid surfaces a clear error and leaves the
+  user to merge in order manually.
+- **Azure DevOps** — no native queue; GitBraid surfaces a clear error and suggests
+  enabling auto-complete on the PR in the Azure DevOps UI.
+
+---
+
+## Import a stack from another tool
+
+Run `GitBraid: Import Stack from External Tool…` (`gitbraid.importStackedTool`).
+GitBraid probes the repository for:
+
+- Graphite (`.graphite_cache_persist`)
+- git-stack (`.git/stack.json`)
+- git-spr (PR-id trailer lines in commit messages)
+- GitButler (`.git/gitbutler`)
+- Plain-upstream (branches with `branch.<name>.merge` set)
+
+…shows a preview of the inferred stack, then seeds `.worktrees/gitbraid-config.json`
+so you do not have to rebuild the stack by hand. If the active tool is
+auto-detected at activation, and `gitbraid.suggestImportOnActivate` is true, the
+same prompt surfaces automatically.
+
+---
+
+## MCP server (external tools)
+
+GitBraid ships with a Model Context Protocol server so AI agents and CLIs outside
+VS Code can inspect and mutate the stack over stdio/JSON-RPC.
+
+- **Start / stop** — `GitBraid: Start / Stop MCP Server` toggles a server that
+  reuses the same service graph as the extension.
+- **Read-only by default** — only `getStack`, `getFloatingFiles`,
+  `getBranchStatus`, and `getStackDiagram` are exposed unless
+  `gitbraid.mcpWriteEnabled` is set, at which point `addBranch`, `assignFile`,
+  `assignHunk`, `assignGlob`, and `commitBranch` become available too.
+- **Connect an agent** — point your MCP client (Claude Desktop, mcp-inspector,
+  etc.) at the stdio endpoint the command reports.
+
+The MCP surface is a strict subset of the extension's LM tools — the same
+validation rules and audit logging apply.
 
 ---
 

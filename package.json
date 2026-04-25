@@ -222,6 +222,24 @@
 				"icon": "$(pinned)"
 			},
 			{
+				"command": "gitbraid.addVirtualBranch",
+				"title": "Add Virtual Branch — no worktree until materialised",
+				"category": "GitBraid",
+				"icon": "$(cloud)"
+			},
+			{
+				"command": "gitbraid.materialiseVirtualBranch",
+				"title": "Materialise Virtual Branch (create worktree)",
+				"category": "GitBraid",
+				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "gitbraid.discardVirtualBranch",
+				"title": "Discard Virtual Branch",
+				"category": "GitBraid",
+				"icon": "$(trash)"
+			},
+			{
 				"command": "gitbraid.removeStackBranch",
 				"title": "Remove Branch from Stack",
 				"category": "GitBraid",
@@ -433,7 +451,7 @@
 			},
 			{
 				"command": "gitbraid.setGithubToken",
-				"title": "Set GitHub Token…",
+				"title": "Set PR Host Token… (GitHub / GitLab / Bitbucket)",
 				"category": "GitBraid",
 				"icon": "$(key)"
 			},
@@ -575,6 +593,11 @@
 			"view/title": [
 				{
 					"command": "gitbraid.addStackBranch",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
+				},
+				{
+					"command": "gitbraid.addVirtualBranch",
 					"when": "view == gitbraid.stackView",
 					"group": "navigation"
 				},
@@ -777,6 +800,21 @@
 					"command": "gitbraid.resetBranch",
 					"when": "view == gitbraid.stackView && viewItem == scratchBranch",
 					"group": "scratch@1"
+				},
+				{
+					"command": "gitbraid.materialiseVirtualBranch",
+					"when": "view == gitbraid.stackView && viewItem == virtualBranch",
+					"group": "inline"
+				},
+				{
+					"command": "gitbraid.discardVirtualBranch",
+					"when": "view == gitbraid.stackView && viewItem == virtualBranch",
+					"group": "virtual@1"
+				},
+				{
+					"command": "gitbraid.materialiseVirtualBranch",
+					"when": "view == gitbraid.stackView && viewItem == virtualBranch",
+					"group": "virtual@0"
 				}
 			]
 		},
@@ -837,10 +875,13 @@
 					"enum": [
 						"auto",
 						"github",
+						"gitlab",
+						"bitbucket",
+						"azure",
 						"none"
 					],
 					"default": "auto",
-					"description": "Pull-request host used by Submit Stack. `auto` prefers the GitHub Pull Requests extension and falls back to a stored GitHub token."
+					"description": "Pull/merge-request host used by Submit Stack. `auto` dispatches by the origin remote (github.com → GitHub, gitlab → GitLab, bitbucket.org → Bitbucket, dev.azure.com / visualstudio.com → Azure DevOps). Override to pin a specific host for self-hosted or ambiguous remotes."
 				},
 				"gitbraid.suggestImportOnActivate": {
 					"type": "boolean",
@@ -863,6 +904,11 @@
 					"default": 30,
 					"minimum": 5,
 					"description": "Polling interval (seconds) used by Merge Stack when waiting for each queued PR to merge."
+				},
+				"gitbraid.telemetry.enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Send anonymous usage counters (command names and stack-shape counts only — never file contents, paths, branch names, or remote URLs). Disabled by default; also requires VS Code's global telemetry setting to be on. No data leaves the machine unless a reporter sink is also configured."
 				}
 			}
 		},

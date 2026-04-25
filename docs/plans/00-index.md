@@ -20,7 +20,7 @@ documents — update them as decisions are made and link from
 | [05-merge-queue.md](05-merge-queue.md) | Merge-queue aware push | Graphite | **Implementing** |
 | [06-richer-stack-graph.md](06-richer-stack-graph.md) | Graphical stack view + commit inspector | GitButler | **Implemented (tree-view CommitNodes + dashboard commits drawer)** |
 | [07-import-from-tools.md](07-import-from-tools.md) | RM-012 — import stacks from Graphite/git-spr/git-stack/GitButler | n/a | **Implementing** |
-| [08-virtual-branches.md](08-virtual-branches.md) | Virtual branches without a worktree each | GitButler | Planned |
+| [08-virtual-branches.md](08-virtual-branches.md) | Virtual branches without a worktree each | GitButler | **Landed** |
 | [09-undo-log.md](09-undo-log.md) | Persistent undo across sessions | git-branchless, Sapling | **Implemented (replay supported)** |
 
 ## Shared conventions

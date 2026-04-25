@@ -8,6 +8,7 @@ import { worktreePath } from './branchStackService'
 import { showError } from './errorSurfacer'
 import type { IFileChangeBus } from './fileChangeBus'
 import { getDefaultGitRunner } from './gitRunner'
+import type { VirtualBranchStore } from './virtualBranchStore'
 
 const DEFAULT_DEBOUNCE_MS = 200
 /** Hard cap on `_floatingDirty` so a long-running session can't leak memory. */
@@ -73,8 +74,16 @@ export class WorkspaceSync implements vscode.Disposable {
 	 * Public constructor — each `FolderContext` creates its own instance
 	 * paired with that folder's `ConfigService`.  `getInstance()` /
 	 * `resetInstance()` retained for back-compat with the test suite.
+	 *
+	 * @param _virtualStore  Optional.  When provided, saves on files assigned
+	 *                       to a virtual branch are routed into the store
+	 *                       instead of a worktree.  Tests that don't exercise
+	 *                       virtual branches can omit it.
 	 */
-	constructor(private readonly _config: ConfigService) {}
+	constructor(
+		private readonly _config: ConfigService,
+		private readonly _virtualStore?: VirtualBranchStore,
+	) {}
 
 	/** Legacy singleton, retained for tests. */
 	static getInstance(config?: ConfigService): WorkspaceSync {
@@ -384,6 +393,20 @@ export class WorkspaceSync implements vscode.Disposable {
 		const normKey = normalisePath(relativePath)
 		this._floatingDirty.delete(normKey)
 		this._floatingSince.delete(normKey)
+		// Virtual branch — record the snapshot in the virtual store instead of
+		// copying to a worktree.  The primary workspace keeps the edit so the
+		// cumulative view stays intact.
+		if (this._virtualStore && this._config.isVirtual(branch)) {
+			try {
+				const content = await vscode.workspace.fs.readFile(uri)
+				await this._virtualStore.writeFile(branch, relativePath, content)
+				log.info(`WorkspaceSync: captured ${relativePath} → ${branch} (virtual)`)
+				this._onDidSyncFile.fire({ relativePath: normKey, branch })
+			} catch (e) {
+				await showError(`GitBraid: capturing ${relativePath} to virtual "${branch}" failed`, e)
+			}
+			return
+		}
 		// If the assigned branch has no worktree on disk (e.g. it IS the currently
 		// checked-out branch whose files live in the primary workspace), the file is
 		// already in the right place — no copy needed.
@@ -588,6 +611,18 @@ export class WorkspaceSync implements vscode.Disposable {
 		if (!this._workspaceRoot) {
 			return
 		}
+		// Virtual branch — record the deletion in the store rather than
+		// touching any worktree.
+		if (this._virtualStore && this._config.isVirtual(branch)) {
+			try {
+				await this._virtualStore.deleteFile(branch, relativePath)
+				log.info(`WorkspaceSync: recorded deletion of ${relativePath} on virtual "${branch}"`)
+			} catch (e) {
+				log.warn(`WorkspaceSync._propagateDeletion (virtual): ${e instanceof Error ? e.message : String(e)}`)
+			}
+			return
+		}
+
 		const wtPath = worktreePath(this._workspaceRoot, branch)
 		const destUri = vscode.Uri.joinPath(wtPath, relativePath)
 
