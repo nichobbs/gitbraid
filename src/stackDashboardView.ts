@@ -50,9 +50,18 @@ export interface DashboardBranchRow {
 	aheadCount?: number
 	checksStatus?: ChecksStatus
 
+	// ── Follow-up: review + checks detail (populated only when the PR
+	// host adapter is configured; otherwise the drawer is hidden). ─────
+	reviewState?: 'approved' | 'changesRequested' | 'commented' | 'pending'
+	reviewCount?: number
+	checksDetail?: ReadonlyArray<{ name: string; state: ChecksStatus; url?: string }>
+
 	// ── Wave C drill-down (optional; sections hide when absent/empty) ──
 	commits?: ReadonlyArray<{ shortSha: string, subject: string, sha: string }>
 	assignedFiles?: readonly string[]
+
+	// ── Follow-up: PR-body preview of the rendered stack block. ─────────
+	stackBlockPreview?: string
 }
 
 export interface DashboardBanners {
@@ -155,6 +164,17 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 			adapter: { name: adapter?.name ?? 'none', label: adapterLabel },
 			loadCommits: (branch, base, worktreeDir) =>
 				ctx.commitList.listCommits(worktreeDir, branch, base),
+			loadPrDetail: adapter && adapter.name !== 'none'
+				? async (branch) => {
+					const pr = await adapter.getPR(branch)
+					if (!pr) return undefined
+					return {
+						reviewState: pr.reviewState,
+						reviewCount: pr.reviewCount,
+						checksDetail: pr.checksDetail,
+					}
+				}
+				: undefined,
 		})
 
 		return {
@@ -175,10 +195,14 @@ export class StackDashboardView implements vscode.WebviewViewProvider, vscode.Di
 				singleCommit: b.singleCommit,
 				aheadCount: b.aheadCount,
 				checksStatus: b.checksStatus,
+				reviewState: b.reviewState,
+				reviewCount: b.reviewCount,
+				checksDetail: b.checksDetail,
 				commits: b.commits?.map((c) => ({
 					shortSha: c.shortSha, subject: c.subject, sha: c.sha,
 				})),
 				assignedFiles: b.assignedFiles,
+				stackBlockPreview: b.stackBlockPreview,
 			})),
 			banners: { floatingCount: snapshot.banners.floatingCount },
 			adapter: snapshot.adapter ? { label: snapshot.adapter.label } : undefined,
@@ -292,6 +316,18 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	details.drawer li button.commit { background: transparent; color: inherit; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; }
 	details.drawer li button.commit:hover { text-decoration: underline; }
 	details.drawer code { font-family: var(--vscode-editor-font-family); font-size: 11px; }
+	details.drawer pre.body-preview { font-family: var(--vscode-editor-font-family); font-size: 11px; white-space: pre-wrap; margin: 4px 0 0 8px; padding: 6px 8px; background: var(--vscode-textBlockQuote-background, rgba(127,127,127,0.08)); border-left: 2px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border)); border-radius: 2px; max-height: 200px; overflow-y: auto; }
+	details.drawer .reviews-body { padding: 2px 0 0 8px; }
+	details.drawer .review-state { font-weight: 600; padding: 2px 0; }
+	details.drawer .review-approved { color: var(--vscode-charts-green); }
+	details.drawer .review-changesRequested { color: var(--vscode-charts-red); }
+	details.drawer .review-commented { color: var(--vscode-charts-yellow); }
+	details.drawer .review-pending { color: var(--vscode-descriptionForeground); }
+	details.drawer ul.checks-list { padding: 2px 0 0 4px; }
+	details.drawer .check-icon { display: inline-block; width: 1.25em; text-align: center; }
+	details.drawer .check-success .check-icon { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
+	details.drawer .check-failure .check-icon { color: var(--vscode-testing-iconFailed, var(--vscode-charts-red)); }
+	details.drawer .check-pending .check-icon { color: var(--vscode-testing-iconQueued, var(--vscode-charts-yellow)); }
 	.empty { color: var(--vscode-descriptionForeground); font-size: 12px; }
 	footer.adapter { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--vscode-panel-border); font-size: 10px; color: var(--vscode-descriptionForeground); }
 	#menu { position: fixed; display: none; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 2px 8px rgba(0,0,0,0.3); border-radius: 2px; padding: 2px 0; z-index: 100; min-width: 180px; font-size: 12px; }
@@ -532,6 +568,33 @@ export function buildBranchRowHtml(b: DashboardBranchRow, i: number, total: numb
 		</details>`
 		: ''
 
+	// PR-body preview: shows the rendered `<!-- gitbraid:stack-start -->`
+	// block that `submitStack` would inject.  Hidden when there's nothing
+	// to preview (single-branch stack or missing preview data).
+	const bodyPreviewSection = (b.stackBlockPreview && b.stackBlockPreview.trim().length > 0)
+		? `<details class="drawer body" data-testid="body-drawer-${safe(b.name)}" data-state-key="body:${safe(b.name)}">
+			<summary>PR body preview</summary>
+			<pre class="body-preview">${safe(b.stackBlockPreview)}</pre>
+		</details>`
+		: ''
+
+	// Reviews & checks drawer — rendered only when the PR host adapter
+	// supplied detail.  Each check row links out to its external URL
+	// when the host provides one.
+	const reviewsChecksSection = (b.reviewState || b.reviewCount || (b.checksDetail && b.checksDetail.length > 0))
+		? `<details class="drawer reviews" data-testid="reviews-drawer-${safe(b.name)}" data-state-key="reviews:${safe(b.name)}">
+			<summary>Reviews &amp; checks${b.reviewCount ? ` <span class="count">${String(b.reviewCount)}</span>` : ''}</summary>
+			<div class="reviews-body">
+				${b.reviewState ? `<div class="review-state review-${safe(b.reviewState)}" data-testid="review-state-${safe(b.reviewState)}">${reviewStateGlyph(b.reviewState)} ${safe(b.reviewState)}</div>` : ''}
+				${b.checksDetail && b.checksDetail.length > 0
+					? `<ul class="drawer-list checks-list">
+						${b.checksDetail.map((c) => `<li class="check check-${safe(c.state)}"><span class="check-icon">${checksGlyph(c.state)}</span> <code>${safe(c.name)}</code>${c.url ? ` <a href="${safe(c.url)}">open</a>` : ''}</li>`).join('')}
+					</ul>`
+					: ''}
+			</div>
+		</details>`
+		: ''
+
 	return `<li class="row" data-branch="${safe(b.name)}" data-search="${safe(b.name.toLowerCase())}${b.prTitle ? ' ' + safe(b.prTitle.toLowerCase()) : ''}${b.prNumber ? ' #' + String(b.prNumber) : ''}">
 	<div class="${connectorClass(i, total)}"></div>
 	<div class="node ${b.isCurrent ? 'current-branch' : ''}" style="border-color:${safe(b.color)}">
@@ -554,8 +617,19 @@ export function buildBranchRowHtml(b: DashboardBranchRow, i: number, total: numb
 		</div>
 		${commitsSection}
 		${filesSection}
+		${reviewsChecksSection}
+		${bodyPreviewSection}
 	</div>
 </li>`
+}
+
+function reviewStateGlyph(state: 'approved' | 'changesRequested' | 'commented' | 'pending'): string {
+	switch (state) {
+		case 'approved':         return '✓'
+		case 'changesRequested': return '✗'
+		case 'commented':        return '💬'
+		case 'pending':          return '⌛'
+	}
 }
 
 function connectorClass(i: number, total: number): string {

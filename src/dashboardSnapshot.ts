@@ -3,6 +3,7 @@ import { WorkspaceSync } from './workspaceSync'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import type { PRAwareness } from './prAwareness'
 import type { CommitSummary } from './commitListService'
+import { renderStackBlock, StackBodyEntry } from './prHostAdapter'
 
 /**
  * Plan 02 — Wave A/C: shared snapshot of the stack used by the dashboard
@@ -44,12 +45,20 @@ export interface SnapshotBranch {
 	prUrl?: string
 
 	checksStatus?: ChecksStatus
+	/** Reviewer verdict rollup. */
+	reviewState?: 'approved' | 'changesRequested' | 'commented' | 'pending'
+	/** Number of review rounds on the PR. */
+	reviewCount?: number
+	/** Per-check-run detail for the dashboard's Reviews & Checks drawer. */
+	checksDetail?: Array<{ name: string; state: ChecksStatus; url?: string }>
 
 	// ── Wave C drill-down payloads (all optional) ────────────────────
 	/** Commits unique to this branch vs its base. */
 	commits?: CommitSummary[]
 	/** Workspace-relative files assigned to this branch. */
 	assignedFiles?: string[]
+	/** Rendered stacked-PR block that `submitStack` would inject. */
+	stackBlockPreview?: string
 }
 
 /** Banner-level summary surfaced above the stack. */
@@ -89,6 +98,18 @@ export interface BuildSnapshotDeps {
 	 * omitted, the snapshot does not populate `branches[].commits`.
 	 */
 	loadCommits?: (branch: string, base: string, worktreeDir: string) => Promise<CommitSummary[]>
+	/**
+	 * Follow-up — supplies review + checks detail per branch (lazy, cached
+	 * upstream by the adapter).  Only populates `reviewState`,
+	 * `reviewCount`, and `checksDetail` on rows where the call succeeds;
+	 * missing detail leaves the fields undefined and the UI gracefully
+	 * hides the Reviews & Checks drawer.
+	 */
+	loadPrDetail?: (branch: string) => Promise<{
+		reviewState?: 'approved' | 'changesRequested' | 'commented' | 'pending'
+		reviewCount?: number
+		checksDetail?: Array<{ name: string; state: ChecksStatus; url?: string }>
+	} | undefined>
 }
 
 /**
@@ -128,6 +149,22 @@ export async function buildSnapshot(
 			}
 		}
 
+		let reviewState: 'approved' | 'changesRequested' | 'commented' | 'pending' | undefined
+		let reviewCount: number | undefined
+		let checksDetail: Array<{ name: string; state: ChecksStatus; url?: string }> | undefined
+		if (deps.loadPrDetail) {
+			try {
+				const detail = await deps.loadPrDetail(e.name)
+				if (detail) {
+					reviewState = detail.reviewState
+					reviewCount = detail.reviewCount
+					checksDetail = detail.checksDetail
+				}
+			} catch {
+				// Best-effort — the adapter failing shouldn't void the snapshot.
+			}
+		}
+
 		rows.push({
 			name: e.name,
 			base: e.base,
@@ -148,12 +185,25 @@ export async function buildSnapshot(
 			// `checksStatus` intentionally left undefined here — the wave A
 			// render path short-circuits when absent so the UI gracefully
 			// degrades until a later wave wires the source.
+			reviewState,
+			reviewCount,
+			checksDetail,
 		})
 	}
 
 	const floatingCount = deps.sync.getFloatingDirty().length
 	const workspaceName =
 		deps.workspaceRootFsPath.split(/[\\/]/).filter(Boolean).pop() ?? 'workspace'
+
+	// Per-branch stacked-PR body preview: exactly what `submitStack` would
+	// inject.  Skips rows whose branch has no PR or no URL — the block only
+	// makes sense once submission has happened at least once.  We still
+	// render for branches without a prNumber using a `#?` placeholder,
+	// since that matches `renderStackBlock`'s "PR not known yet" output.
+	const stackEntries: StackBodyEntry[] = rows.map((r) => ({ name: r.name, prNumber: r.prNumber }))
+	for (const row of rows) {
+		row.stackBlockPreview = renderStackBlock(stackEntries, row.name)
+	}
 
 	return {
 		workspaceName,

@@ -303,4 +303,66 @@ suite('stackDashboardView: buildDashboardHtml', () => {
 		assert.ok(html.includes('restoreDrawers'))
 		assert.ok(html.includes('applyFilter'))
 	})
+
+	// ── Follow-up: PR-body preview drawer ──────────────────────────────────
+
+	test('Follow-up: PR-body preview drawer renders when the snapshot supplies one', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+			prNumber: 1,
+			stackBlockPreview: '<!-- gitbraid:stack-start -->\nStacked PRs:\n1. #1 feat/a\n<!-- gitbraid:stack-end -->',
+		}, 0, 1)
+		assert.ok(row.includes('data-testid="body-drawer-feat/a"'))
+		assert.ok(row.includes('&lt;!-- gitbraid:stack-start --&gt;'))
+		assert.ok(row.includes('1. #1 feat/a'))
+	})
+
+	test('Follow-up: PR-body preview drawer hides when preview is empty', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+			stackBlockPreview: '   ',
+		}, 0, 1)
+		assert.ok(!row.includes('data-testid="body-drawer-feat/a"'))
+	})
+
+	// ── Follow-up: reviews & checks drawer ─────────────────────────────────
+
+	test('Follow-up: reviews & checks drawer renders review state + per-check detail', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+			prNumber: 1, prState: 'open',
+			reviewState: 'approved',
+			reviewCount: 2,
+			checksDetail: [
+				{ name: 'lint',  state: 'success', url: 'https://example.com/lint' },
+				{ name: 'tests', state: 'failure', url: 'https://example.com/tests' },
+				{ name: 'slow',  state: 'pending' },
+			],
+		}, 0, 1)
+		assert.ok(row.includes('data-testid="reviews-drawer-feat/a"'))
+		assert.ok(row.includes('data-testid="review-state-approved"'))
+		assert.ok(row.includes('lint'))
+		assert.ok(row.includes('tests'))
+		assert.ok(row.includes('slow'))
+		assert.ok(row.includes('check check-success'))
+		assert.ok(row.includes('check check-failure'))
+		assert.ok(row.includes('check check-pending'))
+		const links = (row.match(/>open</g) ?? []).length
+		assert.strictEqual(links, 2, 'exactly two checks should link out')
+	})
+
+	test('Follow-up: reviews drawer hides when all fields absent', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+		}, 0, 1)
+		assert.ok(!row.includes('data-testid="reviews-drawer-feat/a"'))
+	})
+
+	test('Follow-up: reviews drawer shows with checks only (no review state)', () => {
+		const row = buildBranchRowHtml({
+			name: 'feat/a', base: 'main', order: 1, color: '#abc',
+			checksDetail: [{ name: 'lint', state: 'success' }],
+		}, 0, 1)
+		assert.ok(row.includes('data-testid="reviews-drawer-feat/a"'))
+	})
 })

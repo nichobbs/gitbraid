@@ -199,4 +199,65 @@ suite('dashboardSnapshot', () => {
 		})
 		assert.strictEqual(snap.branches[0].commits, undefined)
 	})
+
+	test('Follow-up: buildSnapshot populates stackBlockPreview for every row', async () => {
+		await config.addBranch({ name: 'feat/a', base: 'main', color: '#abc' })
+		await config.addBranch({ name: 'feat/b', base: 'feat/a', color: '#abc' })
+		const snap = await buildSnapshot({
+			config,
+			sync,
+			workspaceRootFsPath: wsRoot().fsPath,
+			worktreeDirOf: () => undefined,
+			runner: new FakeGitRunner(),
+		})
+		assert.strictEqual(snap.branches.length, 2)
+		for (const b of snap.branches) {
+			assert.ok(b.stackBlockPreview, `expected stackBlockPreview for ${b.name}`)
+			assert.ok(b.stackBlockPreview!.includes('<!-- gitbraid:stack-start -->'))
+			assert.ok(b.stackBlockPreview!.includes('feat/a'))
+			assert.ok(b.stackBlockPreview!.includes('feat/b'))
+		}
+		const a = snap.branches.find((r) => r.name === 'feat/a')!
+		assert.ok(a.stackBlockPreview!.includes('feat/a  ← you are here'))
+		const b = snap.branches.find((r) => r.name === 'feat/b')!
+		assert.ok(b.stackBlockPreview!.includes('feat/b  ← you are here'))
+	})
+
+	test('Follow-up: loadPrDetail populates review/checks fields when provided', async () => {
+		await config.addBranch({ name: 'feat/a', base: 'main', color: '#abc' })
+		const snap = await buildSnapshot({
+			config,
+			sync,
+			workspaceRootFsPath: wsRoot().fsPath,
+			worktreeDirOf: () => undefined,
+			runner: new FakeGitRunner(),
+			loadPrDetail: async (branch) => {
+				assert.strictEqual(branch, 'feat/a')
+				return {
+					reviewState: 'approved',
+					reviewCount: 3,
+					checksDetail: [{ name: 'ci', state: 'success' }],
+				}
+			},
+		})
+		const row = snap.branches[0]
+		assert.strictEqual(row.reviewState, 'approved')
+		assert.strictEqual(row.reviewCount, 3)
+		assert.deepStrictEqual(row.checksDetail, [{ name: 'ci', state: 'success' }])
+	})
+
+	test('Follow-up: loadPrDetail throwing is swallowed', async () => {
+		await config.addBranch({ name: 'feat/a', base: 'main', color: '#abc' })
+		const snap = await buildSnapshot({
+			config,
+			sync,
+			workspaceRootFsPath: wsRoot().fsPath,
+			worktreeDirOf: () => undefined,
+			runner: new FakeGitRunner(),
+			loadPrDetail: async () => { throw new Error('fail') },
+		})
+		assert.strictEqual(snap.branches[0].reviewState, undefined)
+		assert.strictEqual(snap.branches[0].reviewCount, undefined)
+		assert.strictEqual(snap.branches[0].checksDetail, undefined)
+	})
 })
