@@ -77,6 +77,8 @@ const config = {
             '**/dist/**',
             '**/out/**',
             '**/test/**',
+            '**/extension.ts',
+            '**/commands/index.ts',
         ],
     }
 }

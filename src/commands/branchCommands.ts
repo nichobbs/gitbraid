@@ -7,21 +7,17 @@ import { unhideAssignedFile } from '../gitIndex'
 import { BranchNode } from '../branchStackTreeProvider'
 import { SHARED_DIR, SHARED_FILE } from '../stackShareService'
 import { withErrorHandler } from '../errorSurfacer'
+import {
+	buildBaseList,
+	buildAddBranchPickItems,
+	filesAssignedTo,
+	reorderForMove,
+	toolDisplayName as _toolDisplayName,
+	type BranchPickItem,
+} from './_helpers'
 import type { CommandDeps } from './types'
 
 const cmd = withErrorHandler
-
-function _toolDisplayName(
-	tool: 'graphite' | 'git-spr' | 'git-stack' | 'gitbutler' | 'upstream',
-): string {
-	switch (tool) {
-		case 'graphite':  return 'Graphite'
-		case 'git-spr':   return 'git-spr'
-		case 'git-stack': return 'git-stack'
-		case 'gitbutler': return 'GitButler'
-		case 'upstream':  return 'Upstream tracking'
-	}
-}
 
 /**
  * Best-effort detection of the repository's default branch.  Checks, in order:
@@ -50,24 +46,17 @@ async function detectDefaultBranch(workspaceUri: vscode.Uri): Promise<string> {
  * order) or down (toward the base / lower order) within the sorted stack.
  * The stack is treated as ascending by `order` field; "up" means the branch
  * becomes a higher layer (larger order number, wins over more other branches).
+ *
+ * The pure ordering math lives in {@link reorderForMove} so it can be
+ * unit-tested without a `ConfigService`; this shell just drives it.
  */
 async function _moveBranch(
 	ctx: import('./types').CommandDeps['primary'],
 	branchName: string,
 	direction: 'up' | 'down',
 ): Promise<void> {
-	const sorted = ctx.config.getStack()
-		.filter(e => !e.scratch)
-		.sort((a, b) => a.order - b.order)
-	const idx = sorted.findIndex(e => e.name === branchName)
-	if (idx === -1) return
-	if (direction === 'up' && idx >= sorted.length - 1) return
-	if (direction === 'down' && idx <= 0) return
-
-	const names = sorted.map(e => e.name)
-	const swapWith = direction === 'up' ? idx + 1 : idx - 1
-	;[names[idx], names[swapWith]] = [names[swapWith], names[idx]]
-
+	const names = reorderForMove(ctx.config.getStack(), branchName, direction)
+	if (!names) return
 	// Preserve scratch branches at their current orders — pass only non-scratch names.
 	await ctx.config.reorderStack(names)
 }
@@ -86,28 +75,20 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 
 			type BranchItem = vscode.QuickPickItem & { isNew?: boolean }
 
+			// Map the pure builder's items to vscode.QuickPickItem (separator kind).
 			const buildItems = (value: string, remote: string[] = []): BranchItem[] => {
-				const items: BranchItem[] = []
-				const trimmed = value.trim()
-				if (trimmed && !availableLocal.includes(trimmed) && !remote.includes(trimmed)) {
-					items.push({
-						label: `$(plus) ${trimmed}`,
-						description: 'Create a new branch',
-						detail: trimmed,
-						isNew: true,
-					})
-				}
-				const localMatches = availableLocal.filter(b => b.includes(trimmed))
-				if (localMatches.length > 0) {
-					items.push({ label: 'Local', kind: vscode.QuickPickItemKind.Separator })
-					for (const b of localMatches) items.push({ label: b, description: 'local' })
-				}
-				const remoteMatches = remote.filter(b => !stackBranchNames.has(b))
-				if (remoteMatches.length > 0) {
-					items.push({ label: 'Remote', kind: vscode.QuickPickItemKind.Separator })
-					for (const b of remoteMatches) items.push({ label: b, description: 'remote' })
-				}
-				return items
+				const raw: BranchPickItem[] = buildAddBranchPickItems(value, availableLocal, remote, stackBranchNames)
+				return raw.map((it) => {
+					if (it.kind === 'separator') {
+						return { label: it.label, kind: vscode.QuickPickItemKind.Separator } as BranchItem
+					}
+					return {
+						label: it.label,
+						description: it.description,
+						detail: it.detail,
+						isNew: it.isNew,
+					} as BranchItem
+				})
 			}
 
 			const qp = vscode.window.createQuickPick<BranchItem>()
@@ -157,7 +138,7 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 
 			const stack = ctx.config.getStack()
 			const defaultBranch = await detectDefaultBranch(workspaceUri).catch(() => 'main')
-			const bases = [defaultBranch, ...stack.map((e) => e.name).filter(n => n !== defaultBranch)]
+			const bases = buildBaseList(stack, defaultBranch)
 			const basePick = await vscode.window.showQuickPick(bases, {
 				placeHolder: 'Base branch (used when creating a new branch)',
 			})
@@ -213,10 +194,7 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 				: await resolveBranchNameArg(arg, 'Reset branch — unassign all files')
 			if (!picked) return
 
-			const allAssignments = ctx.config.getAllAssignments()
-			const assignedFiles = Object.entries(allAssignments)
-				.filter(([, b]) => b === picked)
-				.map(([rel]) => rel)
+			const assignedFiles = filesAssignedTo(ctx.config.getAllAssignments(), picked)
 
 			if (assignedFiles.length === 0) {
 				await vscode.window.showInformationMessage(`Branch "${picked}" has no assigned files.`)

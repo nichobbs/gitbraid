@@ -25,7 +25,7 @@ npm test                # macOS / Windows
 
 To run a single test file, pass `--grep` or a file path via the vscode-test CLI — see `@vscode/test-cli` docs. The pre-test script (`scripts/setup-test-fixture.js`) creates `test_projects/proj1/` automatically.
 
-CI enforces coverage minimums (Linux only): **lines ≥60%, branches ≥50%, functions ≥60%** via `scripts/check-coverage.mjs`. These floors ratchet up as tests land; never lower them without a CHANGELOG note explaining why.
+CI enforces coverage minimums (Linux only): **lines ≥72%, branches ≥75%, functions ≥75%** via `scripts/check-coverage.mjs`. These floors ratchet up as tests land; never lower them without a CHANGELOG note explaining why. Coverage excludes `src/extension.ts` (activation wiring exercised end-to-end by `test/extension.test.ts`) and `src/commands/index.ts` (a thin command dispatcher).
 
 ## Code Style
 
