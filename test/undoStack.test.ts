@@ -1,5 +1,16 @@
 import * as assert from 'node:assert'
-import { UndoStack, UndoableOp } from '../src/undoStack'
+import * as vscode from 'vscode'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import {
+	UndoStack,
+	UndoableOp,
+	recordAssignFile,
+	recordUnassignFile,
+	recordAssignHunk,
+	recordUnassignHunk,
+} from '../src/undoStack'
+import { ConfigService } from '../src/configService'
 
 // Focused unit test for the UndoStack itself — driving it with
 // throwaway ops so we exercise the ring semantics without needing a
@@ -143,5 +154,94 @@ suite('UndoStack (T69)', () => {
 		assert.strictEqual(s.canUndo(), false)
 		assert.strictEqual(s.canRedo(), false)
 		s.dispose()
+	})
+})
+
+// ─── record* helpers ────────────────────────────────────────────────────────
+
+function wsRoot(): vscode.Uri {
+	return vscode.workspace.workspaceFolders![0].uri
+}
+
+function cleanup(): void {
+	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true, force: true }) } catch { /* ignore */ }
+}
+
+suite('UndoStack: record* helpers', () => {
+	let stack: UndoStack
+	let config: ConfigService
+
+	setup(async () => {
+		cleanup()
+		stack = new UndoStack()
+		config = new ConfigService()
+		await config.load(wsRoot())
+		await config.addBranch({ name: 'feat/a', base: 'main', color: '#fff' })
+		await config.addBranch({ name: 'feat/b', base: 'main', color: '#fff' })
+	})
+
+	teardown(() => {
+		stack.dispose()
+		cleanup()
+	})
+
+	test('recordAssignFile: undo restores nothing when no prior branch', async () => {
+		await config.setAssignment('src/foo.ts', 'feat/a')
+		recordAssignFile(stack, config, 'src/foo.ts', 'feat/a', undefined)
+		assert.match(stack.peekUndo()!.label, /Assign src\/foo\.ts/)
+		await stack.undo()
+		assert.strictEqual(config.getAssignment('src/foo.ts'), undefined)
+		await stack.redo()
+		assert.strictEqual(config.getAssignment('src/foo.ts'), 'feat/a')
+	})
+
+	test('recordAssignFile: undo restores previous branch when reassigning', async () => {
+		await config.setAssignment('src/foo.ts', 'feat/a')
+		await config.setAssignment('src/foo.ts', 'feat/b')
+		recordAssignFile(stack, config, 'src/foo.ts', 'feat/b', 'feat/a')
+		assert.match(stack.peekUndo()!.label, /Reassign.*feat\/a.*feat\/b/)
+		await stack.undo()
+		assert.strictEqual(config.getAssignment('src/foo.ts'), 'feat/a')
+	})
+
+	test('recordUnassignFile: undo re-assigns to previous branch', async () => {
+		await config.setAssignment('src/foo.ts', 'feat/a')
+		await config.removeAssignment('src/foo.ts')
+		recordUnassignFile(stack, config, 'src/foo.ts', 'feat/a')
+		assert.match(stack.peekUndo()!.label, /Unassign src\/foo\.ts/)
+		await stack.undo()
+		assert.strictEqual(config.getAssignment('src/foo.ts'), 'feat/a')
+		await stack.redo()
+		assert.strictEqual(config.getAssignment('src/foo.ts'), undefined)
+	})
+
+	test('recordAssignHunk: undo removes hunk assignment when no prior', async () => {
+		await config.setHunkAssignment('src/foo.ts', 0, 'feat/a')
+		recordAssignHunk(stack, config, 'src/foo.ts', 0, 'feat/a', undefined, undefined)
+		await stack.undo()
+		const assignments = config.getHunkAssignments('src/foo.ts')
+		assert.ok(!assignments?.has(0))
+	})
+
+	test('recordAssignHunk: undo restores previous hunk branch', async () => {
+		await config.setHunkAssignment('src/foo.ts', 0, 'feat/a')
+		await config.setHunkAssignment('src/foo.ts', 0, 'feat/b')
+		recordAssignHunk(stack, config, 'src/foo.ts', 0, 'feat/b', 'feat/a', undefined)
+		await stack.undo()
+		assert.strictEqual(config.getHunkAssignments('src/foo.ts')?.get(0), 'feat/a')
+		await stack.redo()
+		assert.strictEqual(config.getHunkAssignments('src/foo.ts')?.get(0), 'feat/b')
+	})
+
+	test('recordUnassignHunk: undo restores hunk assignment', async () => {
+		await config.setHunkAssignment('src/foo.ts', 0, 'feat/a')
+		await config.removeHunkAssignment('src/foo.ts', 0)
+		recordUnassignHunk(stack, config, 'src/foo.ts', 0, 'feat/a', undefined)
+		assert.match(stack.peekUndo()!.label, /Unassign hunk 0/)
+		await stack.undo()
+		assert.strictEqual(config.getHunkAssignments('src/foo.ts')?.get(0), 'feat/a')
+		await stack.redo()
+		const after = config.getHunkAssignments('src/foo.ts')
+		assert.ok(!after?.has(0))
 	})
 })

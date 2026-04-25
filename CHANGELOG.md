@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Tests / CI
+- Test coverage raised significantly — overall lines from ~62% to ~71%,
+  branches from ~77% to ~76%, functions from ~63% to ~76%.  CI floors
+  ratcheted from `lines ≥60%, branches ≥50%, functions ≥60%` to
+  `lines ≥70%, branches ≥70%, functions ≥75%`.  New / expanded test
+  files cover `absorb`, `checkpointService`, `gitIndex`, `lmTools`
+  invocation paths, `mcpTools` write-gate + success paths,
+  `stackContentProvider`, `hunkCodeLensProvider`, `OverlayDiagnostics`,
+  `prHostAdapter` REST adapters with mocked `fetch`, `worktreeHealthService`,
+  `undoStack` record-helpers, `undoReplay.runShowUndoLogCommand`, and
+  `telemetry` (with `vscode.env.isTelemetryEnabled` forced on so the gate
+  doesn't short-circuit).  Previously-skipped suites for `absorb`,
+  `commitListService`, `mergeQueueService`, `persistentUndoLog`, and
+  `submitStackService` are now part of the run.
+
 ### Added
 - **Virtual branches (Plan 08)** — a new kind of stack entry that exists only
   as an in-memory set of file snapshots until the user commits.  Commands:

@@ -70,9 +70,9 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           node scripts/check-coverage.mjs \
-            --lines 60 \
-            --branches 50 \
-            --functions 60 \
+            --lines 70 \
+            --branches 70 \
+            --functions 75 \
             coverage/lcov.info
 
       # `vsce package` invokes the `vscode:prepublish` script, which

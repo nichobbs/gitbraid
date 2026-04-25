@@ -199,4 +199,172 @@ suite('mcpTools', function () {
 			await cleanup()
 		}
 	})
+
+	test('getBranchStatus returns JSON for the named branch', async () => {
+		const state: StubApiState = {
+			stack: [],
+			addBranchCalled: false,
+			assignFileCalled: false,
+			rebaseBranchCalled: false,
+			routeHunksResult: { routed: 0, skipped: 0 },
+		}
+		const { client, cleanup } = await makeClientServerPair(makeStubApi(state), false)
+		try {
+			const result = await client.callTool({ name: 'getBranchStatus', arguments: { branch: 'feat/a' } })
+			const text = (result.content as Array<{ type: string, text: string }>)[0].text
+			assert.ok(text.includes('"branch": "feat/a"'))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('getStackStatus returns JSON', async () => {
+		const state: StubApiState = {
+			stack: [],
+			addBranchCalled: false,
+			assignFileCalled: false,
+			rebaseBranchCalled: false,
+			routeHunksResult: { routed: 0, skipped: 0 },
+		}
+		const { client, cleanup } = await makeClientServerPair(makeStubApi(state), false)
+		try {
+			const result = await client.callTool({ name: 'getStackStatus', arguments: {} })
+			const text = (result.content as Array<{ type: string, text: string }>)[0].text
+			assert.ok(text.includes('totalFloating'))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('getFloatingFiles: empty list emits "No floating files"', async () => {
+		const state: StubApiState = {
+			stack: [],
+			addBranchCalled: false,
+			assignFileCalled: false,
+			rebaseBranchCalled: false,
+			routeHunksResult: { routed: 0, skipped: 0 },
+		}
+		const api = makeStubApi(state)
+		api.getFloatingFiles = () => []
+		const { client, cleanup } = await makeClientServerPair(api, false)
+		try {
+			const result = await client.callTool({ name: 'getFloatingFiles', arguments: {} })
+			const text = (result.content as Array<{ type: string, text: string }>)[0].text
+			assert.ok(text.includes('No floating files'))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	// ── Write-gate coverage for every mutating tool ────────────────────────────
+
+	const writeTools: Array<{ name: string, args: Record<string, unknown> }> = [
+		{ name: 'addBranch', args: { name: 'f', base: 'main' } },
+		{ name: 'removeBranch', args: { name: 'f' } },
+		{ name: 'reorderStack', args: { orderedNames: ['f'] } },
+		{ name: 'assignFile', args: { relativePath: 'a', branch: 'f' } },
+		{ name: 'unassignFile', args: { relativePath: 'a' } },
+		{ name: 'assignHunk', args: { relativePath: 'a', hunkIndex: 0, branch: 'f' } },
+		{ name: 'removeHunkAssignment', args: { relativePath: 'a', hunkIndex: 0 } },
+		{ name: 'routeHunks', args: { relativePath: 'a' } },
+		{ name: 'commitBranch', args: { branch: 'f', message: 'm' } },
+		{ name: 'rebaseBranch', args: { branch: 'f' } },
+	]
+
+	for (const { name, args } of writeTools) {
+		test(`${name}: write-gate returns isError when disabled`, async () => {
+			const state: StubApiState = {
+				stack: [],
+				addBranchCalled: false,
+				assignFileCalled: false,
+				rebaseBranchCalled: false,
+				routeHunksResult: { routed: 0, skipped: 0 },
+			}
+			const { client, cleanup } = await makeClientServerPair(makeStubApi(state), false)
+			try {
+				const result = await client.callTool({ name, arguments: args })
+				assert.strictEqual((result as { isError?: boolean }).isError, true, `${name} should be error-gated`)
+			} finally {
+				await cleanup()
+			}
+		})
+	}
+
+	test('assignFile, unassignFile, assignHunk, removeHunkAssignment: success path with writes enabled', async () => {
+		const state: StubApiState = {
+			stack: [],
+			addBranchCalled: false,
+			assignFileCalled: false,
+			rebaseBranchCalled: false,
+			routeHunksResult: { routed: 0, skipped: 0 },
+		}
+		const { client, cleanup } = await makeClientServerPair(makeStubApi(state), true)
+		try {
+			const r1 = await client.callTool({ name: 'assignFile', arguments: { relativePath: 'a', branch: 'f' } })
+			assert.strictEqual((r1 as { isError?: boolean }).isError, undefined)
+			assert.strictEqual(state.assignFileCalled, true)
+
+			const r2 = await client.callTool({ name: 'unassignFile', arguments: { relativePath: 'a' } })
+			assert.strictEqual((r2 as { isError?: boolean }).isError, undefined)
+
+			const r3 = await client.callTool({ name: 'assignHunk', arguments: { relativePath: 'a', hunkIndex: 0, branch: 'f' } })
+			assert.strictEqual((r3 as { isError?: boolean }).isError, undefined)
+
+			const r4 = await client.callTool({ name: 'removeHunkAssignment', arguments: { relativePath: 'a', hunkIndex: 0 } })
+			assert.strictEqual((r4 as { isError?: boolean }).isError, undefined)
+
+			const r5 = await client.callTool({ name: 'commitBranch', arguments: { branch: 'f', message: 'wip' } })
+			assert.strictEqual((r5 as { isError?: boolean }).isError, undefined)
+
+			const r6 = await client.callTool({ name: 'rebaseBranch', arguments: { branch: 'f' } })
+			assert.strictEqual((r6 as { isError?: boolean }).isError, undefined)
+			assert.strictEqual(state.rebaseBranchCalled, true)
+
+			const r7 = await client.callTool({ name: 'reorderStack', arguments: { orderedNames: ['feat/a'] } })
+			assert.strictEqual((r7 as { isError?: boolean }).isError, undefined)
+
+			const r8 = await client.callTool({ name: 'removeBranch', arguments: { name: 'feat/a' } })
+			assert.strictEqual((r8 as { isError?: boolean }).isError, undefined)
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('error in api propagates as isError', async () => {
+		const state: StubApiState = {
+			stack: [],
+			addBranchCalled: false,
+			assignFileCalled: false,
+			rebaseBranchCalled: false,
+			routeHunksResult: { routed: 0, skipped: 0 },
+		}
+		const api = makeStubApi(state)
+		api.assignFile = async () => { throw new Error('write failed') }
+		const { client, cleanup } = await makeClientServerPair(api, true)
+		try {
+			const result = await client.callTool({ name: 'assignFile', arguments: { relativePath: 'a', branch: 'f' } })
+			assert.strictEqual((result as { isError?: boolean }).isError, true)
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('getBranchStatus: error propagates as isError', async () => {
+		const state: StubApiState = {
+			stack: [],
+			addBranchCalled: false,
+			assignFileCalled: false,
+			rebaseBranchCalled: false,
+			routeHunksResult: { routed: 0, skipped: 0 },
+		}
+		const api = makeStubApi(state)
+		api.getBranchStatus = async () => { throw new Error('boom') }
+		const { client, cleanup } = await makeClientServerPair(api, false)
+		try {
+			const result = await client.callTool({ name: 'getBranchStatus', arguments: { branch: 'x' } })
+			assert.strictEqual((result as { isError?: boolean }).isError, true)
+		} finally {
+			await cleanup()
+		}
+	})
 })
