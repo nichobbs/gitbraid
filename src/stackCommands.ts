@@ -6,6 +6,7 @@ import { BranchStackService, worktreePath } from './branchStackService'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import { GitError } from './errors'
+import { promptSquashForViolations, squashToOne, validateStack } from './singleCommit'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -72,6 +73,36 @@ export class StackCommands implements vscode.Disposable {
 		if (stack.length === 0) {
 			await vscode.window.showInformationMessage('GitBraid: the stack is empty — nothing to push.')
 			return []
+		}
+
+		// Plan 03 — validate single-commit branches before we touch the
+		// remote.  Offer squash-to-one for violators; abort on cancel.
+		const violations = await validateStack(
+			this._runner,
+			this._config,
+			(b) => this._branchStack.worktreeExists(b) ? this._branchStack.getWorktreePath(b).fsPath : undefined,
+		)
+		if (violations.some((v) => v.violated)) {
+			const toSquash = await promptSquashForViolations(violations)
+			if (toSquash.length === 0) {
+				return []
+			}
+			for (const branch of toSquash) {
+				const entry = this._config.getBranch(branch)
+				if (!entry) continue
+				const cwd = this._branchStack.getWorktreePath(branch).fsPath
+				// Pick the most recent commit message to reuse.
+				const msg = await this._runner.run(['log', '-1', '--format=%B', 'HEAD'], { cwd })
+				const message = msg.exitCode === 0 ? msg.stdout.trim() : `squashed commits on ${branch}`
+				const result = await squashToOne(this._runner, cwd, entry.base, message)
+				if (!result.ok) {
+					await vscode.window.showErrorMessage(
+						`GitBraid: could not squash "${branch}": ${result.error ?? 'unknown error'}`,
+					)
+					return []
+				}
+				log.info(`pushStack: squashed "${branch}" to one commit before push`)
+			}
 		}
 
 		const results: StackOpResult[] = []

@@ -264,6 +264,12 @@
 				"icon": "$(git-compare)"
 			},
 			{
+				"command": "gitbraid.showCommit",
+				"title": "Show Commit Diff",
+				"category": "GitBraid",
+				"icon": "$(git-commit)"
+			},
+			{
 				"command": "gitbraid.showStackDiff",
 				"title": "Show Cumulative Stack Diff",
 				"category": "GitBraid",
@@ -825,6 +831,11 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Warn when committing a branch that has floating (unassigned) files."
+				},
+				"gitbraid.singleCommit.confirmAmend": {
+					"type": "boolean",
+					"default": true,
+					"description": "Prompt before amending the existing commit on a branch that is in single-commit mode.  Disable once you trust the behaviour."
 				},
 				"gitbraid.prDecorationsEnabled": {
 					"type": "boolean",

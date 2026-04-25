@@ -23,6 +23,12 @@ export interface PRMetadata {
 	title: string
 	body: string
 	checksStatus?: ChecksStatus
+	/** Dashboard follow-up — reviewer verdict rollup on the latest review round. */
+	reviewState?: 'approved' | 'changesRequested' | 'commented' | 'pending'
+	/** Count of distinct reviews on the PR (for the ⓘ badge in the dashboard). */
+	reviewCount?: number
+	/** Most recent check-run rollup — one row per check name. */
+	checksDetail?: Array<{ name: string; state: ChecksStatus; url?: string }>
 }
 
 /** Fields any adapter accepts when creating or updating a PR. */

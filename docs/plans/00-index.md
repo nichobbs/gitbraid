@@ -14,14 +14,14 @@ documents — update them as decisions are made and link from
 | Plan | Feature | Inspired by | Status |
 | --- | --- | --- | --- |
 | [01-pr-creation.md](01-pr-creation.md) | Create & update PRs per branch | Graphite, git-spr, ghstack | **Implementing** |
-| [02-pr-stack-visualisation.md](02-pr-stack-visualisation.md) | Stacked-PR dashboard in-editor | Graphite web app | **Implementing (read-only webview)** |
-| [03-single-commit-per-pr.md](03-single-commit-per-pr.md) | Optional one-commit-per-PR mode | git-spr, ghstack | **Implementing (data model + toggle; commit rewrite pending)** |
+| [02-pr-stack-visualisation.md](02-pr-stack-visualisation.md) | Stacked-PR dashboard in-editor | Graphite web app | **Implemented (Waves A/B/C + PR-body preview + reviews/checks drawer + native QuickPick menu)** |
+| [03-single-commit-per-pr.md](03-single-commit-per-pr.md) | Optional one-commit-per-PR mode | git-spr, ghstack | **Implemented (enforced at commit + push)** |
 | [04-absorb-equivalent.md](04-absorb-equivalent.md) | `gitbraid.absorb` — route hunks into existing commits | Sapling `sl absorb` | **Implementing** |
 | [05-merge-queue.md](05-merge-queue.md) | Merge-queue aware push | Graphite | **Implementing** |
-| [06-richer-stack-graph.md](06-richer-stack-graph.md) | Graphical stack view + commit inspector | GitButler | **Implementing (CommitListService data source)** |
+| [06-richer-stack-graph.md](06-richer-stack-graph.md) | Graphical stack view + commit inspector | GitButler | **Implemented (tree-view CommitNodes + dashboard commits drawer)** |
 | [07-import-from-tools.md](07-import-from-tools.md) | RM-012 — import stacks from Graphite/git-spr/git-stack/GitButler | n/a | **Implementing** |
 | [08-virtual-branches.md](08-virtual-branches.md) | Virtual branches without a worktree each | GitButler | **Landed** |
-| [09-undo-log.md](09-undo-log.md) | Persistent undo across sessions | git-branchless, Sapling | **Implementing** |
+| [09-undo-log.md](09-undo-log.md) | Persistent undo across sessions | git-branchless, Sapling | **Implemented (replay supported)** |
 
 ## Shared conventions
 

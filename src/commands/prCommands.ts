@@ -7,6 +7,7 @@ import { runAbsorbUi } from '../absorb'
 import { worktreePath } from '../branchStackService'
 import { getDefaultGitRunner } from '../gitRunner'
 import { PersistentUndoLog } from '../persistentUndoLog'
+import { runShowUndoLogCommand } from '../undoReplay'
 import { MergeQueueService, progressFromVsCode } from '../mergeQueueService'
 import type { CommandDeps } from './types'
 
@@ -219,17 +220,7 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 			const ctx = activeContext()
 			const maxEntries = vscode.workspace.getConfiguration('gitbraid').get<number>('undoLogMaxEntries', 500)
 			const log0 = new PersistentUndoLog(path.join(ctx.root.fsPath, '.worktrees'), { maxEntries })
-			const entries = await log0.load()
-			if (entries.length === 0) {
-				await vscode.window.showInformationMessage('GitBraid: undo log is empty.')
-				return
-			}
-			const items = entries.slice().reverse().map((e) => ({
-				label: e.action,
-				description: new Date(e.ts).toLocaleString(),
-				detail: Object.keys(e.detail).length > 0 ? JSON.stringify(e.detail) : undefined,
-			}))
-			await vscode.window.showQuickPick(items, { placeHolder: `${String(entries.length)} logged actions` })
+			await runShowUndoLogCommand(log0, ctx.config)
 		})),
 
 		vscode.commands.registerCommand('gitbraid.setGithubToken', cmd(async () => {

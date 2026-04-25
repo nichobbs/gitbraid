@@ -8,6 +8,7 @@ import { worktreePath } from './branchStackService'
 import { BranchStackEntry } from './configTypes'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import { showError } from './errorSurfacer'
+import { confirmAmend, shouldAmendForSingleCommit } from './singleCommit'
 
 // ─── HEAD content provider ────────────────────────────────────────────────────
 
@@ -767,8 +768,28 @@ export class BranchScmProviderManager implements vscode.Disposable {
 			if (proceed !== 'Commit anyway') { return false }
 		}
 
+		// Plan 03 — if the branch is configured as single-commit, amend the
+		// existing commit instead of appending a new one.  The first commit
+		// on the branch still goes through as a plain commit because there's
+		// nothing to amend yet.
+		const cfgEntry = this._config.getBranch(branchName)
+		let commitArgs: string[] = ['commit', '-m', message]
+		if (cfgEntry?.singleCommit === true) {
+			const shouldAmend = await shouldAmendForSingleCommit(
+				this._runner,
+				entry.worktreeDir,
+				cfgEntry.base,
+			)
+			if (shouldAmend) {
+				const ok = await confirmAmend(branchName)
+				if (!ok) { return false }
+				commitArgs = ['commit', '--amend', '-m', message]
+				log.info(`[BranchScmProvider] single-commit mode: amending HEAD on "${branchName}"`)
+			}
+		}
+
 		const { exitCode, stderr } = await this._runner.run(
-			['commit', '-m', message],
+			commitArgs,
 			{ cwd: entry.worktreeDir },
 		)
 		if (exitCode === 0) {

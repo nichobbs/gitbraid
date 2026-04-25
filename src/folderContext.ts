@@ -21,6 +21,7 @@ import { StackedPRToolImporter } from './stackedPRToolImporter'
 import { SubmitStackService } from './submitStackService'
 import { PRHostAdapter, pickAdapter, NullPRHostAdapter } from './prHostAdapter'
 import { PersistentUndoLog } from './persistentUndoLog'
+import { CommitListService } from './commitListService'
 import { VirtualBranchStore } from './virtualBranchStore'
 import * as path from 'node:path'
 
@@ -76,6 +77,7 @@ export class FolderContext implements vscode.Disposable {
 	readonly stackPopulator: StackPopulator
 	readonly stackedToolImporter: StackedPRToolImporter
 	readonly undoLog: PersistentUndoLog
+	readonly commitList: CommitListService
 	/** PR host adapter — resolved lazily on first use so extension activation stays cheap. */
 	private _prAdapter: PRHostAdapter | undefined
 	private _secrets: vscode.SecretStorage | undefined
@@ -107,6 +109,7 @@ export class FolderContext implements vscode.Disposable {
 		this.stackPopulator = new StackPopulator(this.config)
 		this.stackedToolImporter = new StackedPRToolImporter(this.config, root)
 		this.undoLog = new PersistentUndoLog(path.join(root.fsPath, '.worktrees'))
+		this.commitList = new CommitListService()
 	}
 
 	/** Inject VS Code's `SecretStorage` (for the Octokit PR adapter). */
@@ -184,6 +187,12 @@ export class FolderContext implements vscode.Disposable {
 		}
 		watchAll()
 		this.config.onDidChangeStack(() => watchAll())
+
+		// Plan 06 — invalidate the commit-list cache whenever a worktree's
+		// git index or a primary save changes, so the tree view's "Commits"
+		// bucket reflects new / amended commits without a manual refresh.
+		this.bus.onDidChangeWorktree(() => this.commitList.invalidate())
+		this.bus.onDidSavePrimary(() => this.commitList.invalidate())
 
 		log.info(`FolderContext: initialised for ${this.root.fsPath}`)
 	}
