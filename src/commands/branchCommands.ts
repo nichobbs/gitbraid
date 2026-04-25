@@ -143,7 +143,12 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 				placeHolder: 'Base branch (used when creating a new branch)',
 			})
 			if (!basePick) return
-			await ctx.branchStack.addBranchToStack(name, basePick)
+			await vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: `GitBraid: adding "${name}" to stack…`, cancellable: false },
+				async () => {
+					await ctx.branchStack.addBranchToStack(name, basePick)
+				},
+			)
 			await vscode.window.showInformationMessage(
 				`Branch "${name}" added to stack in ${path.basename(ctx.root.fsPath)}`,
 			)
