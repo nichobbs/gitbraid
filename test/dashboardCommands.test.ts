@@ -1,27 +1,43 @@
 import * as assert from 'node:assert'
 import {
 	handleDashboardRequest,
+	buildRowContextMenuItems,
+	pickedItemToRequest,
 	DashboardDeps,
+	QuickPickItemLite,
 } from '../src/commands/dashboardCommands'
 import { parseRequest, DashboardRequest } from '../src/dashboardMessages'
 
+interface SpyExtras {
+	commands: Array<{ cmd: string, args: unknown[] }>
+	clipboardWrites: string[]
+	toasts: string[]
+	pickerCalls: Array<{ items: QuickPickItemLite[], placeHolder: string }>
+	/** Canned response for the next showQuickPick call. */
+	nextPick: QuickPickItemLite | undefined
+}
+
 /** Deps stub that records every command invocation for assertions. */
-function spyDeps(): DashboardDeps & {
-	commands: Array<{ cmd: string, args: unknown[] }>,
-	clipboardWrites: string[],
-	toasts: string[],
-} {
+function spyDeps(): DashboardDeps & SpyExtras {
 	const commands: Array<{ cmd: string, args: unknown[] }> = []
 	const clipboardWrites: string[] = []
 	const toasts: string[] = []
-	return {
+	const pickerCalls: Array<{ items: QuickPickItemLite[], placeHolder: string }> = []
+	const spy: DashboardDeps & SpyExtras = {
 		commands,
 		clipboardWrites,
 		toasts,
+		pickerCalls,
+		nextPick: undefined,
 		executeCommand: async (cmd, ...args) => { commands.push({ cmd, args }); return undefined },
 		clipboard: { writeText: async (s) => { clipboardWrites.push(s) } },
 		showInformationMessage: async (m) => { toasts.push(m) },
+		showQuickPick: async (items, opts) => {
+			pickerCalls.push({ items, placeHolder: opts.placeHolder })
+			return spy.nextPick
+		},
 	}
+	return spy
 }
 
 suite('dashboardCommands / dashboardMessages (Wave B)', () => {
@@ -145,5 +161,100 @@ suite('dashboardCommands / dashboardMessages (Wave B)', () => {
 		assert.strictEqual(deps.commands.length, 1)
 		assert.strictEqual(deps.commands[0].cmd, 'gitbraid.openStackedCommit')
 		assert.deepStrictEqual(deps.commands[0].args, [{ branch: 'feat/a', sha: 'abc123' }])
+	})
+
+	// ── Follow-up: native QuickPick row context menu ─────────────────────────
+
+	test('Follow-up: parseRequest accepts rowContextMenu with empty prUrl', () => {
+		const got = parseRequest({ kind: 'rowContextMenu', branch: 'feat/a' })
+		assert.deepStrictEqual(got, { kind: 'rowContextMenu', branch: 'feat/a', prUrl: '' })
+	})
+
+	test('Follow-up: parseRequest forwards prUrl when provided', () => {
+		const got = parseRequest({ kind: 'rowContextMenu', branch: 'feat/a', prUrl: 'https://x/y/pull/1' })
+		assert.deepStrictEqual(got, { kind: 'rowContextMenu', branch: 'feat/a', prUrl: 'https://x/y/pull/1' })
+	})
+
+	test('Follow-up: parseRequest rejects rowContextMenu without branch', () => {
+		assert.strictEqual(parseRequest({ kind: 'rowContextMenu' }), undefined)
+	})
+
+	test('Follow-up: buildRowContextMenuItems exposes a stable action set', () => {
+		const items = buildRowContextMenuItems('feat/a', 'https://example.com/pr/1')
+		const ids = items.map((i) => i.id)
+		assert.deepStrictEqual(ids, [
+			'switchBranch', 'commit', 'pushBranch',
+			'moveBranchUp', 'moveBranchDown',
+			'absorbHunks', 'routeHunks', 'toggleSingleCommit', 'setCommitTemplate',
+			'openWorktree', 'copyBranchName', 'copyPrUrl', 'removeBranch',
+		])
+		// The branch name appears in the "Switch to …" label for context.
+		assert.ok(items[0].label.includes('feat/a'))
+		// copyPrUrl is enabled + shows the URL as description.
+		const copyPr = items.find((i) => i.id === 'copyPrUrl')!
+		assert.strictEqual(copyPr.disabled, false)
+		assert.strictEqual(copyPr.description, 'https://example.com/pr/1')
+	})
+
+	test('Follow-up: buildRowContextMenuItems disables copyPrUrl when URL is empty', () => {
+		const items = buildRowContextMenuItems('feat/a', '')
+		const copyPr = items.find((i) => i.id === 'copyPrUrl')!
+		assert.strictEqual(copyPr.disabled, true)
+		assert.strictEqual(copyPr.description, undefined)
+	})
+
+	test('Follow-up: pickedItemToRequest maps branch-only ids', () => {
+		assert.deepStrictEqual(
+			pickedItemToRequest('switchBranch', 'feat/a', ''),
+			{ kind: 'switchBranch', branch: 'feat/a' },
+		)
+		assert.deepStrictEqual(
+			pickedItemToRequest('removeBranch', 'feat/a', ''),
+			{ kind: 'removeBranch', branch: 'feat/a' },
+		)
+	})
+
+	test('Follow-up: pickedItemToRequest maps copyPrUrl and rejects when URL missing', () => {
+		assert.deepStrictEqual(
+			pickedItemToRequest('copyPrUrl', 'feat/a', 'https://example.com/pr/1'),
+			{ kind: 'copyPrUrl', branch: 'feat/a', url: 'https://example.com/pr/1' },
+		)
+		assert.strictEqual(pickedItemToRequest('copyPrUrl', 'feat/a', ''), undefined)
+	})
+
+	test('Follow-up: pickedItemToRequest returns undefined for unknown ids', () => {
+		assert.strictEqual(pickedItemToRequest('who-knows', 'feat/a', ''), undefined)
+	})
+
+	test('Follow-up: rowContextMenu opens a QuickPick and dispatches the selection', async () => {
+		const deps = spyDeps()
+		deps.nextPick = { id: 'switchBranch', label: 'Switch to feat/a' }
+		await dispatch({ kind: 'rowContextMenu', branch: 'feat/a', prUrl: '' }, deps)
+
+		assert.strictEqual(deps.pickerCalls.length, 1, 'QuickPick should be shown exactly once')
+		assert.ok(deps.pickerCalls[0].placeHolder.includes('feat/a'))
+		assert.strictEqual(deps.commands.length, 1, 'selection should dispatch once')
+		assert.strictEqual(deps.commands[0].cmd, 'gitbraid.switchBranch')
+		assert.deepStrictEqual(deps.commands[0].args, ['feat/a'])
+	})
+
+	test('Follow-up: rowContextMenu dispatches copyPrUrl via clipboard path', async () => {
+		const deps = spyDeps()
+		deps.nextPick = { id: 'copyPrUrl', label: 'Copy PR URL' }
+		await dispatch(
+			{ kind: 'rowContextMenu', branch: 'feat/a', prUrl: 'https://example.com/pr/1' },
+			deps,
+		)
+		assert.deepStrictEqual(deps.clipboardWrites, ['https://example.com/pr/1'])
+		assert.strictEqual(deps.commands.length, 0)
+	})
+
+	test('Follow-up: rowContextMenu dismissal is a no-op', async () => {
+		const deps = spyDeps()
+		deps.nextPick = undefined
+		await dispatch({ kind: 'rowContextMenu', branch: 'feat/a', prUrl: '' }, deps)
+		assert.strictEqual(deps.pickerCalls.length, 1)
+		assert.strictEqual(deps.commands.length, 0)
+		assert.strictEqual(deps.clipboardWrites.length, 0)
 	})
 })

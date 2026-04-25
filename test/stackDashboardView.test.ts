@@ -194,24 +194,21 @@ suite('stackDashboardView: buildDashboardHtml', () => {
 		assert.ok(html.includes('data-branch-pr-url="https://example.com/pr/9"'))
 	})
 
-	test('Wave B: host markup includes the menu container + message listener', () => {
+	test('Follow-up: dashboard posts rowContextMenu instead of rendering its own popup', () => {
 		const html = buildDashboardHtml({
 			workspaceName: 'proj',
 			branches: [{ name: 'feat/a', base: 'main', order: 1, color: '#abc' }],
 		})
-		// The host-rendered <div id="menu"> is the anchor the script positions.
-		assert.ok(html.includes('<div id="menu"'))
-		// The script wires the message listener for `patchRow` delta updates.
+		// The hand-rolled <div id="menu"> is gone — the host now owns the
+		// picker via vscode.window.showQuickPick.
+		assert.ok(!html.includes('<div id="menu"'), 'legacy menu container should be removed')
+		assert.ok(html.includes("kind: 'rowContextMenu'"), 'webview script should post rowContextMenu')
+		// Both click-on-⋯ and right-click paths route through the same host call.
+		assert.ok(html.includes("addEventListener('contextmenu'"), 'right-click should open the menu')
+		assert.ok(html.includes("openRowContextMenu"), 'webview helper delegates to rowContextMenu')
+		// The delta-patch message listener keeps working.
 		assert.ok(html.includes("window.addEventListener('message'"), 'delta-patch message listener should be wired')
 		assert.ok(html.includes("msg.kind === 'patchRow'"), 'patchRow handling should be in the script')
-	})
-
-	test('Wave B: Escape key closes the menu via keydown handler', () => {
-		const html = buildDashboardHtml({
-			workspaceName: 'proj',
-			branches: [],
-		})
-		assert.ok(html.includes("e.key === 'Escape'"))
 	})
 
 	// ── buildBranchRowHtml (delta patching) ─────────────────────────────────

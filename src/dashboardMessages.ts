@@ -34,6 +34,10 @@ export type DashboardRequest =
 	| { kind: 'copyPrUrl';           branch: string; url: string }
 	| { kind: 'openWorktree';        branch: string }
 	| { kind: 'openCommit';          branch: string; sha: string }
+	/** Follow-up: ask the host to open a native VS Code QuickPick with the
+	 *  per-row action list.  `prUrl` is forwarded as an empty string when no
+	 *  PR exists so the host can disable the "Copy PR URL" item. */
+	| { kind: 'rowContextMenu';      branch: string; prUrl: string }
 
 /** Allowed kinds — single source of truth for parsing + action registry. */
 export const DASHBOARD_REQUEST_KINDS = [
@@ -42,7 +46,7 @@ export const DASHBOARD_REQUEST_KINDS = [
 	'openPr', 'rebase', 'switchBranch', 'moveBranchUp', 'moveBranchDown',
 	'removeBranch', 'commit', 'pushBranch', 'absorbHunks', 'routeHunks',
 	'toggleSingleCommit', 'setCommitTemplate', 'copyBranchName',
-	'copyPrUrl', 'openWorktree', 'openCommit',
+	'copyPrUrl', 'openWorktree', 'openCommit', 'rowContextMenu',
 ] as const
 
 export type DashboardRequestKind = (typeof DASHBOARD_REQUEST_KINDS)[number]
@@ -52,7 +56,7 @@ const BRANCH_KINDS = new Set<DashboardRequestKind>([
 	'openPr', 'rebase', 'switchBranch', 'moveBranchUp', 'moveBranchDown',
 	'removeBranch', 'commit', 'pushBranch', 'absorbHunks', 'routeHunks',
 	'toggleSingleCommit', 'setCommitTemplate', 'copyBranchName',
-	'copyPrUrl', 'openWorktree', 'openCommit',
+	'copyPrUrl', 'openWorktree', 'openCommit', 'rowContextMenu',
 ])
 
 /**
@@ -79,10 +83,16 @@ export function parseRequest(raw: unknown): DashboardRequest | undefined {
 			if (!sha) return undefined
 			return { kind: 'openCommit', branch, sha }
 		}
+		if (kind === 'rowContextMenu') {
+			// prUrl may be absent or empty — the host uses that to disable
+			// the "Copy PR URL" item.  Coerce null/undefined to ''.
+			const prUrl = typeof r.prUrl === 'string' ? r.prUrl : ''
+			return { kind: 'rowContextMenu', branch, prUrl }
+		}
 		// TypeScript can't narrow a union via a Set membership check, so we
 		// cast through to the concrete shape.  All branch kinds share
-		// `{ kind, branch }`; `copyPrUrl`/`openCommit` have extra fields
-		// handled above.
+		// `{ kind, branch }`; `copyPrUrl`/`openCommit`/`rowContextMenu` have
+		// extra fields handled above.
 		return { kind, branch } as DashboardRequest
 	}
 	// Stack-wide messages have no `branch`.

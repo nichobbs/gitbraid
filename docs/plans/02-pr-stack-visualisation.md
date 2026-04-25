@@ -7,15 +7,17 @@
 `src/dashboardMessages.ts`, and
 `src/commands/dashboardCommands.ts`.  Wave A data surface, Wave B
 action surface + delta patching, Wave C drill-down + search +
-state persistence all shipped, plus two follow-ups: the **PR-body
+state persistence all shipped, plus three follow-ups: the **PR-body
 preview drawer** (reuses `renderStackBlock()` so the preview can
-never drift from the `submitStack` output) and the **reviews &
+never drift from the `submitStack` output), the **reviews &
 checks drawer** (driven by a new `loadPrDetail` snapshot hook
 backed by the PR host adapter — renders reviewState + reviewCount
-+ per-check rows with external links).  Native VS Code context
-menus (to replace the hand-rolled `<div id="menu">`) remain the
-only open item.  Depends on [plan 01](01-pr-creation.md) for
-PR-host integration.
++ per-check rows with external links), and the **native VS Code
+context menu** (the hand-rolled `<div id="menu">` popup was
+replaced by a new `rowContextMenu` request kind that the host
+routes through `vscode.window.showQuickPick`; right-clicking a row
+now opens the same picker).  No open items remain.  Depends on
+[plan 01](01-pr-creation.md) for PR-host integration.
 
 ## Goal
 
@@ -222,9 +224,10 @@ Each wave lands with its own tests and is independently shippable.
 
 ## Open questions
 
-- **Context-menu UX.**  Hand-rolled inline popups are sufficient but
-  less polished than VS Code native menus.  Acceptable for v0.x;
-  revisit once the VS Code webview API grows native menu support.
+- **Context-menu UX.** ✅ Resolved — the hand-rolled popup was swapped
+  for a native `vscode.window.showQuickPick` via the `rowContextMenu`
+  request kind.  Right-click on a row posts the same request, so both
+  entry points funnel through the same host-owned picker.
 - **Webview bundling.**  The current inline `<script>` is fine for
   Wave A/B.  Wave C's reconciler might push us over the "inline is
   readable" threshold, so an `esbuild` sub-bundle is in the plan.

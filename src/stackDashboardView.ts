@@ -330,11 +330,6 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	details.drawer .check-pending .check-icon { color: var(--vscode-testing-iconQueued, var(--vscode-charts-yellow)); }
 	.empty { color: var(--vscode-descriptionForeground); font-size: 12px; }
 	footer.adapter { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--vscode-panel-border); font-size: 10px; color: var(--vscode-descriptionForeground); }
-	#menu { position: fixed; display: none; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 2px 8px rgba(0,0,0,0.3); border-radius: 2px; padding: 2px 0; z-index: 100; min-width: 180px; font-size: 12px; }
-	#menu[aria-hidden="false"] { display: block; }
-	#menu button { display: block; width: 100%; text-align: left; background: transparent; color: inherit; border: 0; padding: 4px 10px; cursor: pointer; font-size: inherit; }
-	#menu button:hover, #menu button:focus { background: var(--vscode-menu-selectionBackground); color: var(--vscode-menu-selectionForeground); outline: none; }
-	#menu hr { border: 0; border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-panel-border)); margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -355,10 +350,8 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 		${rows}
 	</ul>
 	${adapterStrip}
-	<div id="menu" role="menu" aria-hidden="true"></div>
 	<script nonce="${nonce}">
 		const vscode = acquireVsCodeApi()
-		const menu = document.getElementById('menu')
 		const searchInput = document.getElementById('search')
 
 		// ── State persistence (Wave C) ────────────────────────────────
@@ -387,47 +380,10 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 
 		function post(req) { vscode.postMessage(req) }
 
-		function closeMenu() {
-			menu.setAttribute('aria-hidden', 'true')
-			menu.dataset.branch = ''
-			menu.innerHTML = ''
-		}
-
-		function openMenu(button) {
-			const branch = button.dataset.moreBranch
-			const prUrl = button.dataset.branchPrUrl || ''
+		/** Ask the host to open a native QuickPick for the given row. */
+		function openRowContextMenu(branch, prUrl) {
 			if (!branch) return
-			menu.dataset.branch = branch
-			menu.innerHTML = [
-				{ kind: 'switchBranch',        label: 'Switch to this branch' },
-				{ kind: 'commit',              label: 'Commit…' },
-				{ kind: 'pushBranch',          label: 'Push' },
-				{ sep: true },
-				{ kind: 'moveBranchUp',        label: 'Move up' },
-				{ kind: 'moveBranchDown',      label: 'Move down' },
-				{ sep: true },
-				{ kind: 'absorbHunks',         label: 'Absorb hunks…' },
-				{ kind: 'routeHunks',          label: 'Route hunks…' },
-				{ kind: 'toggleSingleCommit',  label: 'Toggle single-commit mode' },
-				{ kind: 'setCommitTemplate',   label: 'Set commit template…' },
-				{ sep: true },
-				{ kind: 'openWorktree',        label: 'Open worktree in new window' },
-				{ kind: 'copyBranchName',      label: 'Copy branch name' },
-				{ kind: 'copyPrUrl',           label: 'Copy PR URL', disabled: !prUrl, extra: { url: prUrl } },
-				{ sep: true },
-				{ kind: 'removeBranch',        label: 'Remove from stack…' },
-			].map((item) => {
-				if (item.sep) return '<hr>'
-				const disabled = item.disabled ? 'disabled' : ''
-				const extra = item.extra ? ' data-extra=\\'' + JSON.stringify(item.extra).replace(/'/g, '&#39;') + '\\'' : ''
-				return '<button role="menuitem" data-kind="' + item.kind + '" data-menu-branch="' + branch + '"' + extra + ' ' + disabled + '>' + item.label + '</button>'
-			}).join('')
-			const r = button.getBoundingClientRect()
-			const mw = 200
-			const left = Math.min(window.innerWidth - mw - 8, r.right - mw)
-			menu.style.left = Math.max(8, left) + 'px'
-			menu.style.top = (r.bottom + 4) + 'px'
-			menu.setAttribute('aria-hidden', 'false')
+			post({ kind: 'rowContextMenu', branch: branch, prUrl: prUrl || '' })
 		}
 
 		document.body.addEventListener('click', (e) => {
@@ -435,41 +391,37 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 			if (!target || target.nodeType !== 1) return
 
 			if (target.classList && target.classList.contains('more')) {
-				openMenu(target)
+				openRowContextMenu(
+					target.dataset.moreBranch,
+					target.dataset.branchPrUrl || '',
+				)
 				e.stopPropagation()
 				return
-			}
-
-			if (menu.contains(target) && target.dataset && target.dataset.kind) {
-				const kind = target.dataset.kind
-				const branch = target.dataset.menuBranch
-				let req = branch ? { kind: kind, branch: branch } : { kind: kind }
-				try {
-					if (target.dataset.extra) {
-						const extra = JSON.parse(target.dataset.extra)
-						req = Object.assign(req, extra)
-					}
-				} catch { /* ignore */ }
-				post(req)
-				closeMenu()
-				return
-			}
-
-			if (menu.getAttribute('aria-hidden') === 'false' && !menu.contains(target)) {
-				closeMenu()
 			}
 
 			const el = target.closest('[data-kind]')
 			if (!el) return
 			const kind = el.dataset.kind
 			const branch = el.dataset.branch
+			const sha = el.dataset.sha
+			if (kind === 'openCommit' && branch && sha) {
+				post({ kind: 'openCommit', branch: branch, sha: sha })
+				return
+			}
 			post(branch ? { kind: kind, branch: branch } : { kind: kind })
 		})
 
-		window.addEventListener('keydown', (e) => {
-			if (e.key === 'Escape' && menu.getAttribute('aria-hidden') === 'false') {
-				closeMenu()
-			}
+		// Native right-click on a row surfaces the same QuickPick.
+		document.body.addEventListener('contextmenu', (e) => {
+			const target = e.target
+			if (!target || target.nodeType !== 1) return
+			const row = target.closest('li.row[data-branch]')
+			if (!row) return
+			const moreBtn = row.querySelector('button.more')
+			const branch = row.dataset.branch
+			const prUrl = moreBtn ? moreBtn.dataset.branchPrUrl || '' : ''
+			e.preventDefault()
+			openRowContextMenu(branch, prUrl)
 		})
 
 		// ── Search (Wave C) ────────────────────────────────────────────

@@ -191,21 +191,18 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
   adapters. Graphite / git-spr / ghstack / GitButler all cover
   more ground.
 - **Stack-review web UI polish trails Graphite.**  `stackDashboard`
-  now covers full actions (per-row menu, submit / merge /
-  checkpoint / undo, commits + files drawers, search, state
-  persistence) plus the PR-body preview drawer and a reviews &
-  checks drawer (reviewState, reviewCount, per-check rows with
-  external links, populated when the PR adapter supplies detail).
-  Graphite's dedicated web app still wins on stacked-PR diff
-  browsing, inline comment threading, and cross-PR code
-  suggestions — those remain out of scope for the in-editor
-  panel.
+  now covers full actions (per-row menu rendered via a native VS
+  Code QuickPick — both click-on-⋯ and right-click on the row open
+  it — plus submit / merge / checkpoint / undo, commits + files
+  drawers, search, state persistence), the PR-body preview drawer
+  and a reviews & checks drawer (reviewState, reviewCount,
+  per-check rows with external links, populated when the PR
+  adapter supplies detail).  Graphite's dedicated web app still
+  wins on stacked-PR diff browsing, inline comment threading, and
+  cross-PR code suggestions — those remain out of scope for the
+  in-editor panel.
 - **No virtual branches without a worktree each.** GitButler's
   signature feature is still future work for GitBraid (plan 08).
-- **Rich PR-body preview.**  The idempotent stacked-PR block is
-  written by `submitStack`, but the dashboard doesn't yet show a
-  preview of what Submit would write.  Small follow-up.
-
 ## Positioning summary
 
 Two axes capture the differences cleanly:
