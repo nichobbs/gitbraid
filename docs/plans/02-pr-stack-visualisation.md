@@ -2,14 +2,20 @@
 
 **Inspiration:** Graphite web app; GitButler panel; Sapling ISL.
 
-**Status:** **Implemented (Waves A/B/C).**  See
+**Status:** **Implemented (Waves A/B/C + follow-ups).**  See
 `src/stackDashboardView.ts`, `src/dashboardSnapshot.ts`,
 `src/dashboardMessages.ts`, and
-`src/commands/dashboardCommands.ts`.  Rich-PR-body preview and
-native context-menu polish remain as follow-ups; core
-functionality (data surface, actions, drill-down, search,
-persistence) ships now.  Depends on
-[plan 01](01-pr-creation.md) for PR-host integration.
+`src/commands/dashboardCommands.ts`.  Wave A data surface, Wave B
+action surface + delta patching, Wave C drill-down + search +
+state persistence all shipped, plus two follow-ups: the **PR-body
+preview drawer** (reuses `renderStackBlock()` so the preview can
+never drift from the `submitStack` output) and the **reviews &
+checks drawer** (driven by a new `loadPrDetail` snapshot hook
+backed by the PR host adapter — renders reviewState + reviewCount
++ per-check rows with external links).  Native VS Code context
+menus (to replace the hand-rolled `<div id="menu">`) remain the
+only open item.  Depends on [plan 01](01-pr-creation.md) for
+PR-host integration.
 
 ## Goal
 

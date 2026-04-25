@@ -14,7 +14,7 @@ documents — update them as decisions are made and link from
 | Plan | Feature | Inspired by | Status |
 | --- | --- | --- | --- |
 | [01-pr-creation.md](01-pr-creation.md) | Create & update PRs per branch | Graphite, git-spr, ghstack | **Implementing** |
-| [02-pr-stack-visualisation.md](02-pr-stack-visualisation.md) | Stacked-PR dashboard in-editor | Graphite web app | **Implemented (Waves A/B/C)** |
+| [02-pr-stack-visualisation.md](02-pr-stack-visualisation.md) | Stacked-PR dashboard in-editor | Graphite web app | **Implemented (Waves A/B/C + PR-body preview + reviews/checks drawer)** |
 | [03-single-commit-per-pr.md](03-single-commit-per-pr.md) | Optional one-commit-per-PR mode | git-spr, ghstack | **Implemented (enforced at commit + push)** |
 | [04-absorb-equivalent.md](04-absorb-equivalent.md) | `gitbraid.absorb` — route hunks into existing commits | Sapling `sl absorb` | **Implementing** |
 | [05-merge-queue.md](05-merge-queue.md) | Merge-queue aware push | Graphite | **Implementing** |
