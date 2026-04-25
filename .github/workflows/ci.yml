@@ -70,8 +70,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           node scripts/check-coverage.mjs \
-            --lines 70 \
-            --branches 70 \
+            --lines 72 \
+            --branches 75 \
             --functions 75 \
             coverage/lcov.info
 

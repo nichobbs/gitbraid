@@ -1,5 +1,4 @@
 import * as vscode from 'vscode'
-import * as path from 'node:path'
 import { log } from '../channelLogger'
 import { FileNode, FloatingFileNode } from '../branchStackTreeProvider'
 import { hideAssignedFile, unhideAssignedFile } from '../gitIndex'
@@ -7,6 +6,7 @@ import { git } from '../gitFunctions'
 import { getDefaultGitRunner } from '../gitRunner'
 import { recordAssignFile, recordUnassignFile } from '../undoStack'
 import { withErrorHandler } from '../errorSurfacer'
+import { buildAssignBranchPickItems, globToCandidates, pluralise } from './_helpers'
 import type { CommandDeps } from './types'
 
 const cmd = withErrorHandler
@@ -66,11 +66,7 @@ export function registerFileCommands(deps: CommandDeps): vscode.Disposable[] {
 			const stack = pickerCtx.config.getStack()
 			const currentBranch = await git.branch(pickerCtx.root).catch(() => undefined)
 			const currentInStack = currentBranch ? stack.some(e => e.name === currentBranch) : true
-			const pickItems: Array<{ label: string; description?: string }> = []
-			if (currentBranch && !currentInStack) {
-				pickItems.push({ label: currentBranch, description: '(current branch — stays in workspace)' })
-			}
-			pickItems.push(...stack.map((e) => ({ label: e.name, description: e.color })))
+			const pickItems = buildAssignBranchPickItems(stack, currentBranch, currentInStack)
 			if (pickItems.length === 0) {
 				await vscode.window.showWarningMessage('No branches in the stack for the active folder. Add a branch first.')
 				return
@@ -152,7 +148,7 @@ export function registerFileCommands(deps: CommandDeps): vscode.Disposable[] {
 				await vscode.window.showInformationMessage('No assigned files found under that folder.')
 			} else {
 				await vscode.window.showInformationMessage(
-					`Unassigned ${count} file${count === 1 ? '' : 's'} under ${relFolder}`,
+					`Unassigned ${pluralise(count, 'file')} under ${relFolder}`,
 				)
 			}
 		})),
@@ -232,10 +228,7 @@ export function registerFileCommands(deps: CommandDeps): vscode.Disposable[] {
 				return
 			}
 
-			const candidates = uris
-				.map((u) => path.relative(ctx.root.fsPath, u.fsPath).replaceAll('\\', '/'))
-				.filter((rel) => !rel.startsWith('..'))
-				.sort()
+			const candidates = globToCandidates(uris.map((u) => u.fsPath), ctx.root.fsPath)
 
 			if (candidates.length === 0) {
 				await vscode.window.showInformationMessage(`No files matched "${pattern}" in this workspace folder.`)
