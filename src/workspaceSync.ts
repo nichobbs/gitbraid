@@ -290,6 +290,16 @@ export class WorkspaceSync implements vscode.Disposable {
 		return [...this._floatingDirty]
 	}
 
+	/**
+	 * Re-run the git-status seed to pick up files that became floating since
+	 * the last seed (e.g. after a stack reset or a manual view refresh).
+	 * Safe to call at any time; a no-op when the workspace root is not yet set.
+	 */
+	async reseedFromGitStatus(): Promise<void> {
+		if (!this._workspaceRoot) return
+		await this._seedFromGitStatus(this._workspaceRoot)
+	}
+
 	/** Returns the ms-epoch timestamp when a path first became floating, or undefined. */
 	getFloatingSince(relativePath: string): number | undefined {
 		return this._floatingSince.get(normalisePath(relativePath))

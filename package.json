@@ -360,6 +360,12 @@
 				"icon": "$(cloud-upload)"
 			},
 			{
+				"command": "gitbraid.resetStacks",
+				"title": "Reset All Stacks (remove worktrees, keep main workspace files)",
+				"category": "GitBraid",
+				"icon": "$(trash)"
+			},
+			{
 				"command": "gitbraid.syncStack",
 				"title": "Sync Stack (fetch + rebase each branch)",
 				"category": "GitBraid",
@@ -618,6 +624,11 @@
 				},
 				{
 					"command": "gitbraid.rehideAssignedFiles",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
+				},
+				{
+					"command": "gitbraid.resetStacks",
 					"when": "view == gitbraid.stackView",
 					"group": "navigation"
 				}
@@ -1208,7 +1219,7 @@
 		"pretest": "node scripts/setup-test-fixture.js",
 		"test": "vscode-test --coverage",
 		"lint": "eslint \"src/**/*.ts\"",
-		"refresh": "npm run install-vsix"
+		"refresh": "npm run test && npm run install-vsix"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.29.0",
@@ -1225,11 +1236,11 @@
 		"@typescript-eslint/typescript-estree": "^8.59.0",
 		"@vscode/test-cli": "^0.0.11",
 		"@vscode/test-electron": "^2.4.1",
-		"@vscode/vsce": "^3.9.1",
-		"esbuild": "0.24.0",
+		"@vscode/vsce": "^2.25.0",
+		"esbuild": "^0.28.0",
 		"eslint": "^8.57.1",
 		"eslint-plugin-promise": "^7.2.1",
-		"mocha": "^10.8.2",
+		"mocha": "^7.2.0",
 		"typescript": "^5.7.2"
 	}
 }

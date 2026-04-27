@@ -65,6 +65,11 @@ or **`Ctrl+Alt+B`**
 3. GitBraid creates a git worktree for that branch under `.worktrees/`.
 
 > To remove a branch: **Command Palette** → `GitBraid: Remove Branch from Stack`.
+>
+> To reset everything back to a clean pre-GitBraid state (removes all worktrees and
+> unhides all files in the main workspace while preserving file contents): **Command
+> Palette** → `GitBraid: Reset All Stacks` (`gitbraid.resetStacks`). This is
+> useful when you want to start fresh — re-add branches and reassign files from scratch.
 
 When a branch is added, GitBraid automatically copies any files it has committed
 (relative to its base) into the primary workspace and assigns them to that branch.

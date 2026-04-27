@@ -270,7 +270,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 		const entry = this._config.getBranch(branch)
 		if (!entry) throw new Error(`Branch "${branch}" is not in the stack`)
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
-		const { exitCode, stderr } = await this._runner.run(['rebase', entry.base], { cwd: wtDir })
+		const { exitCode, stderr } = await this._runner.run(['rebase', '--autostash', entry.base], { cwd: wtDir })
 		if (exitCode !== 0) {
 			throw new GitError(`Rebase "${branch}" onto "${entry.base}" failed: ${stderr}`, exitCode)
 		}

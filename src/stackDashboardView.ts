@@ -256,13 +256,13 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 
 	const banner = floating > 0
 		? `<div class="banner floating" data-testid="floating-banner">
-			<span class="icon">$(warning)</span>
+			<span class="icon" aria-hidden="true">⚠</span>
 			<span>${String(floating)} floating file${floating === 1 ? '' : 's'} — not assigned to any branch.</span>
 		</div>`
 		: ''
 
 	const rows = data.branches.length === 0
-		? `<p class="empty">Stack is empty. Run <code>gitbraid.addStackBranch</code> to get started.</p>`
+		? `<p class="empty">Stack is empty. Use <strong>GitBraid: Add Branch to Stack…</strong> to get started.</p>`
 		: data.branches.map((b, i) => buildBranchRowHtml(b, i, data.branches.length)).join('\n')
 
 	const adapterStrip = data.adapter

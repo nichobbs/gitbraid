@@ -159,6 +159,31 @@ suite('WorkspaceSync', function () {
 		assert.ok(!sync.isFloating('src/will-assign.ts'))
 	})
 
+	test('reseedFromGitStatus: picks up previously-assigned file after assignment cleared', async () => {
+		// Use a root-level path so git status reports it as "?? was-reseed-test.ts"
+		// rather than "?? src/" (git collapses entirely-untracked directories).
+		const testPath = 'was-reseed-test.ts'
+
+		// Write with unique content so git status always reports the file as modified
+		// (` M`) relative to any stale indexed version from a previous test run.
+		await writeWorkspaceFile(testPath, `export const x = ${Date.now()}`)
+		await waitForFilteredEvent(sync.onDidFloatFile, (e) => e.relativePath === testPath)
+		assert.ok(sync.isFloating(testPath))
+
+		// Assign it — save event clears it from floating
+		await config.setAssignment(testPath, branchName)
+		await waitForEvent(sync.onDidSyncFile, 3000)
+		assert.ok(!sync.isFloating(testPath), 'should not be floating after assignment')
+
+		// Remove the assignment (mirrors clearAll / resetStacks)
+		await config.removeAssignment(testPath)
+		assert.ok(!sync.isFloating(testPath), 'still not floating — reseed not yet called')
+
+		// Reseed: git status sees the file as untracked → should be floating again
+		await sync.reseedFromGitStatus()
+		assert.ok(sync.isFloating(testPath), 'file should reappear as floating after reseed')
+	})
+
 	// ── Assignment change triggers sync ───────────────────────────────────────
 
 	test('setAssignment: immediately syncs the file to the new branch', async () => {

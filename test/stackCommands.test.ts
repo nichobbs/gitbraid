@@ -140,21 +140,21 @@ suite('StackCommands (T67)', () => {
 		)
 	})
 
-	test('syncStack: dirty worktree is skipped with a clear message', async () => {
+	test('syncStack: dirty worktree is auto-stashed and rebased', async () => {
 		await config.addBranch({ name: 'feature/dirty', base: 'main', color: '#4ec9b0' })
 		ensureDir(worktreePath(wsRoot(), 'feature/dirty').fsPath)
 		runner.fixture('fetch', { exitCode: 0 })
-		runner.fixture('status --porcelain', { stdout: ' M foo.ts\n', exitCode: 0 })
+		// --autostash lets git handle the stash; no pre-flight status check needed.
+		runner.fixture('rebase --autostash', { exitCode: 0 })
 
 		const results = await cmds.syncStack()
 		const dirty = results.find((r) => r.branch === 'feature/dirty')
 		assert.ok(dirty, 'expected a result for feature/dirty')
-		assert.strictEqual(dirty!.ok, false)
-		assert.match(dirty!.message ?? '', /uncommitted changes/)
-		// No rebase call should have fired.
+		assert.strictEqual(dirty!.ok, true)
+		// Rebase must have been called with --autostash, not skipped.
 		assert.ok(
-			!runner.calls.some((c) => c.args[0] === 'rebase'),
-			'rebase must not run on a dirty worktree',
+			runner.calls.some((c) => c.args[0] === 'rebase' && c.args.includes('--autostash')),
+			'rebase --autostash must run instead of skipping the dirty worktree',
 		)
 	})
 

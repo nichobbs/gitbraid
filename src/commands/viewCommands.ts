@@ -18,7 +18,10 @@ export function registerViewCommands(deps: CommandDeps): vscode.Disposable[] {
 
 	return [
 		vscode.commands.registerCommand('gitbraid.stackView.refresh', () => {
-			void activeContext().config.reload().then(() => stackTreeProvider.refresh())
+			const ctx = activeContext()
+			void ctx.config.reload()
+				.then(() => ctx.workspaceSync.reseedFromGitStatus())
+				.then(() => stackTreeProvider.refresh())
 		}),
 
 		vscode.commands.registerCommand('gitbraid.setBranchColor', cmd(async (arg?: BranchNode) => {

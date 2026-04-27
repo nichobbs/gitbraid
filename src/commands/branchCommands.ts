@@ -548,6 +548,63 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 			await _moveBranch(ctx, target.entry.name, 'down')
 		})),
 
+		vscode.commands.registerCommand('gitbraid.resetStacks', cmd(async () => {
+			const ctx = activeContext()
+			const stack = ctx.config.getStack()
+			if (stack.length === 0) {
+				await vscode.window.showInformationMessage('GitBraid: stack is already empty.')
+				return
+			}
+
+			const allAssignments = ctx.config.getAllAssignments()
+			const assignedFiles = Object.keys(allAssignments)
+			const realBranches = stack.filter((e) => !e.virtual)
+
+			const confirm = await vscode.window.showWarningMessage(
+				`Reset all stacks? This will remove ${String(realBranches.length)} worktree(s) and unhide ${
+					String(assignedFiles.length)
+				} file(s) in the main workspace. Uncommitted changes in the worktrees will be lost; file changes visible in the main workspace are preserved.`,
+				{ modal: true },
+				'Reset',
+			)
+			if (confirm !== 'Reset') return
+
+			const runner = getDefaultGitRunner()
+
+			await vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: 'GitBraid: resetting all stacks…', cancellable: false },
+				async () => {
+					// Step 1: unhide all assigned files in the main workspace
+					for (const rel of assignedFiles) {
+						await unhideAssignedFile(runner, ctx.root.fsPath, rel)
+					}
+					// Step 2: force-remove all real worktrees
+					for (const entry of realBranches) {
+						if (ctx.branchStack.worktreeExists(entry.name)) {
+							try {
+								await git.worktree.remove(ctx.branchStack.getWorktreePath(entry.name).fsPath, true)
+							} catch (e) {
+								log.warn(`resetStacks: failed to remove worktree for "${entry.name}": ${
+									e instanceof Error ? e.message : String(e)
+								}`)
+							}
+						}
+					}
+					// Step 3: clear all config in one atomic write
+					await ctx.config.clearAll()
+					// Step 4: reseed floating list so the tree view reflects all
+					// now-unassigned files immediately (no save event needed)
+					await ctx.workspaceSync.reseedFromGitStatus()
+				},
+			)
+
+			await vscode.window.showInformationMessage(
+				`GitBraid: reset complete — ${String(realBranches.length)} worktree(s) removed, ${
+					String(assignedFiles.length)
+				} file(s) returned to main workspace.`,
+			)
+		})),
+
 		// ─── Team stack template export ───────────────────────────────────────────
 
 		vscode.commands.registerCommand('gitbraid.exportStackTemplate', cmd(async () => {

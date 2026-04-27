@@ -145,6 +145,52 @@ suite('ConfigService', () => {
 		await svc.removeBranch('nonexistent')
 	})
 
+	// ── clearAll ──────────────────────────────────────────────────────────────
+
+	test('clearAll: empties stack and assignments', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#fff', base: 'main' })
+		await svc.addBranch({ name: 'feature/b', color: '#fff', base: 'main' })
+		await svc.setAssignment('src/foo.ts', 'feature/a')
+		await svc.setAssignment('src/bar.ts', 'feature/b')
+		await svc.clearAll()
+		assert.deepStrictEqual(svc.getStack(), [])
+		assert.deepStrictEqual(svc.getAllAssignments(), {})
+	})
+
+	test('clearAll: persists empty state to disk', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#fff', base: 'main' })
+		await svc.clearAll()
+		const raw = JSON.parse(fs.readFileSync(configPath(), 'utf-8'))
+		assert.deepStrictEqual(raw.stack, [])
+		assert.deepStrictEqual(raw.assignments, {})
+	})
+
+	test('clearAll: fires removal events for all branches and assignments', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#fff', base: 'main' })
+		await svc.addBranch({ name: 'feature/b', color: '#fff', base: 'main' })
+		await svc.setAssignment('src/foo.ts', 'feature/a')
+		const assignmentEvents: Array<{ relativePath: string; branch: string | undefined }> = []
+		const stackEvents: string[] = []
+		svc.onDidChangeAssignment((e) => assignmentEvents.push({ relativePath: e.relativePath, branch: e.branch }))
+		svc.onDidChangeStack((e) => stackEvents.push(e.branch))
+		await svc.clearAll()
+		assert.strictEqual(assignmentEvents.length, 1)
+		assert.strictEqual(assignmentEvents[0].relativePath, 'src/foo.ts')
+		assert.strictEqual(assignmentEvents[0].branch, undefined)
+		assert.ok(stackEvents.includes('feature/a'))
+		assert.ok(stackEvents.includes('feature/b'))
+	})
+
+	test('clearAll: is a no-op on an already-empty stack', async () => {
+		await svc.load(wsRoot())
+		// Should not throw
+		await svc.clearAll()
+		assert.deepStrictEqual(svc.getStack(), [])
+	})
+
 	// ── setAssignment ─────────────────────────────────────────────────────────
 
 	test('setAssignment: records assignment and fires event', async () => {

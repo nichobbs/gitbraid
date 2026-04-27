@@ -213,15 +213,6 @@ export class StackCommands implements vscode.Disposable {
 						results.push({ branch: entry.name, ok: true, message: 'skipped (no worktree)' })
 						continue
 					}
-					const dirty = await this._isDirty(entry.name)
-					if (dirty) {
-						results.push({
-							branch: entry.name,
-							ok: false,
-							message: 'worktree has uncommitted changes — commit or stash, then re-run Sync Stack',
-						})
-						continue
-					}
 					try {
 						await this._rebaseSvc.rebaseBranch(entry.name)
 						results.push({ branch: entry.name, ok: true })
@@ -237,20 +228,6 @@ export class StackCommands implements vscode.Disposable {
 		)
 		await this._summarise('Sync', results)
 		return results
-	}
-
-	private async _isDirty(branch: string): Promise<boolean> {
-		const wtPath = worktreePath(this._workspaceRoot, branch)
-		const { stdout, exitCode } = await this._runner.run(
-			['status', '--porcelain'],
-			{ cwd: wtPath.fsPath },
-		)
-		if (exitCode !== 0) {
-			// Conservative — treat an errored status as dirty rather than
-			// blundering a rebase over whatever state the worktree is in.
-			return true
-		}
-		return stdout.trim().length > 0
 	}
 
 	// ── Shared reporting ──────────────────────────────────────────────────────

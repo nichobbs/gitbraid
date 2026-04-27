@@ -384,6 +384,23 @@ export class ConfigService implements vscode.Disposable {
 		this._onDidChangeStack.fire({ type: 'remove', branch: name })
 	}
 
+	/**
+	 * Atomically clear the entire stack and all assignments.
+	 * Fires removal events for every previously assigned file and branch.
+	 */
+	async clearAll(): Promise<void> {
+		const prevStack = [...this._config.stack]
+		const prevAssignments = { ...this._config.assignments }
+		this._config = emptyConfig()
+		await this._writeToDisk()
+		for (const key of Object.keys(prevAssignments)) {
+			this._onDidChangeAssignment.fire({ relativePath: key, branch: undefined, previousBranch: prevAssignments[key] })
+		}
+		for (const entry of prevStack) {
+			this._onDidChangeStack.fire({ type: 'remove', branch: entry.name })
+		}
+	}
+
 	async setBranchColor(name: string, color: string): Promise<void> {
 		const entry = this._config.stack.find((e) => e.name === name)
 		if (!entry) {

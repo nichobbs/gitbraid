@@ -197,7 +197,7 @@ export class RebaseSuggestionService implements vscode.Disposable {
 			: this._workspaceRoot.fsPath
 
 		const { exitCode, stderr } = await this._runner.run(
-			['rebase', entry.base],
+			['rebase', '--autostash', entry.base],
 			{ cwd },
 		)
 		if (exitCode === 0) {
@@ -213,6 +213,15 @@ export class RebaseSuggestionService implements vscode.Disposable {
 			if (paused) {
 				await vscode.window.showWarningMessage(
 					`Rebase of "${entry.name}" paused — resolve the conflicts then run "GitBraid: Continue Rebase".`,
+					{ modal: false },
+				)
+			} else if (stderr.includes('autostash')) {
+				// Rebase succeeded but restoring the stashed changes hit conflicts.
+				// The stash entry is still intact — the user can run `git stash pop`
+				// inside the worktree once they've resolved the conflicts.
+				await vscode.window.showWarningMessage(
+					`Rebase of "${entry.name}" succeeded but restoring stashed changes hit conflicts — ` +
+					`resolve them in the editor, then run \`git stash drop\` in the worktree.`,
 					{ modal: false },
 				)
 			} else {
