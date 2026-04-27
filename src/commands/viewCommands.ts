@@ -103,6 +103,24 @@ export function registerViewCommands(deps: CommandDeps): vscode.Disposable[] {
 			await vscode.window.showInformationMessage(`GitBraid: ${msg}`)
 		})),
 
+		vscode.commands.registerCommand('gitbraid.syncAssignedToWorktrees', cmd(async () => {
+			const ctx = activeContext()
+			const assignments = ctx.config.getAllAssignments()
+			const count = Object.keys(assignments).length
+			if (count === 0) {
+				await vscode.window.showInformationMessage('GitBraid: no files are currently assigned.')
+				return
+			}
+			let synced = 0
+			await vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: 'GitBraid: syncing assigned files to worktrees…', cancellable: false },
+				async () => {
+					synced = await ctx.workspaceSync.syncAllAssigned()
+				},
+			)
+			await vscode.window.showInformationMessage(`GitBraid: synced ${synced} of ${count} assigned file(s) to their worktrees.`)
+		})),
+
 		vscode.commands.registerCommand('gitbraid.showActiveFolder', cmd(async () => {
 			const all = registry.getAll()
 			if (all.length <= 1) {

@@ -5,7 +5,6 @@ import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
 import { RebaseSuggestionService } from './rebaseSuggestionService'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
-import { GitError } from './errors'
 import { promptSquashForViolations, squashToOne, validateStack } from './singleCommit'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -209,18 +208,22 @@ export class StackCommands implements vscode.Disposable {
 						results.push({ branch: entry.name, ok: true, message: 'skipped (no base)' })
 						continue
 					}
-					if (!fs.existsSync(worktreePath(this._workspaceRoot, entry.name).fsPath)) {
+					const wtPath = worktreePath(this._workspaceRoot, entry.name).fsPath
+					if (!fs.existsSync(wtPath)) {
 						results.push({ branch: entry.name, ok: true, message: 'skipped (no worktree)' })
 						continue
 					}
-					try {
-						await this._rebaseSvc.rebaseBranch(entry.name)
+					const rebase = await this._runner.run(
+						['rebase', '--autostash', entry.base],
+						{ cwd: wtPath },
+					)
+					if (rebase.exitCode === 0) {
 						results.push({ branch: entry.name, ok: true })
-					} catch (e) {
+					} else {
 						results.push({
 							branch: entry.name,
 							ok: false,
-							message: e instanceof GitError ? e.message : (e instanceof Error ? e.message : String(e)),
+							message: rebase.stderr.trim() || 'rebase failed',
 						})
 					}
 				}

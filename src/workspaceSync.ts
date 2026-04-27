@@ -228,6 +228,8 @@ export class WorkspaceSync implements vscode.Disposable {
 				if (relativePath.startsWith('.worktrees/') || relativePath.startsWith('.git/')) continue
 				// Skip bare ".git" entries (worktree pointer files or git internals).
 				if (relativePath === '.git' || relativePath.endsWith('/.git')) continue
+				// Skip git temporary files (e.g. partner.ts.git created during git ops).
+				if (relativePath.endsWith('.git')) continue
 				// Skip files already assigned — rehideAssignedFiles handles those.
 				if (this._config.getAssignment(relativePath)) continue
 				candidates.push(relativePath)
@@ -236,19 +238,27 @@ export class WorkspaceSync implements vscode.Disposable {
 			// Second pass: batch-check all candidates against every .gitignore file
 			// in the repository tree.  --no-index ensures tracked-but-gitignored
 			// files (added to .gitignore after their first commit) are also excluded.
-			let ignoredPaths = new Set<string>()
+			// Chunked into batches of 200 to avoid ARG_MAX limits when there are
+			// large numbers of candidates (e.g. tracked node_modules files).
+			const ignoredPaths = new Set<string>()
 			if (candidates.length > 0) {
-				try {
-					const { stdout: ignOut, exitCode: ignExit } = await runner.run(
-						['check-ignore', '--no-index', '-z', '--', ...candidates],
-						{ cwd: workspaceRoot.fsPath },
-					)
-					// exit 0 = at least one ignored (output lists them); exit 1 = none ignored
-					if (ignExit === 0) {
-						ignoredPaths = new Set(ignOut.split('\0').filter(Boolean))
+				const CHUNK_SIZE = 200
+				for (let i = 0; i < candidates.length; i += CHUNK_SIZE) {
+					const chunk = candidates.slice(i, i + CHUNK_SIZE)
+					try {
+						const { stdout: ignOut, exitCode: ignExit } = await runner.run(
+							['check-ignore', '--no-index', '-z', '--', ...chunk],
+							{ cwd: workspaceRoot.fsPath },
+						)
+						// exit 0 = at least one ignored (output lists them); exit 1 = none ignored
+						if (ignExit === 0) {
+							for (const p of ignOut.split('\0').filter(Boolean)) {
+								ignoredPaths.add(p)
+							}
+						}
+					} catch {
+						// check-ignore failure is non-fatal; continue with next chunk.
 					}
-				} catch {
-					// check-ignore failure is non-fatal; seed all candidates.
 				}
 			}
 
@@ -300,6 +310,32 @@ export class WorkspaceSync implements vscode.Disposable {
 		await this._seedFromGitStatus(this._workspaceRoot)
 	}
 
+	/**
+	 * Copy the current workspace version of every assigned file into its branch
+	 * worktree.  Use this to repair the out-of-sync state that arises when the
+	 * workspace was edited while worktrees didn't exist, or after
+	 * `rehideAssignedFiles` hid files before they had been synced.
+	 *
+	 * Returns the number of files successfully synced.
+	 */
+	async syncAllAssigned(): Promise<number> {
+		if (!this._workspaceRoot) return 0
+		const assignments = this._config.getAllAssignments()
+		const entries = Object.entries(assignments)
+		let synced = 0
+		for (const [rel, branch] of entries) {
+			if (this._config.isVirtual(branch)) continue
+			const uri = vscode.Uri.joinPath(this._workspaceRoot, rel)
+			try {
+				await this._syncFile(rel, uri, branch)
+				synced++
+			} catch (e) {
+				log.warn(`WorkspaceSync.syncAllAssigned: ${rel}: ${e instanceof Error ? e.message : String(e)}`)
+			}
+		}
+		return synced
+	}
+
 	/** Returns the ms-epoch timestamp when a path first became floating, or undefined. */
 	getFloatingSince(relativePath: string): number | undefined {
 		return this._floatingSince.get(normalisePath(relativePath))
@@ -312,7 +348,7 @@ export class WorkspaceSync implements vscode.Disposable {
 			return
 		}
 		const rel = this._relativePath(uri)
-		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/')) {
+		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/') || rel.endsWith('.git')) {
 			return
 		}
 		// A sync is in progress — re-queue so this save isn't silently dropped.
@@ -346,7 +382,7 @@ export class WorkspaceSync implements vscode.Disposable {
 			return
 		}
 		const rel = this._relativePath(uri)
-		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/')) {
+		if (!rel || rel.startsWith('.worktrees/') || rel.startsWith('.git/') || rel.endsWith('.git')) {
 			return
 		}
 		const branch = this._config.getAssignment(rel)

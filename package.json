@@ -492,6 +492,12 @@
 				"icon": "$(eye-closed)"
 			},
 			{
+				"command": "gitbraid.syncAssignedToWorktrees",
+				"title": "Sync Assigned Files to Worktrees",
+				"category": "GitBraid",
+				"icon": "$(sync)"
+			},
+			{
 				"command": "gitbraid.scm.generateCommitMessage",
 				"title": "Generate Commit Message",
 				"category": "GitBraid",
@@ -624,6 +630,11 @@
 				},
 				{
 					"command": "gitbraid.rehideAssignedFiles",
+					"when": "view == gitbraid.stackView",
+					"group": "navigation"
+				},
+				{
+					"command": "gitbraid.syncAssignedToWorktrees",
 					"when": "view == gitbraid.stackView",
 					"group": "navigation"
 				},
