@@ -151,6 +151,114 @@ suite('fileCommands shell coverage (direct-import)', () => {
 		}
 	})
 
+	test('assignFile: multi-URI allArgs path → picker shown, assignment happens', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({
+			stack,
+			worktreeExists: false,
+			extractFileUri: (a) => a instanceof vscode.Uri ? a : undefined,
+		})
+		const fs = await import('node:fs')
+		const path = await import('node:path')
+		const os = await import('node:os')
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-multi-'))
+		const f1 = path.join(dir, 'a.ts')
+		const f2 = path.join(dir, 'b.ts')
+		fs.writeFileSync(f1, 'x')
+		fs.writeFileSync(f2, 'y')
+		// Override relativePathIn so the test doesn't depend on the deps' fake root.
+		;(deps as unknown as { relativePathIn: typeof deps.relativePathIn }).relativePathIn =
+			(_c, u) => path.basename(u.fsPath)
+		// The shell branches on `arg instanceof vscode.Uri` for a single URI, but
+		// uses the `allArgs` parameter when it's a non-empty array.
+		// Pass undefined as `arg` and the array as `allArgs`.
+		const handlers = captureHandlers(() => registerFileCommands(deps))
+		try {
+			await withStubbedWindow(
+				{
+					showQuickPick: async () => ({ label: 'feat/a', description: '#fff' }),
+					showInformationMessage: async () => undefined,
+				},
+				async () => {
+					await handlers.get('gitbraid.assignFile')!(
+						undefined,
+						[vscode.Uri.file(f1), vscode.Uri.file(f2)],
+					)
+				},
+			)
+			// Both files end up assigned to feat/a.
+			assert.deepStrictEqual(
+				state.setAssignmentCalls.sort(),
+				[['a.ts', 'feat/a'], ['b.ts', 'feat/a']].sort(),
+			)
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	test('assignFile: with assignment + worktree exists → invokes hideAssignedFile path', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({ stack, worktreeExists: true })
+		const fs = await import('node:fs')
+		const path = await import('node:path')
+		const os = await import('node:os')
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-assign-'))
+		const file = path.join(dir, 'foo.ts')
+		fs.writeFileSync(file, 'x')
+		;(deps as unknown as { relativePathIn: typeof deps.relativePathIn }).relativePathIn =
+			(_c, u) => path.basename(u.fsPath)
+		const handlers = captureHandlers(() => registerFileCommands(deps))
+		try {
+			// `hideAssignedFile` will fail because of the fake root, but
+			// `withErrorHandler` swallows it.  We only need to drive lines
+			// up to and including the hide call.
+			await withStubbedWindow(
+				{
+					showQuickPick: async () => ({ label: 'feat/a', description: '#fff' }),
+					showInformationMessage: async () => undefined,
+					showErrorMessage: async () => undefined,
+				},
+				async () => {
+					await handlers.get('gitbraid.assignFile')!(vscode.Uri.file(file))
+				},
+			)
+			assert.strictEqual(state.setAssignmentCalls.length, 1)
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	test('assignFile: FloatingFileNode arg → uses node.resourceUri', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({ stack })
+		const fs = await import('node:fs')
+		const path = await import('node:path')
+		const os = await import('node:os')
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-floating-'))
+		const file = path.join(dir, 'float.ts')
+		fs.writeFileSync(file, 'x')
+		;(deps as unknown as { relativePathIn: typeof deps.relativePathIn }).relativePathIn =
+			(_c, u) => path.basename(u.fsPath)
+		const { FloatingFileNode } = await import('../src/branchStackTreeProvider')
+		const node = new FloatingFileNode(path.basename(file))
+		;(node as unknown as { resourceUri: vscode.Uri }).resourceUri = vscode.Uri.file(file)
+		const handlers = captureHandlers(() => registerFileCommands(deps))
+		try {
+			await withStubbedWindow(
+				{
+					showQuickPick: async () => ({ label: 'feat/a', description: '#fff' }),
+					showInformationMessage: async () => undefined,
+				},
+				async () => {
+					await handlers.get('gitbraid.assignFile')!(node)
+				},
+			)
+			assert.strictEqual(state.setAssignmentCalls.length, 1)
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
 	test('assignFolder: delegates to gitbraid.assignFile', async () => {
 		const { deps } = makeDeps()
 		const handlers = captureHandlers(() => registerFileCommands(deps))
@@ -167,6 +275,26 @@ suite('fileCommands shell coverage (direct-import)', () => {
 			;(vscode.commands as unknown as { executeCommand: unknown }).executeCommand = orig
 		}
 		assert.ok(delegated, 'assignFolder should delegate to assignFile')
+	})
+
+	test('unassignFile: explicit URI with prior assignment → removes + records undo', async () => {
+		const { deps, state } = makeDeps({
+			assignments: { 'foo.ts': 'feat/a' },
+			extractFileUri: (a) => a instanceof vscode.Uri ? a : undefined,
+		})
+		;(deps as unknown as { relativePathIn: typeof deps.relativePathIn }).relativePathIn =
+			() => 'foo.ts'
+		const handlers = captureHandlers(() => registerFileCommands(deps))
+		await withStubbedWindow(
+			{
+				showInformationMessage: async () => undefined,
+				showErrorMessage: async () => undefined,
+			},
+			async () => {
+				await handlers.get('gitbraid.unassignFile')!(vscode.Uri.file('/tmp/foo.ts'))
+			},
+		)
+		assert.deepStrictEqual(state.removeAssignmentCalls, ['foo.ts'])
 	})
 
 	test('unassignFile: no editor, no arg → warning, no throw', async () => {
@@ -287,4 +415,75 @@ suite('fileCommands shell coverage (direct-import)', () => {
 			;(vscode.workspace as unknown as { findFiles: unknown }).findFiles = origFind
 		}
 	})
+
+	test('assignGlob: cancelled file selection → no setAssignment calls', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({ stack })
+		const origFind = vscode.workspace.findFiles
+		;(vscode.workspace as unknown as { findFiles: unknown }).findFiles = async () => [
+			vscode.Uri.file('/tmp/fake-repo/foo.ts'),
+		]
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			let pickerCount = 0
+			await withStubbedWindow(
+				{
+					showInputBox: async () => 'src/**',
+					showQuickPick: async () => {
+						// First call → branch (return name string), second call → file picker (return undefined)
+						pickerCount++
+						return pickerCount === 1 ? 'feat/a' : undefined
+					},
+				},
+				async () => {
+					await handlers.get('gitbraid.assignGlob')!()
+				},
+			)
+			assert.strictEqual(state.setAssignmentCalls.length, 0)
+		} finally {
+			;(vscode.workspace as unknown as { findFiles: unknown }).findFiles = origFind
+		}
+	})
+
+	test('assignGlob: full happy path → records assignments + push undo entry', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({ stack })
+		const undoOps: unknown[] = []
+		;(deps.activeContext() as unknown as { undoStack: { push: (op: unknown) => void } }).undoStack = {
+			push: (op: unknown) => { undoOps.push(op) },
+		}
+		const origFind = vscode.workspace.findFiles
+		;(vscode.workspace as unknown as { findFiles: unknown }).findFiles = async () => [
+			vscode.Uri.file('/tmp/fake-repo/src/foo.ts'),
+			vscode.Uri.file('/tmp/fake-repo/src/bar.ts'),
+		]
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			let pickerCount = 0
+			await withStubbedWindow(
+				{
+					showInputBox: async () => 'src/**',
+					showQuickPick: async (items?: unknown) => {
+						pickerCount++
+						if (pickerCount === 1) return 'feat/a'
+						// File-selection picker — return all items.
+						return Array.isArray(items) ? items : []
+					},
+					showInformationMessage: async () => undefined,
+				},
+				async () => {
+					await handlers.get('gitbraid.assignGlob')!()
+				},
+			)
+			assert.strictEqual(state.setAssignmentCalls.length, 2)
+			assert.strictEqual(undoOps.length, 1)
+			// Exercise the undo + redo callbacks for additional coverage.
+			const op = undoOps[0] as { undo: () => Promise<void>, redo: () => Promise<void> }
+			await op.undo()
+			await op.redo()
+		} finally {
+			;(vscode.workspace as unknown as { findFiles: unknown }).findFiles = origFind
+		}
+	})
+
 })

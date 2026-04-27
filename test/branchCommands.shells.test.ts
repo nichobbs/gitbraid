@@ -543,4 +543,77 @@ suite('branchCommands shell coverage (direct-import)', () => {
 		)
 		assert.strictEqual(exported, false)
 	})
+
+	test('exportStackTemplate: empty instructions → still exports (without "Open File" choice)', async () => {
+		const stack = [entry('feat/a', 1)]
+		const deps = makeDeps({ stack })
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		let exportedInstructions: string | undefined = 'sentinel'
+		;(deps.activeContext() as unknown as { stackShare: { exportAsTemplate: unknown } }).stackShare = {
+			exportAsTemplate: async (instructions?: string) => {
+				exportedInstructions = instructions
+				return '/tmp/fake-repo/template.json'
+			},
+		} as unknown as never
+		await withStubbedWindow(
+			{
+				showInputBox: async () => '',
+				showInformationMessage: async () => undefined,
+			},
+			async () => {
+				await handlers.get('gitbraid.exportStackTemplate')!()
+			},
+		)
+		assert.strictEqual(exportedInstructions, undefined)
+	})
+
+	test('addScratchWorktree: not present → adds branch + sets scratch', async () => {
+		const deps = makeDeps()
+		const calls: Array<[string, string, string | undefined]> = []
+		const scratchCalls: Array<[string, boolean]> = []
+		;(deps.activeContext() as unknown as { branchStack: { addBranchToStack: unknown } }).branchStack = {
+			addBranchToStack: async (n: string, b: string, c?: string) => { calls.push([n, b, c]) },
+		} as unknown as never
+		;(deps.activeContext() as unknown as { config: { setScratch: unknown } }).config = {
+			...((deps.activeContext() as unknown as { config: object }).config),
+			getStack: () => [],
+			setScratch: async (n: string, on: boolean) => { scratchCalls.push([n, on]) },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{ showInformationMessage: async () => undefined },
+			async () => {
+				await handlers.get('gitbraid.addScratchWorktree')!()
+			},
+		)
+		assert.strictEqual(calls.length, 1)
+		assert.strictEqual(calls[0][0], 'gitbraid-scratch')
+		assert.deepStrictEqual(scratchCalls, [['gitbraid-scratch', true]])
+	})
+
+	test('rebaseBranch: with BranchNode arg → drives rebaseSvc.rebaseBranch', async () => {
+		const stack = [entry('feat/a', 1)]
+		const deps = makeDeps({ stack })
+		const calls: string[] = []
+		;(deps.activeContext() as unknown as { rebaseSvc: { rebaseBranch: unknown } }).rebaseSvc = {
+			rebaseBranch: async (n: string) => { calls.push(n) },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await handlers.get('gitbraid.rebaseBranch')!(new BranchNode(stack[0]))
+		assert.deepStrictEqual(calls, ['feat/a'])
+	})
+
+	test('moveBranchDown: with BranchNode → calls reorderStack', async () => {
+		const stack = [entry('a', 1), entry('b', 2)]
+		const deps = makeDeps({ stack })
+		const calls: string[][] = []
+		;(deps.activeContext() as unknown as { config: { reorderStack: unknown } }).config = {
+			...((deps.activeContext() as unknown as { config: object }).config),
+			getStack: () => stack,
+			reorderStack: async (names: string[]) => { calls.push(names) },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await handlers.get('gitbraid.moveBranchDown')!(new BranchNode(stack[1]))
+		assert.deepStrictEqual(calls, [['b', 'a']])
+	})
 })

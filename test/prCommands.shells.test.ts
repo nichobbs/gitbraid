@@ -115,6 +115,72 @@ suite('prCommands shell coverage (direct-import)', () => {
 		assert.ok(infoed)
 	})
 
+	test('submitStack: stack present, all branches succeed → info, no warning', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, secrets } = makeDeps({ stack })
+		;(deps.activeContext() as unknown as { buildSubmitStackService: unknown }).buildSubmitStackService =
+			async () => ({
+				submit: async () => [
+					{ branch: 'feat/a', ok: true, action: 'pushed+created' as const },
+				],
+			})
+		const handlers = captureHandlers(() => registerPrCommands(deps, secrets))
+		let infoed = false
+		let warned = false
+		await withStubbedWindow(
+			{
+				showInformationMessage: async () => { infoed = true; return undefined },
+				showWarningMessage: async () => { warned = true; return undefined },
+			},
+			async () => {
+				await handlers.get('gitbraid.submitStack')!()
+			},
+		)
+		assert.ok(infoed)
+		assert.strictEqual(warned, false, 'no warning expected when nothing failed')
+	})
+
+	test('submitStack: failures in submission → warning with detail', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, secrets } = makeDeps({ stack })
+		;(deps.activeContext() as unknown as { buildSubmitStackService: unknown }).buildSubmitStackService =
+			async () => ({
+				submit: async () => [
+					{ branch: 'feat/a', ok: false, message: 'boom' },
+				],
+			})
+		const handlers = captureHandlers(() => registerPrCommands(deps, secrets))
+		let warned = false
+		await withStubbedWindow(
+			{ showWarningMessage: async () => { warned = true; return undefined } },
+			async () => {
+				await handlers.get('gitbraid.submitStack')!()
+			},
+		)
+		assert.ok(warned)
+	})
+
+	test('openStackedPR: cached PR URL → opens external', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, secrets } = makeDeps({ stack })
+		;(deps.prAwareness as unknown as { getForBranch: unknown }).getForBranch =
+			() => ({ url: 'https://example.com/pr/1' })
+		const handlers = captureHandlers(() => registerPrCommands(deps, secrets))
+		let openedUri: vscode.Uri | undefined
+		const orig = vscode.env.openExternal
+		;(vscode.env as unknown as { openExternal: unknown }).openExternal = async (u: vscode.Uri) => {
+			openedUri = u
+			return true
+		}
+		try {
+			await handlers.get('gitbraid.openStackedPR')!('feat/a')
+		} finally {
+			;(vscode.env as unknown as { openExternal: unknown }).openExternal = orig
+		}
+		assert.ok(openedUri)
+		assert.strictEqual(openedUri!.toString(), 'https://example.com/pr/1')
+	})
+
 	test('openStackedPR: cancelled resolver → no-op (no openExternal call)', async () => {
 		const { deps, secrets } = makeDeps()
 		const handlers = captureHandlers(() => registerPrCommands(deps, secrets))
