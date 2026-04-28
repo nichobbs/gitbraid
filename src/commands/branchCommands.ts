@@ -89,7 +89,7 @@ async function promptForRoot(workspaceUri: vscode.Uri): Promise<string | undefin
 	return picked
 }
 
-
+/**
  * order) or down (toward the base / lower order) within the sorted stack.
  * The stack is treated as ascending by `order` field; "up" means the branch
  * becomes a higher layer (larger order number, wins over more other branches).

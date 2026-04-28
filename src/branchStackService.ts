@@ -12,6 +12,9 @@ import type { VirtualBranchStore } from './virtualBranchStore'
 
 const WORKTREES_DIR = '.worktrees'
 
+/** Reserved subdirectory name for the plan-11 workspace integration worktree. */
+export const WORKSPACE_WORKTREE_DIR = '_workspace'
+
 /** Valid git branch name characters (subset: safe for shell args with quoting). */
 const BRANCH_NAME_RE = /^[a-zA-Z0-9_./-]+$/
 
@@ -111,6 +114,15 @@ async function validateBranchNameStrict(name: string): Promise<void> {
  */
 export function worktreePath(workspaceRoot: vscode.Uri, branchName: string): vscode.Uri {
 	return vscode.Uri.joinPath(workspaceRoot, WORKTREES_DIR, branchToWorktreeDirName(branchName))
+}
+
+/**
+ * Returns the filesystem path of the workspace integration worktree
+ * (`.worktrees/_workspace`). This worktree is checked out at the root branch
+ * and serves as the base for the plan-11 parallel-branch integrated view.
+ */
+export function workspaceWorktreePath(workspaceRoot: vscode.Uri): vscode.Uri {
+	return vscode.Uri.joinPath(workspaceRoot, WORKTREES_DIR, WORKSPACE_WORKTREE_DIR)
 }
 
 /**
@@ -372,6 +384,61 @@ export class BranchStackService implements vscode.Disposable {
 		log.info(`BranchStackService: branch "${name}" removed from stack`)
 	}
 
+	/**
+	 * Create `.worktrees/_workspace` as a git worktree checked out at the root
+	 * branch.  A no-op if the worktree directory already exists, or if the root
+	 * branch is already checked out in the main workspace folder (git does not
+	 * allow the same branch in two worktrees simultaneously).
+	 *
+	 * Called by `FolderContext.initialize()` whenever a root branch is
+	 * configured.  The workspace worktree is never committed; it is the
+	 * read-only base for the plan-11 parallel-branch integrated view.
+	 */
+	async ensureWorkspaceWorktree(rootBranch: string): Promise<void> {
+		this._assertInitialised()
+		const wtPath = workspaceWorktreePath(this._workspaceRoot!).fsPath
+		if (fs.existsSync(wtPath)) {
+			log.info(`BranchStackService: _workspace worktree already exists at ${wtPath}`)
+			return
+		}
+		// Cannot check out the same branch in two worktrees.
+		const alreadyCheckedOut = await this._isCheckedOut(rootBranch)
+		if (alreadyCheckedOut) {
+			log.info(`BranchStackService: root "${rootBranch}" already checked out — skipping _workspace worktree`)
+			return
+		}
+		try {
+			await git.worktree.add(wtPath, rootBranch)
+			log.info(`BranchStackService: created _workspace worktree for root "${rootBranch}" at ${wtPath}`)
+		} catch (e) {
+			log.warn(`BranchStackService: could not create _workspace worktree: ${e instanceof Error ? e.message : String(e)}`)
+		}
+	}
+
+	/**
+	 * Advance `.worktrees/_workspace` to the latest commit on `rootBranch`
+	 * via `git reset --hard`.  Safe to call even when the worktree does not
+	 * exist (falls through silently).
+	 *
+	 * The workspace worktree has no user commits by construction, so a hard
+	 * reset is safe and idempotent.  Called by `FolderContext` when the root
+	 * branch ref advances (e.g. after `git pull` on root).
+	 */
+	async advanceWorkspaceWorktree(rootBranch: string): Promise<void> {
+		this._assertInitialised()
+		const wtPath = workspaceWorktreePath(this._workspaceRoot!).fsPath
+		if (!fs.existsSync(wtPath)) return
+		const { exitCode, stderr } = await getDefaultGitRunner().run(
+			['reset', '--hard', rootBranch],
+			{ cwd: wtPath },
+		)
+		if (exitCode === 0) {
+			log.info(`BranchStackService: advanced _workspace worktree to ${rootBranch}`)
+		} else {
+			log.warn(`BranchStackService: advanceWorkspaceWorktree failed: ${stderr}`)
+		}
+	}
+
 	private async _worktreeIsDirty(worktreeFsPath: string): Promise<boolean> {
 		const { stdout, exitCode, stderr } = await getDefaultGitRunner().run(
 			['status', '--porcelain'],
@@ -511,9 +578,10 @@ export class BranchStackService implements vscode.Disposable {
 				entry === 'local-config.json' || entry === 'local-config.json.tmp') {
 				continue
 			}
-			// Virtual-branch store lives under `.worktrees/virtual/` — never
-			// treat it as an orphan worktree.
-			if (entry === 'virtual') {
+			// Virtual-branch store lives under `.worktrees/virtual/` and the
+			// plan-11 workspace integration worktree under `.worktrees/_workspace/`
+			// — never treat them as orphans.
+			if (entry === 'virtual' || entry === WORKSPACE_WORKTREE_DIR) {
 				continue
 			}
 			if (expectedDirs.has(entry)) {

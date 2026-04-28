@@ -90,6 +90,10 @@ export class FolderContext implements vscode.Disposable {
 	private _disposed = false
 	/** Watches `.worktrees/local-config.json` for external edits. */
 	private _configWatcher: vscode.FileSystemWatcher | undefined
+	/** Composite disposable that covers the plan-11 root-ref advance watcher. */
+	private _rootRefWatcher: vscode.Disposable | undefined
+	/** Debounce handle for root-advances detection. */
+	private _rootAdvanceTimer: ReturnType<typeof setTimeout> | undefined
 
 	constructor(root: vscode.Uri) {
 		this.root = root
@@ -177,6 +181,23 @@ export class FolderContext implements vscode.Disposable {
 		await this.stackShare.detectAndOfferTemplate()
 		await this.branchStack.initStack(this.root)
 
+		// Phase 4 — ensure the _workspace integration worktree exists whenever
+		// a root branch is configured.
+		const rootOnInit = this.config.getRoot()
+		if (rootOnInit) {
+			this.branchStack.ensureWorkspaceWorktree(rootOnInit).catch((e: unknown) => {
+				log.warn(`FolderContext: ensureWorkspaceWorktree failed: ${e instanceof Error ? e.message : String(e)}`)
+			})
+		}
+		this.config.onDidChangeStack(() => {
+			const newRoot = this.config.getRoot()
+			if (newRoot) {
+				void this.branchStack.ensureWorkspaceWorktree(newRoot).catch((e: unknown) => {
+					log.warn(`FolderContext: ensureWorkspaceWorktree on stack change failed: ${e instanceof Error ? e.message : String(e)}`)
+				})
+			}
+		})
+
 		this.workspaceSync.init(this.root, this.bus)
 		this.stackPopulator.init(this.root)
 		this.rebaseSvc.init(this.root)
@@ -208,7 +229,91 @@ export class FolderContext implements vscode.Disposable {
 			})
 		}
 
+		// Phase 5 — watch the root branch ref for advances (e.g. git pull).
+		this._startRootRefWatcher()
+
 		log.info(`FolderContext: initialised for ${this.root.fsPath}`)
+	}
+
+	// ── Phase 5: root-advances watcher ─────────────────────────────────────────
+
+	/**
+	 * Install file-system watchers on `.git/refs/heads/**` and
+	 * `.git/packed-refs`.  When either fires and the configured root SHA has
+	 * changed, advance the `_workspace` worktree and refresh the parallel-
+	 * workspace diffs so decorations and overlap detection stay current.
+	 *
+	 * If no root is configured yet the method waits for the next
+	 * `onDidChangeStack` event before arming the watchers.
+	 */
+	private _startRootRefWatcher(): void {
+		if (this._rootRefWatcher) {
+			this._rootRefWatcher.dispose()
+			this._rootRefWatcher = undefined
+		}
+		if (!this.config.getRoot()) {
+			// Arm once root is set.
+			const sub = this.config.onDidChangeStack(() => {
+				if (this.config.getRoot()) {
+					sub.dispose()
+					this._startRootRefWatcher()
+				}
+			})
+			return
+		}
+
+		const refWatcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(this.root, '.git/refs/heads/**'),
+		)
+		const packedWatcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(this.root, '.git/packed-refs'),
+		)
+
+		const onRefChange = () => {
+			clearTimeout(this._rootAdvanceTimer)
+			this._rootAdvanceTimer = setTimeout(() => { void this._onRootMayHaveAdvanced() }, 500)
+		}
+
+		this._rootRefWatcher = vscode.Disposable.from(
+			refWatcher,
+			refWatcher.onDidChange(onRefChange),
+			refWatcher.onDidCreate(onRefChange),
+			packedWatcher,
+			packedWatcher.onDidChange(onRefChange),
+		)
+	}
+
+	/**
+	 * Called (debounced) when any root ref file changes.  Recomputes all branch
+	 * diffs; if new overlaps are detected surfaces a single notification with
+	 * an action to open the overlap-resolution dialog.
+	 */
+	private async _onRootMayHaveAdvanced(): Promise<void> {
+		const root = this.config.getRoot()
+		if (!root) return
+
+		// Update the _workspace worktree to the new root tip (noop if absent).
+		await this.branchStack.advanceWorkspaceWorktree(root)
+
+		const newOverlaps = await this.parallelWs.refresh().catch((e: unknown) => {
+			log.warn(`FolderContext: root-advance refresh failed: ${e instanceof Error ? e.message : String(e)}`)
+			return [] as import('./configTypes').OverlapResolution[]
+		})
+
+		if (newOverlaps.length === 0) return
+
+		const label = newOverlaps.length === 1
+			? '1 new overlap detected'
+			: `${String(newOverlaps.length)} new overlaps detected`
+
+		void vscode.window.showWarningMessage(
+			`GitBraid: root branch "${root}" advanced \u2014 ${label}.`,
+			'Review Overlaps',
+		).then((choice) => {
+			if (choice === 'Review Overlaps') {
+				void vscode.commands.executeCommand('gitbraid.changeRootBranch')
+			}
+		})
 	}
 
 	dispose(): void {
@@ -218,6 +323,8 @@ export class FolderContext implements vscode.Disposable {
 		// dependencies.
 		this.hunkDeco.dispose()
 		this.parallelWs.dispose()
+		this._rootRefWatcher?.dispose()
+		clearTimeout(this._rootAdvanceTimer)
 		this.scmManager.dispose()
 		this.stackPopulator.dispose()
 		this.rebaseRecovery.dispose()
