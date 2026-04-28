@@ -121,7 +121,7 @@ export async function buildSnapshot(
 	deps: BuildSnapshotDeps,
 ): Promise<StackSnapshot> {
 	const runner = deps.runner ?? getDefaultGitRunner()
-	const entries = deps.config.getStack().filter((e) => !e.scratch)
+	const entries = deps.config.getStack()
 	const sorted = [...entries].sort((a, b) => a.order - b.order)
 	const assignments = deps.config.getAllAssignments()
 

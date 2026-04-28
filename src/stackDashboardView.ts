@@ -292,6 +292,7 @@ export function buildDashboardHtml(data: DashboardData, cspSource = "'self'"): s
 	.title .base { color: var(--vscode-descriptionForeground); font-weight: normal; }
 	.current { color: var(--vscode-charts-green); }
 	.singleCommit { color: var(--vscode-charts-purple); font-size: 14px; line-height: 1; }
+	.scratch-badge { font-size: 10px; font-weight: normal; color: var(--vscode-descriptionForeground); background: var(--vscode-badge-background); padding: 1px 4px; border-radius: 2px; margin-left: 4px; }
 	.meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; }
 	.meta .pr { padding: 0 4px; border-radius: 2px; }
 	.meta .files { padding: 0 4px; }
@@ -547,24 +548,32 @@ export function buildBranchRowHtml(b: DashboardBranchRow, i: number, total: numb
 		</details>`
 		: ''
 
+	const prDisabled = b.prNumber ? '' : 'disabled'
+	const openPrButton = b.scratch
+		? ''
+		: `<button data-kind="openPr" data-branch="${safe(b.name)}" ${prDisabled}>Open PR</button>`
+	const commitButton = b.scratch
+		? ''
+		: `<button data-kind="commit" data-branch="${safe(b.name)}" title="Commit to this branch">Commit</button>`
+
 	return `<li class="row" data-branch="${safe(b.name)}" data-search="${safe(b.name.toLowerCase())}${b.prTitle ? ' ' + safe(b.prTitle.toLowerCase()) : ''}${b.prNumber ? ' #' + String(b.prNumber) : ''}">
 	<div class="${connectorClass(i, total)}"></div>
 	<div class="node ${b.isCurrent ? 'current-branch' : ''}" style="border-color:${safe(b.color)}">
 		<div class="title">
-			<span class="branch">${currentMarker}${safe(b.name)}${singleCommitIcon}</span>
+			<span class="branch">${currentMarker}${safe(b.name)}${singleCommitIcon}${b.scratch ? ' <span class="scratch-badge" title="Scratch area — changes here are not committed">scratch</span>' : ''}</span>
 			<span class="base">→ ${safe(b.base)}</span>
 		</div>
 		<div class="meta">
-			<span class="pr state-${safe(stateClass)}">${safe(pr)} · ${safe(state)}</span>
+			${b.scratch ? '' : `<span class="pr state-${safe(stateClass)}">${safe(pr)} · ${safe(state)}</span>`}
 			${checksPill}
 			${aheadBehind}
 			${filesCount}
 			${b.prTitle ? `<span class="prtitle">${safe(b.prTitle)}</span>` : ''}
 		</div>
 		<div class="actions">
-			<button data-kind="openPr" data-branch="${safe(b.name)}" ${b.prNumber ? '' : 'disabled'}>Open PR</button>
+			${openPrButton}
 			<button data-kind="rebase" data-branch="${safe(b.name)}">Rebase</button>
-			<button data-kind="commit" data-branch="${safe(b.name)}" title="Commit to this branch">Commit</button>
+			${commitButton}
 			<button class="more" data-testid="row-menu-button-${safe(b.name)}" data-more-branch="${safe(b.name)}" data-branch-pr-url="${safe(b.prUrl ?? '')}" aria-haspopup="menu" aria-label="More actions for ${safe(b.name)}">⋯</button>
 		</div>
 		${commitsSection}

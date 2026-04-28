@@ -5,6 +5,7 @@ import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { BranchStackService, worktreePath } from './branchStackService'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
+import type { RebaseRecovery } from './rebaseRecovery'
 
 /**
  * Detect whether `worktreeDir` is currently in the middle of a rebase.
@@ -67,6 +68,7 @@ export class RebaseSuggestionService implements vscode.Disposable {
 		private readonly _config: ConfigService,
 		private readonly _branchStack: BranchStackService,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
+		private readonly _rebaseRecovery?: RebaseRecovery,
 	) {}
 
 	dispose(): void {
@@ -217,13 +219,17 @@ export class RebaseSuggestionService implements vscode.Disposable {
 				)
 			} else if (stderr.includes('autostash')) {
 				// Rebase succeeded but restoring the stashed changes hit conflicts.
-				// The stash entry is still intact — the user can run `git stash pop`
-				// inside the worktree once they've resolved the conflicts.
-				await vscode.window.showWarningMessage(
+				// The stash entry is still intact — resolve the conflict markers in the
+				// working tree, stage the files, then `git stash drop` to clean up.
+				const pick = await vscode.window.showWarningMessage(
 					`Rebase of "${entry.name}" succeeded but restoring stashed changes hit conflicts — ` +
 					`resolve them in the editor, then run \`git stash drop\` in the worktree.`,
 					{ modal: false },
+					'Open Conflicts',
 				)
+				if (pick === 'Open Conflicts' && this._rebaseRecovery) {
+					await this._rebaseRecovery.openConflicts(cwd)
+				}
 			} else {
 				await vscode.window.showErrorMessage(
 					`Rebase of "${entry.name}" failed.\n${stderr}`,
