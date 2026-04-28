@@ -156,6 +156,41 @@ until the conflict is resolved.
 
 ---
 
+### Parallel-branch workspace and gutter decorations
+
+GitBraid can show all branches in a shared workspace simultaneously, with coloured
+gutter bars identifying which branch owns each hunk.
+
+**How it works:**
+
+- Each stack has a **root branch** — the common ancestor of all stacked branches.
+  GitBraid diffs every branch against the root (`git diff root..branch`) to attribute
+  hunks. A dedicated `.worktrees/_workspace` worktree is kept checked out at the root
+  branch tip and updated automatically whenever the root advances.
+- **Gutter bars** appear in the editor margin, one colour per branch, covering the
+  line ranges each branch has modified. The colours match the branch colours shown in
+  the Branch Stack view.
+
+**Set or change the root branch:**
+
+Run `GitBraid: Change Root Branch` (`gitbraid.changeRootBranch`) from the Command
+Palette and select the branch that all stacked branches share as a common base.
+You are also prompted to set the root branch when adding the very first branch to an
+empty stack.
+
+**Overlap detection:**
+
+When you add a branch whose hunks overlap a hunk already attributed to another branch,
+a modal dialog appears listing each conflict. For each one you can choose:
+
+- **Keep top branch** — the newly added branch's hunk wins.
+- **Keep existing** — the already-assigned branch keeps ownership.
+
+Resolutions are stored in `overlapResolutions[]` in `gitbraid-config.json` and
+re-applied on the next refresh.
+
+---
+
 ### Rebase a branch onto its parent
 
 When a parent branch advances, GitBraid detects the gap and shows a notification.

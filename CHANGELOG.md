@@ -33,6 +33,33 @@
   produces spurious 100% coverage across all files.
 
 ### Added
+- **Parallel-branch workspace (Plan 11)** — a shared `_workspace` worktree is created
+  at the root branch tip so every branch in the stack is always visible together
+  without switching worktrees.
+  - **Root branch** — each stack now has an explicit `root` branch (the common ancestor
+    of all stacked branches). Set it when adding the first branch or any time via
+    `GitBraid: Change Root Branch` (`gitbraid.changeRootBranch`). Stored as `root` in
+    `gitbraid-config.json`.
+  - **Diff-derived hunk decorations** — gutter bars in every text editor are coloured
+    by branch ownership. Hunks are attributed by diffing each branch against the root
+    (`git diff root..branch`). The `ParallelWorkspaceService` maintains a per-file
+    attribution map; `HunkDecorationProvider` paints coloured SVG gutters on every
+    visible editor via VS Code's decoration API.
+  - **Overlap detection** — when a new branch is added, GitBraid checks whether its
+    hunks overlap any hunk already attributed to an existing branch. Overlapping hunks
+    surface a modal dialog (`_promptOverlapResolution`) that lets the user choose
+    **Keep top branch** or **Keep existing** for each conflict; the resolution is
+    persisted in `overlapResolutions[]` in `gitbraid-config.json`.
+  - **`_workspace` worktree** — `branchStackService.ensureWorkspaceWorktree` creates
+    `.worktrees/_workspace` as a git worktree checked out at the root branch on first
+    run. `branchStackService.advanceWorkspaceWorktree` fast-forwards it whenever the
+    root advances. `_pruneOrphans` skips `_workspace` so it is never auto-deleted.
+  - **Root-advance refresh** — `FolderContext._startRootRefWatcher` arms file-system
+    watchers on `.git/refs/heads/**` and `.git/packed-refs`. When either file changes,
+    a 500 ms debounce fires `_onRootMayHaveAdvanced`, which advances the `_workspace`
+    worktree, re-runs `ParallelWorkspaceService.refresh()`, and re-paints gutter
+    decorations.
+  - Plan: `docs/plans/11-parallel-branch-workspace.md`.
 - **Virtual branches (Plan 08)** — a new kind of stack entry that exists only
   as an in-memory set of file snapshots until the user commits.  Commands:
   `GitBraid: Add Virtual Branch`, `GitBraid: Materialise Virtual Branch`,

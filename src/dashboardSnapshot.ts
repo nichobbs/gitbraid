@@ -127,6 +127,7 @@ export async function buildSnapshot(
 
 	const rows: SnapshotBranch[] = []
 	for (const e of sorted) {
+		if (e.scratch) continue
 		const cwd = deps.worktreeDirOf(e.name)
 		const pr = deps.prAwareness?.getForBranch(e.name)
 		let ahead: number | undefined

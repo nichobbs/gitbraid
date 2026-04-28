@@ -9,6 +9,12 @@ the commits it should.
 
 ## Features
 
+- **Parallel-branch workspace** — a shared `_workspace` worktree keeps all branches
+  visible side-by-side. Gutter bars in every editor are coloured by branch ownership
+  (hunks attributed via `git diff root..branch`). Overlapping hunks are detected at
+  add-branch time and resolved via a modal dialog. The root branch advances
+  automatically when upstream commits land; `GitBraid: Change Root Branch`
+  (`gitbraid.changeRootBranch`) lets you update it at any time.
 - **Branch stack** — maintain an ordered stack of branches where each layer builds
   on the one below. The workspace always reflects the cumulative top-of-stack state.
   Branches in the **Branch Stack** view are ordered top-layer-first; drag or use
