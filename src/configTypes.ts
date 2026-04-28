@@ -97,15 +97,39 @@ export interface HunkAnchor {
 	bodyHash: string
 }
 
+/**
+ * When two branches modify overlapping line ranges in the same file the user
+ * resolves the conflict at add-branch time.  The resolution is persisted here
+ * so the display is stable across restarts.  See plan 11.
+ */
+export interface OverlapResolution {
+	/** Workspace-relative file path (forward-slash normalised). */
+	file: string
+	/** 1-based inclusive line range of the overlap in the workspace view. */
+	range: [number, number]
+	/** The two (or more) branch names that both modify this range. */
+	branches: [string, string, ...string[]]
+	/** Which branch's version is shown.  `'manual'` = user edited the merged result. */
+	resolution: string
+}
+
 /** Root structure of `.worktrees/gitbraid-config.json`. */
 export interface BranchConfig {
 	version: number
+	/**
+	 * Common base branch for all branches in the stack (e.g. "main").
+	 * Used as the diff root for hunk attribution in the parallel-branch workspace.
+	 * See `docs/plans/11-parallel-branch-workspace.md`.
+	 */
+	root?: string
 	stack: BranchStackEntry[]
 	assignments: AssignmentMap
 	/** Hunk-level assignments — present only when the user has assigned individual hunks. */
 	hunkAssignments?: HunkAssignmentMap
 	/** Stable positional anchors accompanying `hunkAssignments` — T8. */
 	hunkAnchors?: HunkAnchorMap
+	/** Persisted overlap-conflict resolutions — plan 11. */
+	overlapResolutions?: OverlapResolution[]
 }
 
 // ─── Runtime status types ────────────────────────────────────────────────────
@@ -152,6 +176,7 @@ export function emptyConfig(): BranchConfig {
 		assignments: {},
 		hunkAssignments: {},
 		hunkAnchors: {},
+		overlapResolutions: [],
 	}
 }
 
@@ -200,16 +225,13 @@ export function migrateConfig(config: BranchConfig): BranchConfig {
 		unsorted.forEach((e, i) => { e.order = maxOrder + i + 1 })
 	}
 	// Ensure hunkAssignments object exists
-	if (!config.hunkAssignments) {
-		config.hunkAssignments = {}
-	}
+	config.hunkAssignments ??= {}
 	// v1 → v2: introduce hunkAnchors.  Pre-existing hunk assignments carry
 	// no anchor yet; they'll be treated as stale by the reconciler until the
 	// user re-assigns them.  Safe default — routing simply warns rather than
 	// applying them to the wrong lines.
-	if (!config.hunkAnchors) {
-		config.hunkAnchors = {}
-	}
+	config.hunkAnchors ??= {}
+	config.overlapResolutions ??= []
 	config.version = CONFIG_SCHEMA_VERSION
 	return config
 }

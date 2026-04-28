@@ -189,19 +189,24 @@ export class RebaseRecovery implements vscode.Disposable {
 	}
 
 	private async _promptRecovery(worktreeDir: string): Promise<void> {
-		const conflicts = await this._listConflicts(worktreeDir)
+		const [conflicts, branchResult] = await Promise.all([
+			this._listConflicts(worktreeDir),
+			this._runner.run(['branch', '--show-current'], { cwd: worktreeDir }),
+		])
+		const branch = branchResult.stdout.trim() || path.basename(worktreeDir)
+
 		if (conflicts.length === 0) {
 			// No conflicts — run continue under a progress notification that
 			// auto-dismisses when the rebase finishes.
 			await vscode.window.withProgress(
-				{ location: vscode.ProgressLocation.Notification, title: 'GitBraid: rebasing…', cancellable: false },
+				{ location: vscode.ProgressLocation.Notification, title: `GitBraid: rebasing "${branch}"…`, cancellable: false },
 				() => this.continue(worktreeDir),
 			)
 			return
 		}
 
 		const pick = await vscode.window.showWarningMessage(
-			`GitBraid: rebase paused with ${String(conflicts.length)} conflicted file(s).`,
+			`GitBraid: rebase of "${branch}" paused with ${String(conflicts.length)} conflicted file(s).`,
 			{ modal: false },
 			'Open Conflicts',
 			'Abort',

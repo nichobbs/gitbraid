@@ -216,6 +216,12 @@
 				"icon": "$(git-branch-create)"
 			},
 			{
+				"command": "gitbraid.changeRootBranch",
+				"title": "Change Root Branch (diff base for attribution)",
+				"category": "GitBraid",
+				"icon": "$(root-folder)"
+			},
+			{
 				"command": "gitbraid.addScratchWorktree",
 				"title": "Add Scratch Area — parking worktree for uncommitted work",
 				"category": "GitBraid",

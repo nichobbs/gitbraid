@@ -8,6 +8,7 @@ import {
 	BranchConfig,
 	BranchStackEntry,
 	HunkAnchor,
+	OverlapResolution,
 	StackChangeEvent,
 	emptyConfig,
 	isValidConfig,
@@ -200,6 +201,54 @@ export class ConfigService implements vscode.Disposable {
 
 	getBranch(name: string): BranchStackEntry | undefined {
 		return this._config.stack.find((e) => e.name === name)
+	}
+
+	// ─── Root branch ──────────────────────────────────────────────────────────
+
+	/** Returns the common root branch for diff-based hunk attribution, or `undefined` if not yet set. */
+	getRoot(): string | undefined {
+		return this._config.root
+	}
+
+	/** Persist a new root branch.  Does NOT recompute diffs — callers own that. */
+	async setRoot(branch: string): Promise<void> {
+		this._config.root = branch
+		await this._writeToDisk()
+		this._onDidChangeStack.fire({ type: 'reorder', branch: '' })
+	}
+
+	// ─── Overlap resolutions ──────────────────────────────────────────────────
+
+	/** Returns all persisted overlap-conflict resolutions. */
+	getOverlapResolutions(): OverlapResolution[] {
+		return [...(this._config.overlapResolutions ?? [])]
+	}
+
+	/** Add or replace a resolution for a given file + range.  Matching is by file + range[0] + range[1]. */
+	async setOverlapResolution(r: OverlapResolution): Promise<void> {
+		const list = this._config.overlapResolutions ?? []
+		const idx = list.findIndex(
+			(x) => x.file === r.file && x.range[0] === r.range[0] && x.range[1] === r.range[1],
+		)
+		if (idx >= 0) {
+			list[idx] = r
+		} else {
+			list.push(r)
+		}
+		this._config.overlapResolutions = list
+		await this._writeToDisk()
+	}
+
+	/** Remove all resolutions for branches that no longer exist in the stack. */
+	async pruneOverlapResolutions(): Promise<void> {
+		const names = new Set(this._config.stack.map((e) => e.name))
+		const before = this._config.overlapResolutions?.length ?? 0
+		this._config.overlapResolutions = (this._config.overlapResolutions ?? []).filter(
+			(r) => r.branches.some((b) => names.has(b)),
+		)
+		if (this._config.overlapResolutions.length !== before) {
+			await this._writeToDisk()
+		}
 	}
 
 	// ─── Assignment queries ───────────────────────────────────────────────────

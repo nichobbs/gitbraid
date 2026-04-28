@@ -15,8 +15,40 @@ import {
 	toolDisplayName as _toolDisplayName,
 	type BranchPickItem,
 } from './_helpers'
+import type { OverlapResolution } from '../configTypes'
+import type { FolderContext } from '../folderContext'
 import type { CommandDeps } from './types'
 
+/**
+ * Show a conflict-resolution quick pick for a newly-detected hunk overlap.
+ * Persists the user's choice to `ConfigService`.
+ */
+async function _promptOverlapResolution(
+	ctx: FolderContext,
+	overlap: OverlapResolution,
+): Promise<void> {
+	const [branchA, branchB] = overlap.branches
+	const label = `${overlap.file} lines ${String(overlap.range[0])}–${String(overlap.range[1])}`
+	const pick = await vscode.window.showWarningMessage(
+		`GitBraid: "${branchA}" and "${branchB}" both modify ${label}.`,
+		{ modal: true },
+		`Keep "${branchA}"`,
+		`Keep "${branchB}"`,
+		'Show Both',
+	)
+	if (!pick) return
+	let resolution: string
+	if (pick === `Keep "${branchA}"`) {
+		resolution = branchA
+	} else if (pick === `Keep "${branchB}"`) {
+		resolution = branchB
+	} else {
+		resolution = 'manual'
+	}
+	await ctx.config.setOverlapResolution({ ...overlap, resolution })
+	// Re-run attribution with the new resolution so decorations update.
+	await ctx.parallelWs.refresh()
+}
 const cmd = withErrorHandler
 
 /**
@@ -42,7 +74,22 @@ async function detectDefaultBranch(workspaceUri: vscode.Uri): Promise<string> {
 }
 
 /**
- * Move `branchName` one position up (toward the top of the stack / higher
+ * Prompt the user to pick or type the root branch for hunk attribution.
+ * Returns the chosen branch name, or `undefined` if cancelled.
+ */
+async function promptForRoot(workspaceUri: vscode.Uri): Promise<string | undefined> {
+	const { local } = await git.listBranches(workspaceUri).catch(() => ({ local: [] as string[] }))
+	const defaultBranch = await detectDefaultBranch(workspaceUri)
+	// Put the detected default first so Enter selects it immediately.
+	const candidates = [defaultBranch, ...local.filter((b) => b !== defaultBranch)]
+	const picked = await vscode.window.showQuickPick(candidates, {
+		placeHolder: `Common root branch for diff attribution (detected: ${defaultBranch})`,
+		title: 'GitBraid: Select Root Branch',
+	})
+	return picked
+}
+
+
  * order) or down (toward the base / lower order) within the sorted stack.
  * The stack is treated as ascending by `order` field; "up" means the branch
  * becomes a higher layer (larger order number, wins over more other branches).
@@ -138,6 +185,14 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 
 			const stack = ctx.config.getStack()
 			const defaultBranch = await detectDefaultBranch(workspaceUri).catch(() => 'main')
+
+			// ── Root branch prompt (first branch only) ───────────────────────
+			if (stack.length === 0 && !ctx.config.getRoot()) {
+				const root = await promptForRoot(workspaceUri)
+				if (!root) return   // user cancelled
+				await ctx.config.setRoot(root)
+			}
+
 			const bases = buildBaseList(stack, defaultBranch)
 			const basePick = await vscode.window.showQuickPick(bases, {
 				placeHolder: 'Base branch (used when creating a new branch)',
@@ -152,6 +207,32 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 			await vscode.window.showInformationMessage(
 				`Branch "${name}" added to stack in ${path.basename(ctx.root.fsPath)}`,
 			)
+			// ── Overlap detection ─────────────────────────────────────────────
+			if (ctx.config.getRoot()) {
+				const overlaps = await ctx.parallelWs.refresh()
+				for (const overlap of overlaps) {
+					await _promptOverlapResolution(ctx, overlap)
+				}
+			}
+		})),
+
+		vscode.commands.registerCommand('gitbraid.changeRootBranch', cmd(async () => {
+			const ctx = activeContext()
+			const workspaceUri = ctx.root
+			const currentRoot = ctx.config.getRoot()
+			const root = await promptForRoot(workspaceUri)
+			if (!root || root === currentRoot) return
+			await ctx.config.setRoot(root)
+			const overlaps = await ctx.parallelWs.refresh()
+			if (overlaps.length === 0) {
+				await vscode.window.showInformationMessage(
+					`GitBraid: root branch changed to "${root}".`,
+				)
+			} else {
+				for (const overlap of overlaps) {
+					await _promptOverlapResolution(ctx, overlap)
+				}
+			}
 		})),
 
 		vscode.commands.registerCommand('gitbraid.removeStackBranch', cmd(async (node?: BranchNode) => {

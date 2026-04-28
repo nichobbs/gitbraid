@@ -23,6 +23,8 @@ import { PRHostAdapter, pickAdapter, NullPRHostAdapter } from './prHostAdapter'
 import { PersistentUndoLog } from './persistentUndoLog'
 import { CommitListService } from './commitListService'
 import { VirtualBranchStore } from './virtualBranchStore'
+import { ParallelWorkspaceService } from './parallelWorkspaceService'
+import { HunkDecorationProvider } from './hunkDecorationProvider'
 import * as path from 'node:path'
 
 // `StackContentProvider` is deliberately NOT created here — it registers
@@ -78,6 +80,8 @@ export class FolderContext implements vscode.Disposable {
 	readonly stackedToolImporter: StackedPRToolImporter
 	readonly undoLog: PersistentUndoLog
 	readonly commitList: CommitListService
+	readonly parallelWs: ParallelWorkspaceService
+	readonly hunkDeco: HunkDecorationProvider
 	/** PR host adapter — resolved lazily on first use so extension activation stays cheap. */
 	private _prAdapter: PRHostAdapter | undefined
 	private _secrets: vscode.SecretStorage | undefined
@@ -110,6 +114,8 @@ export class FolderContext implements vscode.Disposable {
 		this.stackedToolImporter = new StackedPRToolImporter(this.config, root)
 		this.undoLog = new PersistentUndoLog(path.join(root.fsPath, '.worktrees'))
 		this.commitList = new CommitListService()
+		this.parallelWs = new ParallelWorkspaceService(this.config, root.fsPath)
+		this.hunkDeco = new HunkDecorationProvider(this.config, this.parallelWs)
 	}
 
 	/** Inject VS Code's `SecretStorage` (for the Octokit PR adapter). */
@@ -194,6 +200,14 @@ export class FolderContext implements vscode.Disposable {
 		this.bus.onDidChangeWorktree(() => this.commitList.invalidate())
 		this.bus.onDidSavePrimary(() => this.commitList.invalidate())
 
+		// Plan 11 — initial parallel-workspace diff computation (best-effort;
+		// no root set means no-op until the user runs addBranch or changeRootBranch).
+		if (this.config.getRoot()) {
+			this.parallelWs.refresh().catch((e: unknown) => {
+				log.warn(`FolderContext: parallelWs.refresh failed: ${e instanceof Error ? e.message : String(e)}`)
+			})
+		}
+
 		log.info(`FolderContext: initialised for ${this.root.fsPath}`)
 	}
 
@@ -202,6 +216,8 @@ export class FolderContext implements vscode.Disposable {
 		this._disposed = true
 		// Reverse construction order so dependents tear down before
 		// dependencies.
+		this.hunkDeco.dispose()
+		this.parallelWs.dispose()
 		this.scmManager.dispose()
 		this.stackPopulator.dispose()
 		this.rebaseRecovery.dispose()
