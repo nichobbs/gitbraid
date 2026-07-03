@@ -30,6 +30,11 @@ the commits it should.
   refs, injects a shared "Stacked PRs" block into every body, and (on GitHub
   Merge Queue / GitLab Merge Trains) can enqueue the stack for a queue-driven
   land via `gitbraid.mergeStack`.
+- **Inline PR review comments** (GitHub) — line-level review comments show up
+  as native VS Code comment threads directly on the file they were left on,
+  so feedback is visible without leaving the editor. Toggle with
+  `gitbraid.showPrReviewComments`; refresh manually via
+  `gitbraid.refreshPrReviewComments`.
 - **Absorb hunks** — `gitbraid.absorbHunks` amends existing commits that touch
   the same lines you just edited, so fix-ups land in the right commit instead
   of piling up as new ones.
@@ -42,10 +47,17 @@ the commits it should.
   `gitbraid.mcpWriteEnabled`.
 - **Rebase assistance** — GitBraid watches for parent-branch advances, offers
   one-click rebase, and presents a conflict recovery UI (including VS Code's
-  built-in three-way merge editor) when rebases pause.
+  built-in three-way merge editor) when rebases pause. Before a rebase or
+  `gitbraid.syncStack` runs, GitBraid predicts conflicts with `git merge-tree`
+  and warns you up front with the affected files, so you can back out before
+  a rebase actually leaves you mid-conflict.
 - **Worktree health** — the Branch Stack tree view shows live ahead/behind
   commit counts, dirty indicators, and rebase-in-progress warnings for every
   branch without leaving the editor.
+- **GitBraid Doctor** (`gitbraid.runDoctor`) — a health check that finds
+  circular base references, orphaned worktrees, orphaned virtual-branch store
+  files, missing worktrees, and out-of-workspace assignments, with one-click
+  fixes for each finding.
 - **Floating-file aging** — unassigned files are colour-coded in the tree view
   by how long they have gone unassigned (grey → yellow → orange → red).
 - **Smart auto-assign** — when you save a new file in a directory where every
@@ -104,8 +116,13 @@ the commits it should.
 |--------|----------------|-------|
 | Add branch to stack | `Ctrl+Alt+B` | `Cmd+Alt+B` |
 | Assign file to branch | `Ctrl+Alt+A` | `Cmd+Alt+A` |
-| Route hunks | `Ctrl+Alt+R` | `Cmd+Alt+R` |
-| Open stack view | `Ctrl+Alt+T` | `Cmd+Alt+T` |
+| Unassign file from branch | `Ctrl+Alt+U` | `Cmd+Alt+U` |
+| Assign hunk to branch | `Ctrl+Alt+H` | `Cmd+Alt+H` |
+| Route hunks to assigned branches | `Ctrl+Alt+R` | `Cmd+Alt+R` |
+| Compare to top of stack | `Ctrl+Alt+T` | `Cmd+Alt+T` |
+| Focus Branch Stack view | `Ctrl+Alt+S` | `Cmd+Alt+S` |
+| Push stack | `Ctrl+Alt+Shift+P` | `Cmd+Alt+Shift+P` |
+| Rebase branch onto parent | `Ctrl+Alt+Shift+R` | `Cmd+Alt+Shift+R` |
 | Move branch up in stack | `Alt+Up` _(Branch Stack focused)_ | `Alt+Up` |
 | Move branch down in stack | `Alt+Down` _(Branch Stack focused)_ | `Alt+Down` |
 | Undo last assignment | `Ctrl+Alt+Z` | `Cmd+Alt+Z` |

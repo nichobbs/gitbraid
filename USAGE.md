@@ -168,6 +168,12 @@ If the rebase pauses on a conflict, a dialog appears with **Open conflicts**,
 three-way merge editor for each conflicted file (falls back to a plain text tab on
 older VS Code versions). Once all conflicts are resolved and staged, click **Continue**.
 
+Before the rebase actually runs — and before `GitBraid: Sync Stack` rebases
+every branch in the stack — GitBraid predicts whether it will conflict using
+`git merge-tree` (no working-tree or index changes). If a conflict is
+predicted, a warning names the affected files and lets you back out with
+**Cancel** before you're left mid-rebase.
+
 ---
 
 ### Preview hunk routing (dry run)
@@ -407,6 +413,17 @@ lists every PR in the stack so reviewers can navigate without leaving the host.
 Insert `<!-- gitbraid:no-touch -->` at the top of a PR body to tell GitBraid to
 leave it alone.
 
+### Inline PR review comments (GitHub)
+
+When a file is assigned to a branch with an open GitHub PR, line-level review
+comments left on that PR show up as native VS Code comment threads directly on
+the commented lines — no need to switch to the browser to read feedback. This
+is read-only (there's no "reply" affordance) and GitHub-only for now, since
+the review-comments endpoint isn't part of the shared PR-host adapter
+interface. Toggle it off with `gitbraid.showPrReviewComments`, or force a
+refresh with `GitBraid: Refresh PR Review Comments`
+(`gitbraid.refreshPrReviewComments`).
+
 ### Set a token for non-extension hosts
 
 Run `GitBraid: Set PR Host Token…` to store a PAT in VS Code's secret storage.
@@ -492,6 +509,24 @@ interact with the stack programmatically. Reference them with `#gitbraid_*` in c
 
 Example prompt: *"Assign src/auth.ts to the feature/auth branch and commit it with
 the message 'feat: add auth module'."*
+
+---
+
+## GitBraid Doctor
+
+Run `GitBraid: Run Doctor` (`gitbraid.runDoctor`) for a one-shot health check of
+the stack. It looks for:
+
+- Circular base references between branches.
+- Orphaned worktrees (a `.worktrees/` directory with no matching config entry).
+- Orphaned virtual-branch store files (`.worktrees/virtual/*.jsonl` with no
+  matching config entry).
+- Missing worktrees (a config entry with no worktree on disk).
+- Assignments pointing outside the workspace.
+
+Findings are listed in a QuickPick; select one to see details, and where a fix
+is available, confirm to apply it. Reach for this first when the stack looks
+inconsistent, before troubleshooting further below.
 
 ---
 
