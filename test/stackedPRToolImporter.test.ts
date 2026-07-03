@@ -259,6 +259,108 @@ suite('stackedPRToolImporter: git-stack / git-spr / upstream (fake runner)', () 
 	})
 })
 
+// ─── suggestImportIfEmpty (gitbraid.suggestImportOnActivate) ────────────────
+
+suite('stackedPRToolImporter: suggestImportIfEmpty', () => {
+	let repo: string
+	let runner: FakeGitRunner
+	let importer: StackedPRToolImporter
+	let config: ConfigService
+
+	function wsRoot(): vscode.Uri { return vscode.workspace.workspaceFolders![0].uri }
+
+	// Shared with other suites in this file — each test must reset it, or a
+	// branch left in the config by one test (e.g. the "already non-empty"
+	// case) leaks into every later test's `getStack().length > 0` check.
+	function cleanupWorktrees(): void {
+		try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true, force: true }) } catch { /* ignore */ }
+	}
+
+	type WinAny = { showInformationMessage: (...args: unknown[]) => Promise<unknown> }
+	type CmdAny = { executeCommand: (...args: unknown[]) => Promise<unknown> }
+	let origInfo: WinAny['showInformationMessage']
+	let origExec: CmdAny['executeCommand']
+	let infoCalls: unknown[][]
+	let execCalls: unknown[][]
+
+	setup(async () => {
+		cleanupWorktrees()
+		repo = mkTmpRepo('suggest')
+		runner = new FakeGitRunner()
+		config = new ConfigService()
+		await config.load(wsRoot())
+		importer = new StackedPRToolImporter(config, vscode.Uri.file(repo), runner)
+
+		infoCalls = []
+		execCalls = []
+		const win = vscode.window as unknown as WinAny
+		const cmds = vscode.commands as unknown as CmdAny
+		origInfo = win.showInformationMessage
+		origExec = cmds.executeCommand
+		win.showInformationMessage = async (...args: unknown[]) => { infoCalls.push(args); return undefined }
+		cmds.executeCommand = async (...args: unknown[]) => { execCalls.push(args); return undefined }
+
+		// No git-stack / upstream metadata on disk by default.
+		runner.fixture('for-each-ref --format=%(refname:short) refs/branch-stack', { stdout: '' })
+		runner.fixture('config --local --get-regexp branch\\..*\\.merge', { stdout: '', exitCode: 1 })
+	})
+
+	teardown(async () => {
+		rmTmpRepo(repo)
+		cleanupWorktrees()
+		;(vscode.window as unknown as WinAny).showInformationMessage = origInfo
+		;(vscode.commands as unknown as CmdAny).executeCommand = origExec
+		await vscode.workspace.getConfiguration('gitbraid').update(
+			'suggestImportOnActivate', undefined, vscode.ConfigurationTarget.Workspace,
+		)
+	})
+
+	test('does nothing when the setting is off (default)', async () => {
+		writeGraphiteRef(repo, 'feature/a', 'main')
+		await importer.suggestImportIfEmpty()
+		assert.strictEqual(infoCalls.length, 0)
+	})
+
+	test('does nothing when the stack is already non-empty', async () => {
+		await vscode.workspace.getConfiguration('gitbraid').update(
+			'suggestImportOnActivate', true, vscode.ConfigurationTarget.Workspace,
+		)
+		await config.addBranch({ name: 'feature/existing', base: 'main', color: '#abc' })
+		writeGraphiteRef(repo, 'feature/a', 'main')
+		await importer.suggestImportIfEmpty()
+		assert.strictEqual(infoCalls.length, 0)
+	})
+
+	test('does nothing when nothing is detected', async () => {
+		await vscode.workspace.getConfiguration('gitbraid').update(
+			'suggestImportOnActivate', true, vscode.ConfigurationTarget.Workspace,
+		)
+		await importer.suggestImportIfEmpty()
+		assert.strictEqual(infoCalls.length, 0)
+	})
+
+	test('offers to import and runs gitbraid.importStackedTool when accepted', async () => {
+		await vscode.workspace.getConfiguration('gitbraid').update(
+			'suggestImportOnActivate', true, vscode.ConfigurationTarget.Workspace,
+		)
+		writeGraphiteRef(repo, 'feature/a', 'main')
+		;(vscode.window as unknown as WinAny).showInformationMessage = async () => 'Import…'
+		await importer.suggestImportIfEmpty()
+		assert.strictEqual(execCalls.length, 1)
+		assert.strictEqual(execCalls[0][0], 'gitbraid.importStackedTool')
+	})
+
+	test('does not run the import command when dismissed', async () => {
+		await vscode.workspace.getConfiguration('gitbraid').update(
+			'suggestImportOnActivate', true, vscode.ConfigurationTarget.Workspace,
+		)
+		writeGraphiteRef(repo, 'feature/a', 'main')
+		await importer.suggestImportIfEmpty()
+		assert.strictEqual(infoCalls.length, 1)
+		assert.strictEqual(execCalls.length, 0)
+	})
+})
+
 // ─── preview() and apply() ───────────────────────────────────────────────────
 
 suite('stackedPRToolImporter: preview + apply', () => {

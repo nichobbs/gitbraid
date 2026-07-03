@@ -113,6 +113,33 @@ export class StackedPRToolImporter {
 	}
 
 	/**
+	 * Best-effort activation-time suggestion, gated by
+	 * `gitbraid.suggestImportOnActivate` (default off — this only runs for
+	 * users who've opted in). Mirrors `StackShareService.detectAndOfferTemplate`'s
+	 * pattern: only offers when the stack is still empty, so an existing
+	 * setup (built by hand or via a previous import) is never second-guessed.
+	 *
+	 * Delegates the actual import flow to `gitbraid.importStackedTool` —
+	 * which re-detects, shows a tool picker when more than one match is
+	 * found, previews the diff, and asks for confirmation — rather than
+	 * duplicating that UI here.
+	 */
+	async suggestImportIfEmpty(): Promise<void> {
+		if (!vscode.workspace.getConfiguration('gitbraid').get<boolean>('suggestImportOnActivate', false)) return
+		if (this._config.getStack().length > 0) return
+		const detected = await this.detectAll().catch(() => [])
+		if (detected.length === 0) return
+		const tools = [...new Set(detected.map((d) => d.tool))].join(', ')
+		const pick = await vscode.window.showInformationMessage(
+			`GitBraid: detected existing stacked-branch metadata (${tools}) in this repository. Import it?`,
+			'Import…', 'Dismiss',
+		)
+		if (pick === 'Import…') {
+			await vscode.commands.executeCommand('gitbraid.importStackedTool')
+		}
+	}
+
+	/**
 	 * Diff a detected stack against the current GitBraid config.
 	 */
 	preview(stack: DetectedStack): ImportPreview {
