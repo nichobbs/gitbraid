@@ -172,7 +172,42 @@ export class GitHubVSCodeAdapter implements PRHostAdapter {
 
 	async getPR(branch: string): Promise<PRMetadata | undefined> {
 		const all = await this.listOpen()
-		return all.find((p) => p.head === branch)
+		const pr = all.find((p) => p.head === branch)
+		if (!pr) return undefined
+		return this._enrichWithReviewAndChecks(pr)
+	}
+
+	/**
+	 * Best-effort: attach review/checks detail via a REST call when a GitHub
+	 * token is stored. The extension's own data model doesn't expose a
+	 * stable reviews/check-runs shape, so this reuses the same
+	 * token-delegation pattern as `updatePR` — falls back to returning `pr`
+	 * unchanged (dashboard just shows nothing for that panel, as before)
+	 * when no token is available or the lookup fails.
+	 */
+	private async _enrichWithReviewAndChecks(pr: PRMetadata): Promise<PRMetadata> {
+		if (!this._secrets) return pr
+		try {
+			const token = await this._secrets.get('gitbraid.githubToken')
+			if (!token) return pr
+			const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+			if (!root) return pr
+			const r = await this._runner.run(['config', '--get', 'remote.origin.url'], { cwd: root })
+			if (r.exitCode !== 0) return pr
+			const slug = parseGithubSlug(r.stdout.trim())
+			if (!slug) return pr
+			const raw = await fetchJson<{ head?: { sha?: string } }>(
+				`https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls/${String(pr.number)}`,
+				{ token },
+			)
+			const headSha = raw.head?.sha
+			if (!headSha) return pr
+			const detail = await fetchGithubReviewAndChecks(slug.owner, slug.repo, pr.number, headSha, token)
+			return { ...pr, ...detail }
+		} catch (e) {
+			log.debug(`GitHubVSCodeAdapter._enrichWithReviewAndChecks: ${errMsg(e)}`)
+			return pr
+		}
 	}
 
 	async createPR(input: CreatePRInput): Promise<PRMetadata> {
@@ -298,8 +333,33 @@ export class GitHubOctokitAdapter implements PRHostAdapter {
 	}
 
 	async getPR(branch: string): Promise<PRMetadata | undefined> {
-		const all = await this.listOpen()
-		return all.find((p) => p.head === branch)
+		const { owner, repo, token } = await this._ctx()
+		const res = await fetchJson<unknown[]>(
+			`https://api.github.com/repos/${owner}/${repo}/pulls?state=open&per_page=100`,
+			{ token },
+		)
+		if (!Array.isArray(res)) return undefined
+		const rawMatch = res.find((raw) => {
+			const r = raw as Record<string, unknown>
+			const head = r.head as Record<string, unknown> | undefined
+			return typeof head?.ref === 'string' && head.ref === branch
+		})
+		if (!rawMatch) return undefined
+		const pr = coercePullRequest(rawMatch)
+		if (!pr) return undefined
+		// Enrich with review/checks detail — best-effort, using the head sha
+		// already present on the raw payload so this costs exactly two extra
+		// REST calls (reviews + check-runs) rather than a third round-trip
+		// just to look up the sha again.
+		const headSha = (rawMatch as { head?: { sha?: string } }).head?.sha
+		if (!headSha) return pr
+		try {
+			const detail = await fetchGithubReviewAndChecks(owner, repo, pr.number, headSha, token)
+			return { ...pr, ...detail }
+		} catch (e) {
+			log.debug(`GitHubOctokitAdapter.getPR: review/checks enrichment failed: ${errMsg(e)}`)
+			return pr
+		}
 	}
 
 	async listOpen(): Promise<PRMetadata[]> {
@@ -1242,6 +1302,12 @@ interface FetchOptions {
 	 * existing GitHub call sites don't have to change.
 	 */
 	authScheme?: 'Bearer' | 'PRIVATE-TOKEN' | 'Basic'
+	/**
+	 * Total attempts (including the first) before giving up on a
+	 * secondary-rate-limit response with a short `Retry-After`. Defaults to
+	 * 3. Has no effect on other error statuses, which never retry.
+	 */
+	maxAttempts?: number
 }
 
 async function graphql<T>(
@@ -1273,6 +1339,84 @@ function coerceChecksState(state: string | undefined): ChecksStatus | undefined 
 	}
 }
 
+/**
+ * Fetch the review-state rollup and per-check-run detail for a single PR
+ * via GitHub's REST API. Used by both GitHub adapters to populate the
+ * dashboard's "Reviews & checks" panel — best-effort by design; callers
+ * catch failures and fall back to leaving these fields undefined.
+ */
+async function fetchGithubReviewAndChecks(
+	owner: string,
+	repo: string,
+	prNumber: number,
+	headSha: string,
+	token: string,
+): Promise<{
+	reviewState?: 'approved' | 'changesRequested' | 'commented' | 'pending'
+	reviewCount?: number
+	checksDetail?: Array<{ name: string; state: ChecksStatus; url?: string }>
+}> {
+	const reviews = await fetchJson<Array<{ state?: string, user?: { login?: string } }>>(
+		`https://api.github.com/repos/${owner}/${repo}/pulls/${String(prNumber)}/reviews?per_page=100`,
+		{ token },
+	)
+	const { reviewState, reviewCount } = summariseGithubReviews(Array.isArray(reviews) ? reviews : [])
+
+	const checkRuns = await fetchJson<{
+		check_runs?: Array<{ name?: string, status?: string, conclusion?: string | null, html_url?: string }>
+	}>(
+		`https://api.github.com/repos/${owner}/${repo}/commits/${headSha}/check-runs?per_page=100`,
+		{ token },
+	)
+	const checksDetail = (checkRuns.check_runs ?? []).map((c) => ({
+		name: c.name ?? 'check',
+		state: coerceCheckRunState(c.status, c.conclusion),
+		url: c.html_url,
+	}))
+
+	return {
+		reviewState,
+		reviewCount,
+		checksDetail: checksDetail.length > 0 ? checksDetail : undefined,
+	}
+}
+
+/**
+ * Roll a PR's review list up into a single state: only the *latest*
+ * non-pending, non-dismissed review per user counts (GitHub returns
+ * reviews in chronological order, and a reviewer's earlier verdict is
+ * superseded by their later one). `changesRequested` wins if any
+ * reviewer's latest review requested changes; otherwise `approved` if any
+ * approved; otherwise `commented` if any just left a comment.
+ */
+function summariseGithubReviews(
+	reviews: ReadonlyArray<{ state?: string, user?: { login?: string } }>,
+): { reviewState?: 'approved' | 'changesRequested' | 'commented' | 'pending', reviewCount: number } {
+	const latestByUser = new Map<string, string>()
+	for (const r of reviews) {
+		const state = (r.state ?? '').toUpperCase()
+		if (state === 'PENDING' || state === 'DISMISSED' || !state) continue
+		const login = r.user?.login ?? `__anon_${String(latestByUser.size)}`
+		latestByUser.set(login, state)
+	}
+	const states = [...latestByUser.values()]
+	const reviewCount = states.length
+	if (reviewCount === 0) return { reviewState: undefined, reviewCount: 0 }
+	let reviewState: 'approved' | 'changesRequested' | 'commented' | 'pending'
+	if (states.includes('CHANGES_REQUESTED')) reviewState = 'changesRequested'
+	else if (states.includes('APPROVED')) reviewState = 'approved'
+	else if (states.includes('COMMENTED')) reviewState = 'commented'
+	else reviewState = 'pending'
+	return { reviewState, reviewCount }
+}
+
+/** Map a GitHub REST check-run's `status`/`conclusion` pair to {@link ChecksStatus}. */
+function coerceCheckRunState(status: string | undefined, conclusion: string | null | undefined): ChecksStatus {
+	if (status !== 'completed') return 'pending'
+	if (conclusion === 'success' || conclusion === 'neutral' || conclusion === 'skipped') return 'success'
+	return 'failure'
+}
+
 async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
 	const headers: Record<string, string> = {
 		'Accept': 'application/json',
@@ -1300,16 +1444,65 @@ async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
 	}
 	if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
 
-	const res = await fetch(url, {
-		method: opts.method ?? 'GET',
-		headers,
-		body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-	})
-	if (!res.ok) {
+	const host = new URL(url).host
+	const maxAttempts = opts.maxAttempts ?? 3
+	for (let attempt = 1; ; attempt++) {
+		const res = await fetch(url, {
+			method: opts.method ?? 'GET',
+			headers,
+			body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+		})
+		if (res.ok) {
+			return (await res.json()) as T
+		}
+
 		const txt = await res.text().catch(() => '')
-		throw new Error(`${new URL(url).host} ${String(res.status)} ${res.statusText}: ${txt.slice(0, 500)}`)
+
+		// Secondary rate limit / abuse detection: GitHub (and GitLab) send a
+		// short `Retry-After` in seconds for these — worth an automatic,
+		// bounded retry rather than surfacing a transient error to the user.
+		const retryAfter = Number.parseInt(res.headers.get('retry-after') ?? '', 10)
+		if (
+			(res.status === 403 || res.status === 429) &&
+			Number.isFinite(retryAfter) && retryAfter > 0 && retryAfter <= 60 &&
+			attempt < maxAttempts
+		) {
+			log.warn(`fetchJson: ${host} rate-limited (${String(res.status)}), retrying in ${String(retryAfter)}s (attempt ${String(attempt)}/${String(maxAttempts)})`)
+			await sleep(retryAfter * 1000)
+			continue
+		}
+
+		// Primary rate limit exhausted: `x-ratelimit-reset` can be up to an
+		// hour away, so don't block the UI waiting it out — fail fast with a
+		// message that tells the user when it resets instead of a generic
+		// "403 Forbidden" that reads like a permissions problem.
+		const remaining = res.headers.get('x-ratelimit-remaining')
+		const reset = Number.parseInt(res.headers.get('x-ratelimit-reset') ?? '', 10)
+		if ((res.status === 403 || res.status === 429) && remaining === '0' && Number.isFinite(reset)) {
+			const resetTime = new Date(reset * 1000)
+			throw new Error(
+				`${host}: rate limit exceeded — resets at ${resetTime.toLocaleTimeString()}. ${txt.slice(0, 200)}`,
+			)
+		}
+
+		throw new Error(describeHttpError(host, res.status, res.statusText, txt))
 	}
-	return (await res.json()) as T
+}
+
+/** Distinct, actionable messages per HTTP status so a 401 doesn't read the same as a 404. */
+function describeHttpError(host: string, status: number, statusText: string, body: string): string {
+	const snippet = body.slice(0, 500)
+	switch (status) {
+		case 401: return `${host}: authentication failed (401) — check the stored token. ${snippet}`
+		case 403: return `${host}: forbidden (403) — the token may lack permission for this operation. ${snippet}`
+		case 404: return `${host}: not found (404) — the PR, branch, or repository may have been deleted, renamed, or is inaccessible with this token. ${snippet}`
+		case 429: return `${host}: rate limited (429). ${snippet}`
+		default:  return `${host} ${String(status)} ${statusText}: ${snippet}`
+	}
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function errMsg(e: unknown): string {
