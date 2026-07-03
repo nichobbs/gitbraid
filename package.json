@@ -462,6 +462,12 @@
 				"icon": "$(key)"
 			},
 			{
+				"command": "gitbraid.refreshPrReviewComments",
+				"title": "Refresh PR Review Comments",
+				"category": "GitBraid",
+				"icon": "$(comment-discussion)"
+			},
+			{
 				"command": "gitbraid.toggleSingleCommitMode",
 				"title": "Toggle Single-Commit Mode",
 				"category": "GitBraid",
@@ -863,6 +869,11 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Show branch-assignment color decorations in the file explorer."
+				},
+				"gitbraid.showPrReviewComments": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show GitHub PR line-level review comments inline in the editor, on the branch a file is assigned to. Requires a stored GitHub token (GitBraid: Set GitHub Token…)."
 				},
 				"gitbraid.defaultBranchColor": {
 					"type": "string",

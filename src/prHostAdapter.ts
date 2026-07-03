@@ -1291,7 +1291,7 @@ function coerceBitbucketPullRequest(raw: unknown): PRMetadata | undefined {
 	return { number, url, state, base: baseRef, head: headRef, title, body }
 }
 
-interface FetchOptions {
+export interface FetchOptions {
 	method?: string
 	token?: string
 	body?: unknown
@@ -1417,7 +1417,7 @@ function coerceCheckRunState(status: string | undefined, conclusion: string | nu
 	return 'failure'
 }
 
-async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
+export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
 	const headers: Record<string, string> = {
 		'Accept': 'application/json',
 		'User-Agent': 'gitbraid',

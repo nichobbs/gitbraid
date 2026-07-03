@@ -7,6 +7,7 @@ import { HunkCodeLensProvider, OverlayDiagnostics } from './hunkCodeLensProvider
 import { StackContentProvider } from './stackContentProvider'
 import { recordAssignFile, recordUnassignFile } from './undoStack'
 import { PRAwareness } from './prAwareness'
+import { PrReviewCommentsProvider } from './prReviewCommentsProvider'
 import { StackDashboardView } from './stackDashboardView'
 import { registerLmTools } from './lmTools'
 import { FolderRegistry } from './folderRegistry'
@@ -200,6 +201,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		hunkCodeLens,
 		overlayDiagnostics,
 		vscode.languages.registerCodeLensProvider({ scheme: 'file', pattern: '**' }, hunkCodeLens),
+	)
+
+	// Surfaces GitHub PR line-level review comments inline (primary folder
+	// only — mirrors the tree view / status bar's existing primary-folder
+	// scoping per CLAUDE.md's multi-root notes).
+	const prReviewComments = new PrReviewCommentsProvider(configService, prAwareness, context.secrets, workspaceRoot)
+	context.subscriptions.push(
+		prReviewComments,
+		vscode.commands.registerCommand(
+			'gitbraid.refreshPrReviewComments',
+			withErrorHandler(async () => {
+				await prReviewComments.refreshAllOpenEditors()
+			}),
+		),
 	)
 
 	// ─── Phase 4: Branch hierarchy & stacking ─────────────────────────────────
