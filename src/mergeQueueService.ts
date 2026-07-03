@@ -149,6 +149,7 @@ export class MergeQueueService {
 		total: number,
 	): Promise<void> {
 		const start = this._clock.now()
+		let consecutiveNotFound = 0
 		for (;;) {
 			if (token?.aborted) throw new Error('cancelled')
 			if (this._clock.now() - start > totalTimeoutMs) {
@@ -169,6 +170,23 @@ export class MergeQueueService {
 				throw new Error(`PR #${String(prNumber)} was closed without merging`)
 			}
 
+			// A PR that stops resolving (deleted, renamed, force-pushed to a
+			// different head) would otherwise poll silently until the full
+			// timeout — often 30 minutes — before failing. A few consecutive
+			// misses is a much stronger signal than one, so fail fast instead
+			// of waiting out the clock on an unrecoverable state.
+			if (!pr) {
+				consecutiveNotFound++
+				if (consecutiveNotFound >= MAX_CONSECUTIVE_PR_NOT_FOUND) {
+					throw new Error(
+						`PR #${String(prNumber)} for "${branch}" was not found on ${String(consecutiveNotFound)} ` +
+						'consecutive polls — it may have been deleted, renamed, or force-pushed to a different branch.',
+					)
+				}
+			} else {
+				consecutiveNotFound = 0
+			}
+
 			const positionText = status.position !== undefined ? ` (position ${String(status.position)})` : ''
 			const stateText = pr?.state ?? 'unknown'
 			progress?.report(`${String(idx)}/${String(total)} ${branch} — ${stateText}${positionText}`)
@@ -177,6 +195,12 @@ export class MergeQueueService {
 		}
 	}
 }
+
+/**
+ * How many consecutive polls a PR may fail to resolve before `_waitForMerge`
+ * gives up early instead of waiting out the full per-branch timeout.
+ */
+const MAX_CONSECUTIVE_PR_NOT_FOUND = 3
 
 function errMsg(e: unknown): string {
 	return e instanceof Error ? e.message : String(e)
