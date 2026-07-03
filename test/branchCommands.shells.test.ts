@@ -18,6 +18,7 @@ import * as assert from 'node:assert'
 import * as vscode from 'vscode'
 import { registerBranchCommands } from '../src/commands/branchCommands'
 import { BranchNode } from '../src/branchStackTreeProvider'
+import { git } from '../src/gitFunctions'
 import type { CommandDeps } from '../src/commands/types'
 import type { BranchStackEntry } from '../src/configTypes'
 
@@ -117,6 +118,9 @@ function makeDeps(overrides: Partial<DepsState> = {}): CommandDeps {
 			saveCheckpoint: async () => '/tmp/fake-repo/.worktrees/checkpoints/cp.json',
 			listCheckpoints: async () => [],
 			restoreCheckpoint: async () => { /* no-op */ },
+		},
+		workspaceSync: {
+			reseedFromGitStatus: async () => { /* no-op */ },
 		},
 	}
 	return {
@@ -615,5 +619,362 @@ suite('branchCommands shell coverage (direct-import)', () => {
 		const handlers = captureHandlers(() => registerBranchCommands(deps))
 		await handlers.get('gitbraid.moveBranchDown')!(new BranchNode(stack[1]))
 		assert.deepStrictEqual(calls, [['b', 'a']])
+	})
+
+	// ─── resetStacks ─────────────────────────────────────────────────────────
+
+	test('resetStacks: empty stack → info, no throw', async () => {
+		const deps = makeDeps()
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		let infoed = false
+		await withStubbedWindow(
+			{ showInformationMessage: async () => { infoed = true; return undefined } },
+			async () => {
+				await handlers.get('gitbraid.resetStacks')!()
+			},
+		)
+		assert.ok(infoed)
+	})
+
+	test('resetStacks: dismissed confirm → no removal, no clearAll', async () => {
+		const stack = [entry('feat/a', 1)]
+		const deps = makeDeps({ stack, worktreeExists: true })
+		let cleared = false
+		;(deps.activeContext() as unknown as { config: { clearAll: unknown } }).config = {
+			...((deps.activeContext() as unknown as { config: object }).config),
+			getAllAssignments: () => ({}),
+			clearAll: async () => { cleared = true },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{ showWarningMessage: async () => undefined },
+			async () => {
+				await handlers.get('gitbraid.resetStacks')!()
+			},
+		)
+		assert.strictEqual(cleared, false)
+	})
+
+	test('resetStacks: confirmed → unhides files, force-removes worktrees, clears config, reseeds', async () => {
+		const stack = [entry('feat/a', 1), entry('feat/virt', 2, { virtual: true })]
+		const assignments = { 'src/a.ts': 'feat/a', 'src/b.ts': 'feat/virt' }
+		const deps = makeDeps({ stack, assignments, worktreeExists: true })
+		const ctx = deps.activeContext() as unknown as {
+			config: { clearAll: unknown }
+			workspaceSync: { reseedFromGitStatus: unknown }
+		}
+		let cleared = false
+		let reseeded = false
+		ctx.config = {
+			...(deps.activeContext() as unknown as { config: object }).config,
+			getAllAssignments: () => assignments,
+			clearAll: async () => { cleared = true },
+		} as unknown as never
+		ctx.workspaceSync = { reseedFromGitStatus: async () => { reseeded = true } } as unknown as never
+
+		const removeCalls: Array<[string, boolean]> = []
+		const origRemove = git.worktree.remove
+		git.worktree.remove = (async (p: string, force: boolean) => {
+			removeCalls.push([p, force])
+		}) as typeof git.worktree.remove
+
+		let successMsg: string | undefined
+		try {
+			const handlers = captureHandlers(() => registerBranchCommands(deps))
+			await withStubbedWindow(
+				{
+					showWarningMessage: async () => 'Reset',
+					showInformationMessage: async (msg: string) => { successMsg = msg; return undefined },
+				},
+				async () => {
+					await handlers.get('gitbraid.resetStacks')!()
+				},
+			)
+		} finally {
+			git.worktree.remove = origRemove
+		}
+
+		// Only the real (non-virtual) branch's worktree is force-removed.
+		assert.strictEqual(removeCalls.length, 1)
+		assert.strictEqual(removeCalls[0][1], true, 'must force-remove')
+		assert.strictEqual(cleared, true)
+		assert.strictEqual(reseeded, true)
+		assert.match(successMsg ?? '', /reset complete/)
+	})
+
+	test('resetStacks: worktree removal failure is logged, does not abort the reset', async () => {
+		const stack = [entry('feat/a', 1)]
+		const deps = makeDeps({ stack, assignments: {}, worktreeExists: true })
+		const ctx = deps.activeContext() as unknown as {
+			config: { clearAll: unknown }
+			workspaceSync: { reseedFromGitStatus: unknown }
+		}
+		let cleared = false
+		ctx.config = {
+			...(deps.activeContext() as unknown as { config: object }).config,
+			getAllAssignments: () => ({}),
+			clearAll: async () => { cleared = true },
+		} as unknown as never
+		ctx.workspaceSync = { reseedFromGitStatus: async () => { /* no-op */ } } as unknown as never
+
+		const origRemove = git.worktree.remove
+		git.worktree.remove = (async () => { throw new Error('boom') }) as typeof git.worktree.remove
+
+		try {
+			const handlers = captureHandlers(() => registerBranchCommands(deps))
+			await withStubbedWindow(
+				{
+					showWarningMessage: async () => 'Reset',
+					showInformationMessage: async () => undefined,
+				},
+				async () => {
+					await assert.doesNotReject(() => handlers.get('gitbraid.resetStacks')!())
+				},
+			)
+		} finally {
+			git.worktree.remove = origRemove
+		}
+		// clearAll/reseed still run even though the worktree removal threw.
+		assert.strictEqual(cleared, true)
+	})
+
+	// ─── pushStack / syncStack confirmed paths ──────────────────────────────
+
+	test('pushStack: confirmed mode → drives stackCommands.pushStack with the chosen force flag', async () => {
+		const stack = [entry('feat/a', 1)]
+		const deps = makeDeps({ stack })
+		const calls: Array<{ forceWithLease?: boolean } | undefined> = []
+		;(deps.activeContext() as unknown as { stackCommands: { pushStack: unknown } }).stackCommands = {
+			pushStack: async (opts?: { forceWithLease?: boolean }) => { calls.push(opts) },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{ showQuickPick: async () => ({ label: 'Push with --force-with-lease', force: true }) },
+			async () => {
+				await handlers.get('gitbraid.pushStack')!()
+			},
+		)
+		assert.strictEqual(calls.length, 1)
+		assert.strictEqual(calls[0]?.forceWithLease, true)
+	})
+
+	test('syncStack: confirmed → drives stackCommands.syncStack', async () => {
+		const stack = [entry('feat/a', 1)]
+		const deps = makeDeps({ stack })
+		let synced = false
+		;(deps.activeContext() as unknown as { stackCommands: { syncStack: unknown } }).stackCommands = {
+			syncStack: async () => { synced = true },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{ showWarningMessage: async () => 'Sync' },
+			async () => {
+				await handlers.get('gitbraid.syncStack')!()
+			},
+		)
+		assert.strictEqual(synced, true)
+	})
+
+	// ─── rebaseAbort / rebaseContinue / openRebaseConflicts with a resolved worktree ──
+
+	test('rebaseAbort/Continue/openRebaseConflicts: resolved worktree drives rebaseRecovery', async () => {
+		const worktreeDir = '/tmp/fake-repo/.worktrees/feat-a'
+		const abortCalls: string[] = []
+		const continueCalls: string[] = []
+		const openCalls: string[] = []
+		const fakeCtx = {
+			rebaseRecovery: {
+				abort: async (dir: string) => { abortCalls.push(dir) },
+				continue: async (dir: string) => { continueCalls.push(dir) },
+				openConflicts: async (dir: string) => { openCalls.push(dir) },
+			},
+		}
+		const deps = makeDeps({
+			resolveActiveBranchWorktree: async () => ({ ctx: fakeCtx, worktreeDir } as unknown as never),
+		})
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await handlers.get('gitbraid.rebaseAbort')!()
+		await handlers.get('gitbraid.rebaseContinue')!()
+		await handlers.get('gitbraid.openRebaseConflicts')!()
+		assert.deepStrictEqual(abortCalls, [worktreeDir])
+		assert.deepStrictEqual(continueCalls, [worktreeDir])
+		assert.deepStrictEqual(openCalls, [worktreeDir])
+	})
+
+	// ─── importStack happy path (with conflict resolution) ──────────────────
+
+	test('importStack: no conflicts → imports immediately without a resolution QuickPick', async () => {
+		const deps = makeDeps()
+		let qpShown = false
+		let importArgs: unknown
+		;(deps.activeContext() as unknown as { stackShare: object }).stackShare = {
+			readSharedFile: async () => ({ stack: [] }),
+			diffWithCurrent: () => ({
+				newBranches: [{ name: 'feat/x' }],
+				newAssignments: [],
+				conflictBranches: [],
+				conflictAssignments: [],
+			}),
+			applyImport: async (_shared: unknown, resolution: unknown) => {
+				importArgs = resolution
+				return { addedBranches: 1, addedAssignments: 0, updatedBranches: 0, updatedAssignments: 0, skipped: 0 }
+			},
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		let successMsg: string | undefined
+		await withStubbedWindow(
+			{
+				showQuickPick: async () => { qpShown = true; return undefined },
+				showInformationMessage: async (msg: string) => { successMsg = msg; return undefined },
+			},
+			async () => {
+				await handlers.get('gitbraid.importStack')!()
+			},
+		)
+		assert.strictEqual(qpShown, false, 'no conflicts means no resolution picker')
+		assert.deepStrictEqual(importArgs, { branches: 'theirs', assignments: 'theirs' })
+		assert.match(successMsg ?? '', /imported 1 new branch/)
+	})
+
+	test('importStack: conflicts + "keep local values" → applyImport receives the "ours" resolution', async () => {
+		const deps = makeDeps()
+		let importArgs: unknown
+		;(deps.activeContext() as unknown as { stackShare: object }).stackShare = {
+			readSharedFile: async () => ({ stack: [] }),
+			diffWithCurrent: () => ({
+				newBranches: [],
+				newAssignments: [],
+				conflictBranches: [{ name: 'feat/x' }],
+				conflictAssignments: [],
+			}),
+			applyImport: async (_shared: unknown, resolution: unknown) => {
+				importArgs = resolution
+				return { addedBranches: 0, addedAssignments: 0, updatedBranches: 0, updatedAssignments: 0, skipped: 1 }
+			},
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{
+				showQuickPick: async (items: Array<{ label: string, resolution: unknown }>) =>
+					items.find((i) => i.label === 'Keep local values'),
+				showInformationMessage: async () => undefined,
+			},
+			async () => {
+				await handlers.get('gitbraid.importStack')!()
+			},
+		)
+		assert.deepStrictEqual(importArgs, { branches: 'ours', assignments: 'ours' })
+	})
+
+	test('importStack: conflicts + cancelled resolution picker → applyImport never called', async () => {
+		const deps = makeDeps()
+		let applied = false
+		;(deps.activeContext() as unknown as { stackShare: object }).stackShare = {
+			readSharedFile: async () => ({ stack: [] }),
+			diffWithCurrent: () => ({
+				newBranches: [],
+				newAssignments: [],
+				conflictBranches: [{ name: 'feat/x' }],
+				conflictAssignments: [],
+			}),
+			applyImport: async () => { applied = true; return { addedBranches: 0, addedAssignments: 0, updatedBranches: 0, updatedAssignments: 0, skipped: 0 } },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{ showQuickPick: async () => undefined },
+			async () => {
+				await handlers.get('gitbraid.importStack')!()
+			},
+		)
+		assert.strictEqual(applied, false)
+	})
+
+	// ─── importStackedTool happy path ────────────────────────────────────────
+
+	test('importStackedTool: single detected tool, confirmed → applies and reports the summary', async () => {
+		const deps = makeDeps()
+		let applyArgs: [unknown, boolean] | undefined
+		;(deps.activeContext() as unknown as { stackedToolImporter: object }).stackedToolImporter = {
+			detectAll: async () => ([
+				{ tool: 'graphite', source: '.git/refs/branch-metadata', branches: [{ name: 'feat/x', base: 'main', order: 1 }], warnings: [] },
+			]),
+			preview: () => ({
+				newBranches: [{ name: 'feat/x', base: 'main', order: 1 }],
+				conflicts: [], unknownBases: [], warnings: [],
+			}),
+			apply: async (chosen: unknown, dryRun: boolean) => {
+				applyArgs = [chosen, dryRun]
+				return { addedBranches: 1, skipped: 0, errors: [] }
+			},
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		let successMsg: string | undefined
+		await withStubbedWindow(
+			{
+				showInformationMessage: async (msg: string, opts?: unknown, ...actions: string[]) => {
+					// The confirm dialog passes {modal:true} + 'Import'; the final
+					// summary call passes no actions. Only "confirm" should return 'Import'.
+					if (actions.includes('Import')) return 'Import'
+					successMsg = msg
+					return undefined
+				},
+			},
+			async () => {
+				await handlers.get('gitbraid.importStackedTool')!()
+			},
+		)
+		assert.strictEqual(applyArgs?.[1], false, 'apply must be called with dryRun=false')
+		assert.match(successMsg ?? '', /imported 1 branch/)
+	})
+
+	test('importStackedTool: all detected branches already in stack → info, no confirm shown', async () => {
+		const deps = makeDeps()
+		let confirmShown = false
+		;(deps.activeContext() as unknown as { stackedToolImporter: object }).stackedToolImporter = {
+			detectAll: async () => ([
+				{ tool: 'graphite', source: '.git/refs/branch-metadata', branches: [{ name: 'feat/x', base: 'main', order: 1 }], warnings: [] },
+			]),
+			preview: () => ({ newBranches: [], conflicts: [{ existing: {}, detected: {} }], unknownBases: [], warnings: [] }),
+			apply: async () => { throw new Error('should not be called') },
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{
+				showInformationMessage: async (_msg: string, opts?: { modal?: boolean }) => {
+					if (opts?.modal) confirmShown = true
+					return undefined
+				},
+			},
+			async () => {
+				await handlers.get('gitbraid.importStackedTool')!()
+			},
+		)
+		assert.strictEqual(confirmShown, false)
+	})
+
+	test('importStackedTool: multiple detected tools → QuickPick chooses which to import', async () => {
+		const deps = makeDeps()
+		const graphite = { tool: 'graphite', source: 'a', branches: [{ name: 'feat/g', base: 'main', order: 1 }], warnings: [] }
+		const gitStack = { tool: 'git-stack', source: 'b', branches: [{ name: 'feat/s', base: 'main', order: 1 }], warnings: [] }
+		let previewedTool: unknown
+		;(deps.activeContext() as unknown as { stackedToolImporter: object }).stackedToolImporter = {
+			detectAll: async () => ([graphite, gitStack]),
+			preview: (chosen: unknown) => {
+				previewedTool = chosen
+				return { newBranches: [{ name: 'feat/s', base: 'main', order: 1 }], conflicts: [], unknownBases: [], warnings: [] }
+			},
+			apply: async () => ({ addedBranches: 1, skipped: 0, errors: [] }),
+		} as unknown as never
+		const handlers = captureHandlers(() => registerBranchCommands(deps))
+		await withStubbedWindow(
+			{
+				showQuickPick: async (items: Array<{ stack: unknown }>) => items[1],
+				showInformationMessage: async () => 'Import',
+			},
+			async () => {
+				await handlers.get('gitbraid.importStackedTool')!()
+			},
+		)
+		assert.strictEqual(previewedTool, gitStack)
 	})
 })
