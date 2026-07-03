@@ -33,6 +33,20 @@ export interface HunkOverlap {
 	hunkB: number
 }
 
+/**
+ * Outcome of {@link HunkRouter.routeFile}.  `appliedIndices` and
+ * `failedIndices` are keyed by the *original* indices from the
+ * `assignments` map passed in — not the live/reconciled hunk indices —
+ * so callers can safely clear only the assignments that actually landed
+ * (T-partial-apply: a failure applying one branch's hunks must not cause
+ * an already-applied branch's hunks to be re-applied on retry).
+ */
+export interface RouteFileResult {
+	ok: boolean
+	appliedIndices: number[]
+	failedIndices: number[]
+}
+
 // ─── HunkRouter ────────────────────────────────────────────────────────────────
 
 /**
@@ -61,7 +75,10 @@ export class HunkRouter {
 	 * @param relativePath File path relative to `wsRoot`.
 	 * @param worktreeDirs Map of branch name → absolute worktree directory path.
 	 * @param assignments  Map of hunk index → target branch name.
-	 * @returns `true` if all branches applied successfully; `false` if any failed.
+	 * @returns Per-branch outcome — see {@link RouteFileResult}. `appliedIndices`
+	 *          are safe to clear from the assignment map; `failedIndices` must
+	 *          be left in place so a retry doesn't re-apply an already-applied
+	 *          branch's hunks.
 	 */
 	async routeFile(
 		wsRoot: string,
@@ -69,22 +86,22 @@ export class HunkRouter {
 		worktreeDirs: Map<string, string>,
 		assignments: HunkAssignment,
 		anchors?: Map<number, HunkAnchor>,
-	): Promise<boolean> {
+	): Promise<RouteFileResult> {
 		if (assignments.size === 0) {
-			return true
+			return { ok: true, appliedIndices: [], failedIndices: [] }
 		}
 
 		const hunks = await this._diffEngine.getHunksForFile(wsRoot, relativePath)
 		if (hunks.length === 0) {
 			log.info('HunkRouter.routeFile: no hunks found — nothing to route')
-			return true
+			return { ok: true, appliedIndices: [], failedIndices: [] }
 		}
 
 		// Reconcile stored assignments against the live hunks via their anchors
 		// (T8).  Assignments with no anchor fall back to direct-index matching;
 		// anchored assignments locate their hunk by bodyHash (exact) or
 		// overlapping line range (best-effort fuzzy match).
-		const reconciled = this._reconcileAssignments(hunks, assignments, anchors)
+		const { resolved: reconciled, originalIndexOf } = this._reconcileAssignments(hunks, assignments, anchors)
 
 		// Reject overlapping assignments before touching any worktree
 		const overlaps = this.detectOverlaps(hunks, reconciled)
@@ -95,43 +112,53 @@ export class HunkRouter {
 				`gitbraid: cannot route hunks for "${relativePath}" — overlapping assignments detected (${pairs}). ` +
 				'Reassign the conflicting hunks so each line belongs to at most one branch.',
 			)
-			return false
+			return { ok: false, appliedIndices: [], failedIndices: [...assignments.keys()] }
 		}
 
-		// Group hunk indices by branch
-		const byBranch = new Map<string, DiffHunk[]>()
+		// Group hunk indices by branch, remembering each hunk's *original*
+		// assignment-map index so success/failure can be reported back in terms
+		// the caller (and ConfigService) understands — the reconciled index may
+		// have been renumbered relative to what's persisted on disk.
+		const byBranch = new Map<string, Array<{ hunk: DiffHunk, originalIndex: number }>>()
 		for (const [hunkIndex, branchName] of reconciled) {
 			const hunk = hunks[hunkIndex]
 			if (!hunk) {
 				log.error(`HunkRouter.routeFile: hunk index ${hunkIndex} out of range`)
 				continue
 			}
+			const originalIndex = originalIndexOf.get(hunkIndex) ?? hunkIndex
 			const list = byBranch.get(branchName) ?? []
-			list.push(hunk)
+			list.push({ hunk, originalIndex })
 			byBranch.set(branchName, list)
 		}
 
 		let allSucceeded = true
-		for (const [branchName, branchHunks] of byBranch) {
+		const appliedIndices: number[] = []
+		const failedIndices: number[] = []
+		for (const [branchName, items] of byBranch) {
 			const worktreeDir = worktreeDirs.get(branchName)
 			if (!worktreeDir) {
 				log.error(`HunkRouter.routeFile: no worktree directory for branch "${branchName}"`)
 				allSucceeded = false
+				failedIndices.push(...items.map((i) => i.originalIndex))
 				continue
 			}
 
-			const patch = this.buildPatch(branchHunks)
+			const patch = this.buildPatch(items.map((i) => i.hunk))
 			const success = await this._applyPatch(patch, worktreeDir)
-			if (!success) {
+			if (success) {
+				appliedIndices.push(...items.map((i) => i.originalIndex))
+			} else {
 				allSucceeded = false
+				failedIndices.push(...items.map((i) => i.originalIndex))
 				await vscode.window.showErrorMessage(
-					`gitbraid: failed to apply ${branchHunks.length} hunk(s) to "${branchName}". ` +
+					`gitbraid: failed to apply ${String(items.length)} hunk(s) to "${branchName}". ` +
 					'Check the Output panel for details.',
 				)
 			}
 		}
 
-		return allSucceeded
+		return { ok: allSucceeded, appliedIndices, failedIndices }
 	}
 
 	/**
@@ -179,15 +206,22 @@ export class HunkRouter {
 	 *     candidates are treated as ambiguous and the assignment is dropped
 	 *     with a log warning.
 	 *
-	 * Returns a new Map keyed by the resolved (live) hunk index.
+	 * Returns the resolved map (keyed by the live hunk index) plus a reverse
+	 * `originalIndexOf` map (live index → the index the assignment was
+	 * persisted under), so callers can report success/failure back in terms
+	 * of what's actually stored on disk.
 	 */
 	private _reconcileAssignments(
 		hunks: DiffHunk[],
 		assignments: HunkAssignment,
 		anchors: Map<number, HunkAnchor> | undefined,
-	): HunkAssignment {
+	): { resolved: HunkAssignment, originalIndexOf: Map<number, number> } {
 		if (!anchors || anchors.size === 0) {
-			return assignments
+			const originalIndexOf = new Map<number, number>()
+			for (const idx of assignments.keys()) {
+				originalIndexOf.set(idx, idx)
+			}
+			return { resolved: assignments, originalIndexOf }
 		}
 
 		const hashIndex = new Map<string, DiffHunk>()
@@ -196,17 +230,20 @@ export class HunkRouter {
 		}
 
 		const resolved = new Map<number, string>()
+		const originalIndexOf = new Map<number, number>()
 		for (const [oldIndex, branch] of assignments) {
 			const anchor = anchors.get(oldIndex)
 			if (!anchor) {
 				// Legacy assignment — carry forward verbatim.
 				resolved.set(oldIndex, branch)
+				originalIndexOf.set(oldIndex, oldIndex)
 				continue
 			}
 			// Exact bodyHash match — the hunk is unchanged, just renumbered.
 			const byHash = hashIndex.get(anchor.bodyHash)
 			if (byHash) {
 				resolved.set(byHash.index, branch)
+				originalIndexOf.set(byHash.index, oldIndex)
 				continue
 			}
 			// Fuzzy: line-range overlap.  A hunk is a candidate if its
@@ -229,6 +266,7 @@ export class HunkRouter {
 					).then((pick) => { if (pick === 'Open Output') log.show() })
 				}
 				resolved.set(h.index, branch)
+				originalIndexOf.set(h.index, oldIndex)
 				continue
 			}
 			log.warn(
@@ -237,7 +275,7 @@ export class HunkRouter {
 				`at range ${String(anchor.startLine)}-${String(anchor.endLine)}.`,
 			)
 		}
-		return resolved
+		return { resolved, originalIndexOf }
 	}
 
 	// ── Private helpers ────────────────────────────────────────────────────────

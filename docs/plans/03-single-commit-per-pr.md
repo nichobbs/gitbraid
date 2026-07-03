@@ -2,11 +2,14 @@
 
 **Inspiration:** git-spr, ghstack.
 
-**Status:** **Partially implementing.** Data model flag `singleCommit` is in
-place on `BranchStackEntry`, with `ConfigService.setSingleCommit` and the
-`gitbraid.toggleSingleCommitMode` command.  The amend/squash rewrite inside
-`BranchScmProvider.commitBranch` and push-time invariant check are still to
-do — the flag is persisted but not yet enforced.
+**Status:** **Implemented.** Data model flag `singleCommit` is in place on
+`BranchStackEntry`, with `ConfigService.setSingleCommit` and the
+`gitbraid.toggleSingleCommitMode` command. The amend rewrite runs inside
+`BranchScmProvider.commitBranch` (amends `HEAD` instead of appending when
+`entry.singleCommit === true`), and `StackCommands.pushStack` validates the
+invariant via `singleCommit.ts`'s `validateStack`/`promptSquashForViolations`
+before pushing — this doc's original "Design" section below is now a
+description of the shipped behaviour, not a proposal.
 
 ## Goal
 
@@ -75,7 +78,7 @@ flag is on.
   single-commit offers the squash; on accept, the branch ends up at
   1 commit.
 
-## Sequencing
+## Sequencing (historical — all steps below have shipped)
 
 1. Schema bump (`CONFIG_SCHEMA_VERSION = 3`). Migration: default
    `singleCommit` to `false` on every existing entry.

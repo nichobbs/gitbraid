@@ -9,6 +9,7 @@ import { showError } from './errorSurfacer'
 import type { IFileChangeBus } from './fileChangeBus'
 import { getDefaultGitRunner } from './gitRunner'
 import type { VirtualBranchStore } from './virtualBranchStore'
+import { requireInside } from './pathGuard'
 
 const DEFAULT_DEBOUNCE_MS = 200
 /** Hard cap on `_floatingDirty` so a long-running session can't leak memory. */
@@ -325,6 +326,12 @@ export class WorkspaceSync implements vscode.Disposable {
 		let synced = 0
 		for (const [rel, branch] of entries) {
 			if (this._config.isVirtual(branch)) continue
+			try {
+				requireInside(this._workspaceRoot.fsPath, rel)
+			} catch (e) {
+				log.warn(`WorkspaceSync.syncAllAssigned: rejected out-of-workspace assignment "${rel}": ${e instanceof Error ? e.message : String(e)}`)
+				continue
+			}
 			const uri = vscode.Uri.joinPath(this._workspaceRoot, rel)
 			try {
 				await this._syncFile(rel, uri, branch)
@@ -443,9 +450,29 @@ export class WorkspaceSync implements vscode.Disposable {
 		// copying to a worktree.  The primary workspace keeps the edit so the
 		// cumulative view stays intact.
 		if (this._virtualStore && this._config.isVirtual(branch)) {
+			const virtualStore = this._virtualStore
 			try {
-				const content = await vscode.workspace.fs.readFile(uri)
-				await this._virtualStore.writeFile(branch, relativePath, content)
+				// Acquire the branch's write lock and re-check `isVirtual` inside
+				// it before writing.  `BranchStackService.materialiseBranch`
+				// flushes the store and flips this same flag under the same
+				// lock, so if materialisation raced ahead of us while we
+				// waited, we're guaranteed to observe the flip here instead of
+				// writing into a store that's about to be (or was just)
+				// discarded — closing the race that could otherwise silently
+				// drop this edit.
+				let materialisedDuringWait = false
+				await virtualStore.withBranchLock(branch, async () => {
+					if (!this._config.isVirtual(branch)) {
+						materialisedDuringWait = true
+						return
+					}
+					const content = await vscode.workspace.fs.readFile(uri)
+					await virtualStore.writeFileLocked(branch, relativePath, content)
+				})
+				if (materialisedDuringWait) {
+					await this._syncFile(relativePath, uri, branch)
+					return
+				}
 				log.info(`WorkspaceSync: captured ${relativePath} → ${branch} (virtual)`)
 				this._onDidSyncFile.fire({ relativePath: normKey, branch })
 			} catch (e) {
@@ -483,6 +510,7 @@ export class WorkspaceSync implements vscode.Disposable {
 		this._floatingDirty.delete(normKey)
 		this._floatingSince.delete(normKey)
 		const wtPath = worktreePath(this._workspaceRoot, branch)
+		requireInside(wtPath.fsPath, relativePath)
 		const destUri = vscode.Uri.joinPath(wtPath, relativePath)
 
 		// Skip sync for files over the configured size limit to avoid reading

@@ -291,7 +291,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 			const a = this._config.getHunkAnchor(relativePath, idx)
 			if (a) anchors.set(idx, a)
 		}
-		const ok = await this._hunkRouter.routeFile(
+		const result = await this._hunkRouter.routeFile(
 			this._workspaceRoot.fsPath,
 			relativePath,
 			worktreeDirs,
@@ -299,13 +299,22 @@ export class GitBraidApi implements GitBraidExportedAPI {
 			anchors,
 		)
 		const total = assignments.size
-		if (ok) {
+		if (result.ok) {
 			await this._config.clearHunkAssignments(relativePath)
 			log.info(`GitBraidApi.routeHunks: routed ${String(total)} hunk(s) for "${relativePath}"`)
 			return { routed: total, skipped: 0 }
 		}
-		log.warn(`GitBraidApi.routeHunks: routing failed for "${relativePath}"`)
-		return { routed: 0, skipped: total }
+		// Only clear the hunks that actually applied — leaving the failed ones
+		// assigned prevents a retry from re-applying an already-applied
+		// branch's patch (which would then fail too).
+		for (const idx of result.appliedIndices) {
+			await this._config.removeHunkAssignment(relativePath, idx)
+		}
+		log.warn(
+			`GitBraidApi.routeHunks: partial failure for "${relativePath}" ` +
+			`(${String(result.appliedIndices.length)} routed, ${String(result.failedIndices.length)} failed)`,
+		)
+		return { routed: result.appliedIndices.length, skipped: result.failedIndices.length }
 	}
 
 	// ── Events ────────────────────────────────────────────────────────────────

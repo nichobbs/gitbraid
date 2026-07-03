@@ -195,6 +195,37 @@ export class StackCommands implements vscode.Disposable {
 					return
 				}
 
+				// Dry-run every rebase this sync is about to perform before
+				// touching any worktree, so a predicted conflict is one thing
+				// the user decides about up front rather than N things
+				// discovered mid-sequence with a half-applied autostash to
+				// clean up. Best-effort: each prediction is against the
+				// branch's *current* base tip, so it won't perfectly account
+				// for an earlier layer's rebase changing a later layer's base
+				// — still catches the common single-layer-diverged case.
+				const predicted: string[] = []
+				for (const entry of stack) {
+					if (!entry.base) continue
+					const wtPath = worktreePath(this._workspaceRoot, entry.name).fsPath
+					if (!fs.existsSync(wtPath)) continue
+					const prediction = await this._rebaseSvc.predictConflict(wtPath, entry.name, entry.base)
+					if (prediction.supported && prediction.conflicted) {
+						const fileNote = prediction.files.length > 0 ? ` (${String(prediction.files.length)} file(s))` : ''
+						predicted.push(`${entry.name} ← ${entry.base}${fileNote}`)
+					}
+				}
+				if (predicted.length > 0) {
+					const choice = await vscode.window.showWarningMessage(
+						`GitBraid: sync is predicted to conflict rebasing: ${predicted.join(', ')}. Continue anyway?`,
+						{ modal: true },
+						'Continue Anyway',
+					)
+					if (choice !== 'Continue Anyway') {
+						results.push({ branch: '(sync)', ok: false, message: 'cancelled — predicted conflicts' })
+						return
+					}
+				}
+
 				// Rebase every child branch onto its parent, bottom-up.  The
 				// stack is already ordered by `order` ascending in
 				// `ConfigService.getStack()`, so a single pass suffices —

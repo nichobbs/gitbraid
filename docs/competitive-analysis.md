@@ -47,7 +47,7 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
 | Per-branch SCM panel in-editor | ❌ | ❌ | ❌ | ➖ | ✅ | ✅ |
 | Auto-rebase child branches on parent advance | ✅ | ✅ | ✅ | ✅ | 🟡 | 🟡 (`RebaseSuggestionService` + `RebaseRecovery`) |
 | One-click "push whole stack" | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (`gitbraid.pushStack`) |
-| PR creation / sync | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 (`gitbraid.submitStack`; GitHub-only, Octokit + extension adapters; GitLab deferred) |
+| PR creation / sync | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (`gitbraid.submitStack`; GitHub via Octokit + extension adapters, plus GitLab/Bitbucket/Azure DevOps REST adapters) |
 | PR stack visualisation (web UI or panel) | ✅ (web) | ❌ | ❌ | ❌ | 🟡 | ✅ (`gitbraid.stackDashboard` webview with per-row action menu, commits/files drawers, search + state persistence) |
 | Stacked-PR body linkage (cross-PR references) | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (idempotent `<!-- gitbraid:stack-* -->` block) |
 | Merge queue integration | ✅ | ❌ | ❌ | ❌ | ❌ | 🟡 (`gitbraid.mergeStack` drives GitHub merge queue; tree-view queue decoration pending) |
@@ -78,8 +78,12 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
     review UI, PR threading, merge queue). GitBraid's 2026-04-25 wave
     closed a large part of this gap — PR creation/update with stacked
     body linkage, merge-queue driving, and a read-only dashboard all
-    shipped — but Graphite still leads on review UX polish and
-    breadth of hosts (GitLab, Bitbucket).
+    shipped, and GitLab/Bitbucket/Azure DevOps adapters now cover the
+    same hosts GitButler does — but Graphite still leads on review UX
+    polish (inline comment threading, cross-PR diff browsing) and on
+    native merge-queue depth per host (GitLab Merge Trains are
+    Ultimate-tier only via GitBraid's adapter; Bitbucket/Azure DevOps
+    have no native queue at all).
   - Graphite's web UI is the main draw for teams; GitBraid's
     strengths are in-editor routing, cross-branch absorb, and an
     AI/MCP agent surface.
@@ -136,8 +140,11 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
     GitBraid is a VS Code extension using real `git worktree`s — so any
     other git tool sees normal branches.
   - Both tools now create PRs.  GitButler covers GitHub + GitLab;
-    GitBraid's `submitStack` covers GitHub only (Octokit +
-    `vscode.github-pullrequests` adapters), with GitLab deferred.
+    GitBraid's `submitStack` covers GitHub (Octokit +
+    `vscode.github-pullrequests` adapters), GitLab, Bitbucket, and
+    Azure DevOps via dedicated `PrHostAdapter` implementations —
+    broader host coverage, though GitButler's GitHub/GitLab support
+    is more battle-tested.
   - GitButler has richer UI polish for visualising parallel work and
     shipping commits-under-branch inspection; GitBraid has the data
     source (`CommitListService`) but hasn't yet hung the tree nodes.
@@ -185,11 +192,13 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
 
 ## Where GitBraid is behind
 
-- **Host integration is GitHub-first and partial.** `submitStack`
-  handles GitHub via Octokit or the `vscode.github-pullrequests`
-  extension. GitLab is deferred; no Bitbucket / Azure DevOps
-  adapters. Graphite / git-spr / ghstack / GitButler all cover
-  more ground.
+- **Host integration is broad but less polished than Graphite's.**
+  `submitStack` now has adapters for GitHub (Octokit or the
+  `vscode.github-pullrequests` extension), GitLab, Bitbucket, and
+  Azure DevOps. What's missing is depth per host: no native
+  merge-queue integration outside GitHub/GitLab, and review-comment
+  surfacing is newer and less polished than Graphite's or
+  GitButler's.
 - **Stack-review web UI polish trails Graphite.**  `stackDashboard`
   now covers full actions (per-row menu rendered via a native VS
   Code QuickPick — both click-on-⋯ and right-click on the row open

@@ -5,6 +5,7 @@ import { log } from './channelLogger'
 import { ConfigService } from './configService'
 import { BranchStackEntry } from './configTypes'
 import { ConfigError } from './errors'
+import { detectStackCycle } from './branchStackService'
 
 /** Directory (relative to workspace root) where shared stack layouts live. */
 export const SHARED_DIR = '.gitbraid'
@@ -256,9 +257,24 @@ export class StackShareService {
 		}
 
 		// 1 — Add new branches.  No-op if the branch already exists; the
-		// config service rejects duplicates.
+		// config service rejects duplicates.  `ConfigService.addBranch` does
+		// no cycle validation of its own (unlike `BranchStackService.
+		// addBranchToStack`), so a shared stack file with a circular `base`
+		// chain (crafted or corrupted) must be checked here before writing.
+		//
+		// Checked as a batch (not one-at-a-time against the live config) so a
+		// cycle formed entirely *among* the incoming branches — e.g. two new
+		// branches whose shared bases point at each other — is caught before
+		// either one is added, instead of letting the first half through as
+		// a dangling reference.
 		const diff = this.diffWithCurrent(shared)
+		const newBranchCycles = this._batchCycleMembers(this._config.getStack(), diff.newBranches)
 		for (const b of diff.newBranches) {
+			if (newBranchCycles.has(b.name)) {
+				log.warn(`StackShareService: refusing to add branch "${b.name}" — part of a circular base reference`)
+				summary.skipped += 1
+				continue
+			}
 			try {
 				await this._config.addBranch({
 					name: b.name,
@@ -275,7 +291,14 @@ export class StackShareService {
 		// 2 — Conflicting branch metadata (base / order / colour).  We only
 		// touch it when the caller said so.
 		if (resolution.branches === 'theirs') {
+			const conflictBatch = diff.conflictBranches.map(({ shared: s }) => ({ name: s.name, base: s.base }))
+			const conflictCycles = this._batchCycleMembers(this._config.getStack(), conflictBatch)
 			for (const { shared: s } of diff.conflictBranches) {
+				if (conflictCycles.has(s.name)) {
+					log.warn(`StackShareService: refusing to update branch "${s.name}" — part of a circular base reference`)
+					summary.skipped += 1
+					continue
+				}
 				// The config service doesn't expose an "update branch" API;
 				// simplest path is remove + re-add.  Skip if removal would
 				// destroy a worktree the user is actively using.
@@ -323,6 +346,32 @@ export class StackShareService {
 
 		log.info(`StackShareService.applyImport: ${JSON.stringify(summary)}`)
 		return summary
+	}
+
+	/**
+	 * Returns the names of every branch in `batch` that would sit on a
+	 * circular base chain once the whole batch (plus `existing`, minus any
+	 * entries the batch itself replaces) is applied. Checking the batch as a
+	 * unit — rather than one branch at a time against the live config —
+	 * catches a cycle formed entirely among incoming branches, e.g. two new
+	 * branches whose shared bases reference each other.
+	 */
+	private _batchCycleMembers(
+		existing: ReadonlyArray<Pick<BranchStackEntry, 'name' | 'base'>>,
+		batch: ReadonlyArray<{ name: string, base: string }>,
+	): Set<string> {
+		const batchNames = new Set(batch.map((b) => b.name))
+		const virtualStack = [
+			...existing.filter((e) => !batchNames.has(e.name)),
+			...batch,
+		]
+		const bad = new Set<string>()
+		for (const b of batch) {
+			if (detectStackCycle(virtualStack, b.name, b.base)) {
+				bad.add(b.name)
+			}
+		}
+		return bad
 	}
 }
 

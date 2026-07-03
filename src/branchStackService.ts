@@ -278,8 +278,16 @@ export class BranchStackService implements vscode.Disposable {
 	 * 2. Apply every file currently tracked in the virtual store.
 	 * 3. Flip the `virtual` flag off and delete the store entry.
 	 *
-	 * If step 1 or 2 fails the virtual store is left intact so the user can
-	 * retry without losing work.
+	 * If step 1 fails the virtual store is left intact so the user can retry
+	 * without losing work.  Steps 2 and 3 run inside the virtual store's
+	 * per-branch write lock (`withBranchLock`) so they're atomic with
+	 * respect to a concurrent `WorkspaceSync` save for a file assigned to
+	 * this branch: that save re-checks `isVirtual()` under the same lock
+	 * before writing (see `WorkspaceSync._handleSave`), so it either lands
+	 * in the flush (queued before it) or correctly observes the flipped
+	 * flag and falls through to the normal worktree sync (queued after it)
+	 * — never in between, where the old snapshot-then-remove sequence could
+	 * silently discard the edit.
 	 */
 	async materialiseBranch(name: string): Promise<void> {
 		this._assertInitialised()
@@ -295,28 +303,23 @@ export class BranchStackService implements vscode.Disposable {
 				`Cannot materialise "${name}" — VirtualBranchStore is not wired up on this service`
 			)
 		}
+		const virtualStore = this._virtualStore
 
 		log.info(`BranchStackService.materialiseBranch: ${name} (base=${entry.base})`)
 
 		// Step 1: create the worktree (and the branch if missing).
 		await this._createWorktree(name, entry.base)
 
-		// Step 2: flush the virtual store into the new worktree.
+		// Steps 2+3: flush the virtual store into the new worktree and flip
+		// the config flag off, atomically with respect to concurrent saves.
 		const wtPath = worktreePath(this._workspaceRoot!, name).fsPath
-		const files = this._virtualStore.listFiles(name)
-		for (const rel of files) {
-			const content = this._virtualStore.readFile(name, rel)
-			if (!content) continue
-			const dest = path.join(wtPath, rel)
-			await fs.promises.mkdir(path.dirname(dest), { recursive: true })
-			await fs.promises.writeFile(dest, Buffer.from(content))
-		}
+		const fileCount = await virtualStore.withBranchLock(name, async () => {
+			const files = await virtualStore.flushAndRemoveLocked(name, wtPath)
+			await this._config.setVirtual(name, false)
+			return files.length
+		})
 
-		// Step 3: flip the flag off and drop the store.
-		await this._config.setVirtual(name, false)
-		await this._virtualStore.removeBranch(name)
-
-		log.info(`BranchStackService: materialised "${name}" with ${String(files.length)} file(s)`)
+		log.info(`BranchStackService: materialised "${name}" with ${String(fileCount)} file(s)`)
 	}
 
 	/**
@@ -550,23 +553,41 @@ export class BranchStackService implements vscode.Disposable {
 	 * e.g. A→B, B→A would be circular.
 	 */
 	private _validateNoCycle(newBranch: string, base: string): void {
-		const stack = this._config.getStack()
-		const visited = new Set<string>([newBranch])
-		let current: string = base
-
-		while (current) {
-			if (visited.has(current)) {
-				throw new BranchStackError(
-					`Circular base reference detected: adding "${newBranch}" with base "${base}" ` +
-					`creates a cycle through "${current}"`
-				)
-			}
-			visited.add(current)
-			const entry = stack.find((e) => e.name === current)
-			if (!entry) {
-				break
-			}
-			current = entry.base
+		const cycleAt = detectStackCycle(this._config.getStack(), newBranch, base)
+		if (cycleAt) {
+			throw new BranchStackError(
+				`Circular base reference detected: adding "${newBranch}" with base "${base}" ` +
+				`creates a cycle through "${cycleAt}"`
+			)
 		}
 	}
+}
+
+/**
+ * Returns the branch name where a cycle would close if `newBranch` were
+ * added to `stack` with the given `base`, or `undefined` if the addition is
+ * safe. Pure so callers without a `BranchStackService` instance — e.g.
+ * `StackShareService` validating an imported stack before it's ever
+ * written to config — can check before mutating.
+ */
+export function detectStackCycle(
+	stack: ReadonlyArray<Pick<BranchStackEntry, 'name' | 'base'>>,
+	newBranch: string,
+	base: string,
+): string | undefined {
+	const visited = new Set<string>([newBranch])
+	let current: string = base
+
+	while (current) {
+		if (visited.has(current)) {
+			return current
+		}
+		visited.add(current)
+		const entry = stack.find((e) => e.name === current)
+		if (!entry) {
+			break
+		}
+		current = entry.base
+	}
+	return undefined
 }

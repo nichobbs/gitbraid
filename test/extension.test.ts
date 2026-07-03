@@ -78,6 +78,8 @@ suite('extension: registered commands', function () {
 		'gitbraid.unassignHunk',
 		'gitbraid.openResolvedAtTop',
 		'gitbraid.showStackDiff',
+		'gitbraid.openStackDiff',
+		'gitbraid.previewRouting',
 		'gitbraid.routeHunks',
 		'gitbraid.assignFile',
 		'gitbraid.unassignFile',
@@ -335,18 +337,24 @@ suite('extension: command execution', function () {
 		win.showInformationMessage = async () => undefined
 		try {
 			await vscode.commands.executeCommand('gitbraid.addVirtualBranch')
-			// The extension holds its own ConfigService instance; query via the
-			// exported API rather than the legacy test singleton.
-			const stack: ReadonlyArray<{ name: string, virtual?: boolean }> = api.getStack()
-			const entry = stack.find((e) => e.name === 'feature/virt-smoke')
-			assert.ok(entry, 'branch should have been recorded in the stack via the API')
-			assert.strictEqual(entry?.virtual, true)
-			// No worktree on disk.
-			const wtDir = path.join(wsRoot().fsPath, '.worktrees')
-			const branchDir = fs.readdirSync(wtDir).find((d) => d.startsWith('feature-virt-smoke__'))
-			assert.strictEqual(branchDir, undefined, 'no worktree directory expected for a virtual branch')
-			// Clean up so the next test starts with an empty stack.
-			await api.removeBranch('feature/virt-smoke', true)
+			// The extension holds its own ConfigService instance, which
+			// persists across every test in this file — clean up in a nested
+			// `finally` so a stray "feature/virt-smoke" can never survive into
+			// a later test even if an assertion below throws first.
+			try {
+				// The extension holds its own ConfigService instance; query via the
+				// exported API rather than the legacy test singleton.
+				const stack: ReadonlyArray<{ name: string, virtual?: boolean }> = api.getStack()
+				const entry = stack.find((e) => e.name === 'feature/virt-smoke')
+				assert.ok(entry, 'branch should have been recorded in the stack via the API')
+				assert.strictEqual(entry?.virtual, true)
+				// No worktree on disk.
+				const wtDir = path.join(wsRoot().fsPath, '.worktrees')
+				const branchDir = fs.readdirSync(wtDir).find((d) => d.startsWith('feature-virt-smoke__'))
+				assert.strictEqual(branchDir, undefined, 'no worktree directory expected for a virtual branch')
+			} finally {
+				await api.removeBranch('feature/virt-smoke', true)
+			}
 		} finally {
 			win.showInputBox = prevInput
 			win.showQuickPick = prevQP
@@ -369,10 +377,37 @@ suite('extension: command execution', function () {
 			warn: win.showWarningMessage,
 		}
 		win.showInputBox = async () => 'feature/virt-discard'
-		win.showQuickPick = async () => 'main'
+		// Base-branch-pick call (from addVirtualBranch) always includes 'main'
+		// first; a stray "which virtual branch?" QuickPick (from
+		// discardVirtualBranch, only reachable if more than one virtual branch
+		// exists) would pass the virtual branch names instead. Pick from the
+		// actual list handed to us rather than hardcoding 'main' — hardcoding
+		// it previously meant that if this test's "exactly one virtual branch"
+		// premise was ever violated by leftover state, discardVirtualBranch
+		// would silently resolve to the bogus name 'main', fail the
+		// is-virtual check, and leave the branch undiscarded — turning a
+		// leftover-state bug into a confusing, hard-to-diagnose assertion
+		// failure instead of a clear one.
+		win.showQuickPick = async (items: unknown) => {
+			const list = Array.isArray(items) ? items as string[] : []
+			return list.includes('feature/virt-discard') ? 'feature/virt-discard' : list[0]
+		}
 		win.showInformationMessage = async () => undefined
 		win.showWarningMessage = async () => 'Discard'
 		try {
+			// This test's premise is "exactly one virtual branch in the stack",
+			// which `resolveVirtualBranchName` needs to auto-select without a
+			// QuickPick. The extension activates once per test-host process and
+			// its ConfigService instance persists across every test in this
+			// file (not the test-local `config` variable above, which is a
+			// separate instance) — so if an earlier test's own cleanup was
+			// skipped (e.g. it threw before reaching its `finally`), a stray
+			// virtual branch here would break that premise and make this test
+			// flake on unrelated leftover state. Clear defensively rather than
+			// assume a pristine stack.
+			for (const entry of api.getStack().filter((e: { virtual?: boolean }) => e.virtual === true)) {
+				await api.removeBranch(entry.name, true)
+			}
 			await vscode.commands.executeCommand('gitbraid.addVirtualBranch')
 			await vscode.commands.executeCommand('gitbraid.discardVirtualBranch')
 			const entry = api.getStack().find((e: { name: string }) => e.name === 'feature/virt-discard')

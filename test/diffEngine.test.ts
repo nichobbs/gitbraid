@@ -344,5 +344,43 @@ suite('DiffEngine — spawn-based invocation', () => {
 		const hunks = await engine.getHunksForFile(wsRoot, 'foo.ts')
 		assert.deepStrictEqual(hunks, [])
 	})
+
+	test('getHunksForFile: serves cached hunks on a second call when mtime is unchanged', async () => {
+		const filePath = pathNode.join(wsRoot, 'foo.ts')
+		fs.writeFileSync(filePath, 'content')
+		const fake = new FakeGitRunner()
+		fake.fixture('diff HEAD', { stdout: '', exitCode: 0 })
+		const engine = new DiffEngine(fake)
+
+		await engine.getHunksForFile(wsRoot, 'foo.ts')
+		await engine.getHunksForFile(wsRoot, 'foo.ts')
+		assert.strictEqual(fake.calls.length, 1, 'unchanged mtime should be served from cache without a second git diff')
+	})
+
+	test('getHunksForFile: does not serve stale cached hunks when the file changes immediately ' +
+		'after the cache was filled (regression — a time-based TTL previously skipped the mtime ' +
+		'check for ~1.5s after a fresh fill, serving stale hunks to a save that landed in that window)', async () => {
+		const filePath = pathNode.join(wsRoot, 'foo.ts')
+		fs.writeFileSync(filePath, 'content')
+		const fake = new FakeGitRunner()
+		fake.fixture('diff HEAD', { stdout: '', exitCode: 0 })
+		const engine = new DiffEngine(fake)
+
+		await engine.getHunksForFile(wsRoot, 'foo.ts')
+		assert.strictEqual(fake.calls.length, 1)
+
+		// Force a distinctly different mtime — simulating a second save that
+		// lands well within any TTL window, regardless of the host
+		// filesystem's mtime resolution.
+		const past = new Date(Date.now() - 5_000)
+		const future = new Date(Date.now() + 5_000)
+		fs.utimesSync(filePath, past, future)
+
+		await engine.getHunksForFile(wsRoot, 'foo.ts')
+		assert.strictEqual(
+			fake.calls.length, 2,
+			'a changed mtime must trigger a fresh git diff even immediately after the cache was filled',
+		)
+	})
 })
 

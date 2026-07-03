@@ -1,5 +1,6 @@
 import * as assert from 'node:assert'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { TmpRepo } from './helpers/tmpRepo'
@@ -70,16 +71,28 @@ suite('RebaseRecovery (T70)', () => {
 	})
 
 	test('inspect: resolves `.git` indirection (worktree add layout)', async () => {
-		// Simulate `git worktree add` layout: repo.root/.git is a FILE
-		// pointing at repo.root/_real_gitdir/rebase-merge/.
-		const dotgit = path.join(repo.root, '.git')
-		fs.rmSync(dotgit, { recursive: true, force: true })
-		const realGitDir = path.join(repo.root, '_real_gitdir')
-		fs.mkdirSync(path.join(realGitDir, 'rebase-merge'), { recursive: true })
-		fs.writeFileSync(dotgit, `gitdir: ${realGitDir}\n`)
-		runner.fixture('status --porcelain=v1 -z', { stdout: '', exitCode: 0 })
-		const state = await recovery.inspect(repo.root)
-		assert.ok(state, 'must follow .git gitdir indirection')
+		// Simulate `git worktree add` layout: <worktree>/.git is a FILE
+		// pointing at a sibling gitdir containing rebase-merge/.
+		//
+		// `inspect()` only touches the filesystem plus the (faked) git
+		// runner, so this doesn't need a real git repo at all. Building it
+		// from a plain, never-`git init`-ed temp dir — rather than deleting
+		// `repo.root/.git` (a real git-touched directory) and replacing it —
+		// sidesteps a Windows CI flake where a just-used `.git` dir can stay
+		// briefly locked (AV scanning / delayed handle release) long enough
+		// that even fs.rmSync's built-in retry/backoff doesn't outlast it.
+		const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-rebase-recovery-gitdir-'))
+		try {
+			const dotgit = path.join(worktreeDir, '.git')
+			const realGitDir = path.join(worktreeDir, '_real_gitdir')
+			fs.mkdirSync(path.join(realGitDir, 'rebase-merge'), { recursive: true })
+			fs.writeFileSync(dotgit, `gitdir: ${realGitDir}\n`)
+			runner.fixture('status --porcelain=v1 -z', { stdout: '', exitCode: 0 })
+			const state = await recovery.inspect(worktreeDir)
+			assert.ok(state, 'must follow .git gitdir indirection')
+		} finally {
+			try { fs.rmSync(worktreeDir, { recursive: true, force: true }) } catch { /* ignore */ }
+		}
 	})
 
 	test('abort: invokes `git rebase --abort`', async () => {

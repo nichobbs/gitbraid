@@ -2,6 +2,7 @@ import * as assert from 'node:assert'
 import * as vscode from 'vscode'
 import {
 	GitHubOctokitAdapter,
+	GitHubVSCodeAdapter,
 	GitLabAdapter,
 	BitbucketAdapter,
 	AzureDevOpsAdapter,
@@ -26,7 +27,10 @@ interface MockSetup {
 	url: string | RegExp
 	method?: string
 	respond: (req: { url: string, method: string, body?: unknown }) => unknown
-	status?: number
+	/** Fixed status, or a function so a test can vary it call-by-call (e.g. 429 then 200). */
+	status?: number | (() => number)
+	/** Response headers, e.g. `{ 'retry-after': '1' }` for rate-limit tests. Also supports a function for the same reason as `status`. */
+	responseHeaders?: Record<string, string> | (() => Record<string, string>)
 }
 
 class FetchRecorder {
@@ -62,17 +66,26 @@ class FetchRecorder {
 			const methodOk = !s.method || s.method === method
 			return urlOk && methodOk
 		})
-		const status = matched?.status ?? (matched ? 200 : 404)
+		// `respond()` runs first (and is the one closure a test always
+		// provides) so a shared counter incremented inside it produces a
+		// consistent "which attempt is this" view for `status`/
+		// `responseHeaders` below, rather than depending on call order
+		// between three independently-side-effecting closures.
 		const responseBody = matched ? matched.respond({ url: u, method, body }) : { error: 'no setup' }
+		const statusSetting = matched?.status ?? (matched ? 200 : 404)
+		const status = typeof statusSetting === 'function' ? statusSetting() : statusSetting
 		const text = JSON.stringify(responseBody)
 		const recorded: MockResponse = { url: u, method, headers, body, ok: status >= 200 && status < 300, status, text: async () => text, json: async () => responseBody }
 		this.calls.push(recorded)
+		const headersSetting = matched?.responseHeaders ?? {}
+		const responseHeaders = typeof headersSetting === 'function' ? headersSetting() : headersSetting
 		return {
 			ok: recorded.ok,
 			status: recorded.status,
 			statusText: recorded.ok ? 'OK' : 'NOT_FOUND',
 			text: () => Promise.resolve(text),
 			json: () => Promise.resolve(responseBody),
+			headers: { get: (name: string) => responseHeaders[name.toLowerCase()] ?? null },
 		} as unknown as Response
 	}
 }
@@ -227,6 +240,202 @@ suite('GitHubOctokitAdapter (REST)', () => {
 			status: 401,
 		})
 		await assert.rejects(() => adapter.listOpen(), /401/)
+	})
+
+	test('getPR: enriches with review rollup and check-run detail', async () => {
+		recorder.on({
+			url: /pulls\?state=open/,
+			respond: () => ([{
+				number: 7,
+				html_url: 'u',
+				state: 'open',
+				title: 't',
+				body: 'b',
+				head: { ref: 'feature/x', sha: 'deadbeef' },
+				base: { ref: 'main' },
+			}]),
+		})
+		recorder.on({
+			url: /pulls\/7\/reviews/,
+			respond: () => ([
+				{ state: 'COMMENTED', user: { login: 'alice' } },
+				{ state: 'APPROVED', user: { login: 'alice' } },
+				{ state: 'CHANGES_REQUESTED', user: { login: 'bob' } },
+			]),
+		})
+		recorder.on({
+			url: /commits\/deadbeef\/check-runs/,
+			respond: () => ({
+				check_runs: [
+					{ name: 'build', status: 'completed', conclusion: 'success', html_url: 'https://ci/build' },
+					{ name: 'test', status: 'in_progress', conclusion: null },
+				],
+			}),
+		})
+
+		const pr = await adapter.getPR('feature/x')
+		assert.strictEqual(pr?.number, 7)
+		// alice's latest review (APPROVED) supersedes her earlier COMMENTED;
+		// bob's CHANGES_REQUESTED wins the overall rollup.
+		assert.strictEqual(pr?.reviewState, 'changesRequested')
+		assert.strictEqual(pr?.reviewCount, 2)
+		assert.deepStrictEqual(pr?.checksDetail, [
+			{ name: 'build', state: 'success', url: 'https://ci/build' },
+			{ name: 'test', state: 'pending', url: undefined },
+		])
+	})
+
+	test('listOpen: retries once on a secondary rate limit with a short Retry-After, then succeeds', async () => {
+		let calls = 0
+		recorder.on({
+			url: /pulls\?state=open/,
+			respond: () => { calls++; return calls === 1 ? { message: 'secondary rate limit' } : [] },
+			status: () => (calls === 1 ? 429 : 200),
+			responseHeaders: { 'retry-after': '1' },
+		})
+		const result = await adapter.listOpen()
+		assert.deepStrictEqual(result, [])
+		assert.strictEqual(calls, 2, 'should have retried exactly once after the 429')
+	})
+
+	test('listOpen: fails fast (no retry) when the primary rate limit is exhausted', async () => {
+		const resetEpoch = Math.floor(Date.now() / 1000) + 3600
+		recorder.on({
+			url: /pulls\?state=open/,
+			respond: () => ({ message: 'API rate limit exceeded' }),
+			status: 403,
+			responseHeaders: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(resetEpoch) },
+		})
+		await assert.rejects(() => adapter.listOpen(), /rate limit exceeded — resets at/)
+		assert.strictEqual(recorder.calls.length, 1, 'must not retry/block waiting for a reset that could be an hour away')
+	})
+
+	test('listOpen: 401 and 404 produce distinct, actionable messages', async () => {
+		recorder.on({ url: /pulls\?state=open/, respond: () => ({ message: 'bad creds' }), status: 401 })
+		await assert.rejects(() => adapter.listOpen(), /authentication failed \(401\)/)
+	})
+
+	test('getPR: enrichment failure is swallowed — PR is still returned without review/checks fields', async () => {
+		recorder.on({
+			url: /pulls\?state=open/,
+			respond: () => ([{
+				number: 7,
+				html_url: 'u',
+				state: 'open',
+				title: 't',
+				body: 'b',
+				head: { ref: 'feature/x', sha: 'deadbeef' },
+				base: { ref: 'main' },
+			}]),
+		})
+		recorder.on({
+			url: /pulls\/7\/reviews/,
+			respond: () => ({ message: 'boom' }),
+			status: 500,
+		})
+
+		const pr = await adapter.getPR('feature/x')
+		assert.strictEqual(pr?.number, 7)
+		assert.strictEqual(pr?.reviewState, undefined)
+		assert.strictEqual(pr?.checksDetail, undefined)
+	})
+})
+
+// ─── GitHubVSCodeAdapter.updatePR (token delegation) ─────────────────────────
+//
+// The vscode-pull-request-github extension has no programmatic edit API, so
+// `updatePR` must delegate to a REST PATCH via GitHubOctokitAdapter whenever
+// a token is available, and fail loudly (not silently "succeed" with an
+// unchanged PR) when it isn't.
+
+suite('GitHubVSCodeAdapter.updatePR (token delegation)', () => {
+	let recorder: FetchRecorder
+	let secrets: FakeSecretStorage
+	let runner: FakeGitRunner
+
+	setup(() => {
+		recorder = new FetchRecorder()
+		recorder.install()
+		secrets = new FakeSecretStorage()
+		runner = new FakeGitRunner()
+		runner.fixture('config --get remote.origin.url', { stdout: 'https://github.com/foo/bar.git\n' })
+	})
+
+	teardown(() => recorder.uninstall())
+
+	test('delegates to a real PATCH when a token is stored', async () => {
+		await secrets.store('gitbraid.githubToken', 'gh-token-123')
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /pulls\/7$/,
+			method: 'PATCH',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return {
+					number: 7,
+					html_url: 'u',
+					state: 'open',
+					title: bodySeen.title ?? 't',
+					body: bodySeen.body ?? '',
+					head: { ref: 'feature/x' },
+					base: { ref: 'main' },
+				}
+			},
+		})
+		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const pr = await adapter.updatePR(7, { body: 'new stacked-PR block' })
+		assert.strictEqual(bodySeen?.body, 'new stacked-PR block')
+		assert.strictEqual(pr.number, 7)
+	})
+
+	test('throws an actionable error instead of silently succeeding when no token is stored', async () => {
+		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		await assert.rejects(
+			() => adapter.updatePR(7, { body: 'new stacked-PR block' }),
+			/Store a token/,
+		)
+		// No PATCH (or any network call) should have been attempted.
+		assert.strictEqual(recorder.calls.length, 0)
+	})
+
+	// The real vscode-pull-request-github extension isn't installed in the
+	// test host, so `listOpen()`/`getPR()` can't reach the extension's data
+	// model here. `_enrichWithReviewAndChecks` is exercised directly instead
+	// — it's the token-driven half of the path and doesn't depend on the
+	// extension being present.
+	test('_enrichWithReviewAndChecks: merges review/checks detail onto a PR fetched via the extension', async () => {
+		await secrets.store('gitbraid.githubToken', 'gh-token-123')
+		recorder.on({
+			url: /pulls\/7$/,
+			respond: () => ({ head: { sha: 'deadbeef' } }),
+		})
+		recorder.on({
+			url: /pulls\/7\/reviews/,
+			respond: () => ([{ state: 'APPROVED', user: { login: 'alice' } }]),
+		})
+		recorder.on({
+			url: /commits\/deadbeef\/check-runs/,
+			respond: () => ({ check_runs: [{ name: 'build', status: 'completed', conclusion: 'success' }] }),
+		})
+
+		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const basePr = { number: 7, url: 'u', state: 'open' as const, base: 'main', head: 'feature/x', title: 't', body: 'b' }
+		const enriched = await (adapter as unknown as {
+			_enrichWithReviewAndChecks: (pr: typeof basePr) => Promise<typeof basePr & { reviewState?: string, reviewCount?: number }>
+		})._enrichWithReviewAndChecks(basePr)
+
+		assert.strictEqual(enriched.reviewState, 'approved')
+		assert.strictEqual(enriched.reviewCount, 1)
+	})
+
+	test('_enrichWithReviewAndChecks: returns the PR unchanged when no token is stored', async () => {
+		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const basePr = { number: 7, url: 'u', state: 'open' as const, base: 'main', head: 'feature/x', title: 't', body: 'b' }
+		const result = await (adapter as unknown as {
+			_enrichWithReviewAndChecks: (pr: typeof basePr) => Promise<typeof basePr>
+		})._enrichWithReviewAndChecks(basePr)
+		assert.deepStrictEqual(result, basePr)
+		assert.strictEqual(recorder.calls.length, 0)
 	})
 })
 

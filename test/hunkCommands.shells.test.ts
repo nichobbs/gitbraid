@@ -27,7 +27,10 @@ function entry(name: string, order: number): BranchStackEntry {
 	return { name, order, color: '#fff', base: 'main' }
 }
 
-function makeDeps(stack: BranchStackEntry[] = []): {
+function makeDeps(
+	stack: BranchStackEntry[] = [],
+	routeFileResult: { ok: boolean, appliedIndices: number[], failedIndices: number[] } = { ok: true, appliedIndices: [], failedIndices: [] },
+): {
 	deps: CommandDeps
 	hunkAssignments: Map<number, string>
 	hunkAnchors: Map<number, unknown>
@@ -60,7 +63,7 @@ function makeDeps(stack: BranchStackEntry[] = []): {
 		},
 		undoStack: { push: () => undefined },
 		hunkRouter: {
-			routeFile: async () => true,
+			routeFile: async () => routeFileResult,
 		},
 		stackResolver: {
 			getStackDiff: async () => undefined,
@@ -271,5 +274,26 @@ suite('hunkCommands shell coverage (direct-import)', () => {
 			},
 		)
 		assert.strictEqual(hunkAssignments.size, 0, 'router should clear assignments after success')
+	})
+
+	test('routeHunks: partial failure clears only the applied hunk, leaves the failed one assigned', async () => {
+		const stack = [entry('feat/a', 1), entry('feat/b', 2)]
+		const { deps, hunkAssignments } = makeDeps(
+			stack,
+			{ ok: false, appliedIndices: [0], failedIndices: [1] },
+		)
+		hunkAssignments.set(0, 'feat/a')
+		hunkAssignments.set(1, 'feat/b')
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let warned = false
+		await withStubbedWindow(
+			{ showWarningMessage: async () => { warned = true; return undefined } },
+			async () => {
+				await handlers.get('gitbraid.routeHunks')!(fakeUri)
+			},
+		)
+		assert.ok(warned, 'should warn about the partial failure')
+		assert.strictEqual(hunkAssignments.get(0), undefined, 'the applied hunk should be cleared')
+		assert.strictEqual(hunkAssignments.get(1), 'feat/b', 'the failed hunk must remain assigned so a retry doesn\'t re-apply hunk 0')
 	})
 })

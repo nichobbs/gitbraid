@@ -22,6 +22,7 @@ documents — update them as decisions are made and link from
 | [07-import-from-tools.md](07-import-from-tools.md) | RM-012 — import stacks from Graphite/git-spr/git-stack/GitButler | n/a | **Implementing** |
 | [08-virtual-branches.md](08-virtual-branches.md) | Virtual branches without a worktree each | GitButler | **Landed** |
 | [09-undo-log.md](09-undo-log.md) | Persistent undo across sessions | git-branchless, Sapling | **Implemented (replay supported)** |
+| [11-zero-worktree-virtual-branches.md](11-zero-worktree-virtual-branches.md) | Virtual branches that never get a worktree, even after committing | GitButler | **Design only — not scheduled** |
 
 ## Shared conventions
 

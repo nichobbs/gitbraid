@@ -6,6 +6,7 @@ import { ConfigService } from '../src/configService'
 import { BranchStackService } from '../src/branchStackService'
 import { RebaseSuggestionService } from '../src/rebaseSuggestionService'
 import { git } from '../src/gitFunctions'
+import { getDefaultGitRunner } from '../src/gitRunner'
 
 function wsRoot(): vscode.Uri {
 	return vscode.workspace.workspaceFolders![0].uri
@@ -132,6 +133,76 @@ suite('RebaseSuggestionService', function () {
 			svc.dispose()
 			svc = new RebaseSuggestionService(config, branchStack)
 		}
+	})
+
+	// ── predictConflict ───────────────────────────────────────────────────────
+	//
+	// These tests create real local branches directly via git (not through
+	// BranchStackService, which would try to give each one a worktree) so
+	// `merge-tree` has genuine divergent history to evaluate. `main` itself is
+	// never committed to directly — every seed commit happens on a throwaway
+	// `zpred/*` branch — so these tests can't leave `main` polluted for the
+	// rest of the suite (or other test files sharing this workspace).
+
+	suite('predictConflict', () => {
+		const wsRootPath = () => wsRoot().fsPath
+
+		async function runGit(args: string[]): Promise<void> {
+			const { exitCode, stderr } = await getDefaultGitRunner().run(args, { cwd: wsRootPath() })
+			if (exitCode !== 0) {
+				throw new Error(`git ${args.join(' ')} failed: ${stderr}`)
+			}
+		}
+
+		teardown(async () => {
+			await runGit(['checkout', 'main']).catch(() => undefined)
+			for (const name of ['zpred/root', 'zpred/base', 'zpred/conflict', 'zpred/clean']) {
+				await runGit(['branch', '-D', name]).catch(() => undefined)
+			}
+		})
+
+		test('reports no conflict for a purely additive branch', async () => {
+			await runGit(['checkout', '-b', 'zpred/clean'])
+			fs.writeFileSync(path.join(wsRootPath(), 'zpred-new-file.txt'), 'brand new file\n')
+			await git.add(undefined, 'zpred-new-file.txt')
+			await git.commit('zpred: add new file', '--no-gpg-sign')
+			await runGit(['checkout', 'main'])
+
+			const result = await svc.predictConflict(wsRootPath(), 'zpred/clean', 'main')
+			assert.strictEqual(result.supported, true)
+			assert.strictEqual(result.conflicted, false)
+		})
+
+		test('reports a conflict and names the file when two branches edit the same lines', async () => {
+			await runGit(['checkout', '-b', 'zpred/root'])
+			const file = path.join(wsRootPath(), 'zpred-file-b.txt')
+			fs.writeFileSync(file, 'line1\nline2\nline3\n')
+			await git.add(undefined, 'zpred-file-b.txt')
+			await git.commit('zpred: seed conflict file', '--no-gpg-sign')
+
+			await runGit(['checkout', '-b', 'zpred/conflict'])
+			fs.writeFileSync(file, 'line1\nCHANGED-BY-CONFLICT\nline3\n')
+			await git.add(undefined, 'zpred-file-b.txt')
+			await git.commit('zpred: conflicting edit on branch', '--no-gpg-sign')
+
+			await runGit(['checkout', 'zpred/root'])
+			await runGit(['checkout', '-b', 'zpred/base'])
+			fs.writeFileSync(file, 'line1\nCHANGED-ON-BASE\nline3\n')
+			await git.add(undefined, 'zpred-file-b.txt')
+			await git.commit('zpred: conflicting edit on base', '--no-gpg-sign')
+			await runGit(['checkout', 'main'])
+
+			const result = await svc.predictConflict(wsRootPath(), 'zpred/conflict', 'zpred/base')
+			assert.strictEqual(result.supported, true)
+			assert.strictEqual(result.conflicted, true)
+			assert.ok(result.files.some((f) => f.includes('zpred-file-b.txt')), `expected zpred-file-b.txt in ${JSON.stringify(result.files)}`)
+		})
+
+		test('reports unsupported (not a false negative) for a ref that does not resolve', async () => {
+			const result = await svc.predictConflict(wsRootPath(), 'main', 'zpred/does-not-exist')
+			assert.strictEqual(result.supported, false)
+			assert.strictEqual(result.conflicted, false)
+		})
 	})
 
 })

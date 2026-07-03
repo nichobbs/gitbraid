@@ -168,4 +168,65 @@ suite('StackCommands (T67)', () => {
 		assert.match(results[0].branch, /origin/)
 		assert.strictEqual(results[0].ok, false)
 	})
+
+	// ── syncStack: predicted-conflict pre-pass ───────────────────────────────
+
+	test('syncStack: a predicted conflict warns up front and aborts the whole run when declined', async () => {
+		await config.addBranch({ name: 'feature/dirty', base: 'main', color: '#4ec9b0' })
+		ensureDir(worktreePath(wsRoot(), 'feature/dirty').fsPath)
+		runner.fixture('fetch', { exitCode: 0 })
+		runner.fixture('rev-parse --verify', { exitCode: 0 })
+		runner.fixture('merge-tree --write-tree', {
+			exitCode: 1,
+			stdout: 'sometreeoid\nAuto-merging f.txt\nCONFLICT (content): Merge conflict in f.txt\n',
+		})
+		runner.fixture('rebase --autostash', { exitCode: 0 })
+
+		const win = vscode.window as unknown as { showWarningMessage: (...args: unknown[]) => Promise<unknown> }
+		const origWarnLocal = win.showWarningMessage
+		let warned = false
+		win.showWarningMessage = async () => { warned = true; return undefined /* user declines */ }
+		try {
+			const results = await cmds.syncStack()
+			assert.ok(warned, 'should have warned about the predicted conflict')
+			assert.strictEqual(results.length, 1)
+			assert.strictEqual(results[0].branch, '(sync)')
+			assert.strictEqual(results[0].ok, false)
+			assert.match(results[0].message ?? '', /predicted conflicts/)
+			assert.ok(
+				!runner.calls.some((c) => c.args[0] === 'rebase'),
+				'no rebase should run once the user declines',
+			)
+		} finally {
+			win.showWarningMessage = origWarnLocal
+		}
+	})
+
+	test('syncStack: proceeds with the rebase when the user continues past a predicted conflict', async () => {
+		await config.addBranch({ name: 'feature/dirty', base: 'main', color: '#4ec9b0' })
+		ensureDir(worktreePath(wsRoot(), 'feature/dirty').fsPath)
+		runner.fixture('fetch', { exitCode: 0 })
+		runner.fixture('rev-parse --verify', { exitCode: 0 })
+		runner.fixture('merge-tree --write-tree', {
+			exitCode: 1,
+			stdout: 'sometreeoid\nAuto-merging f.txt\nCONFLICT (content): Merge conflict in f.txt\n',
+		})
+		runner.fixture('rebase --autostash', { exitCode: 0 })
+
+		const win = vscode.window as unknown as { showWarningMessage: (...args: unknown[]) => Promise<unknown> }
+		const origWarnLocal = win.showWarningMessage
+		win.showWarningMessage = async () => 'Continue Anyway'
+		try {
+			const results = await cmds.syncStack()
+			const dirty = results.find((r) => r.branch === 'feature/dirty')
+			assert.ok(dirty, 'expected a result for feature/dirty')
+			assert.strictEqual(dirty!.ok, true)
+			assert.ok(
+				runner.calls.some((c) => c.args[0] === 'rebase' && c.args.includes('--autostash')),
+				'rebase should run once the user continues anyway',
+			)
+		} finally {
+			win.showWarningMessage = origWarnLocal
+		}
+	})
 })

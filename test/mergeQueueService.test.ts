@@ -171,6 +171,50 @@ suite('MergeQueueService', () => {
 		assert.ok(results[0].message?.includes('closed') || results[0].message?.includes('timed out'))
 	})
 
+	test('fails fast when a PR stops resolving instead of waiting out the full per-branch timeout', async () => {
+		await config.addBranch({ name: 'feature/a', base: 'main', color: '#abc' })
+		const clock = new FakeClock()
+		let pollCount = 0
+		const adapter: PRHostAdapter = {
+			name: 'vanishing',
+			async detect() { return true },
+			async listOpen() { return [] },
+			async getPR(branch: string) {
+				if (branch !== 'feature/a') return undefined
+				pollCount++
+				// The first call (mergeStack's pre-enqueue lookup) succeeds so
+				// enqueue goes ahead; every call after that — all from inside
+				// `_waitForMerge`'s poll loop — simulates the PR having been
+				// deleted, renamed, or force-pushed to a different branch.
+				return pollCount === 1
+					? { number: 300, url: 'u', state: 'open' as const, base: 'main', head: 'feature/a', title: 't', body: '' }
+					: undefined
+			},
+			async createPR(): Promise<PRMetadata> { throw new Error('not used') },
+			async updatePR(): Promise<PRMetadata> { throw new Error('not used') },
+			async enqueue() { return { position: 1 } },
+			async dequeue() { /* no-op */ },
+			async queueStatus() { return { inQueue: true } },
+		}
+		const svc = new MergeQueueService(config, adapter, clock)
+		// A deliberately long timeout — the assertion below is that we bail
+		// out long before it elapses, not that we ever hit it.
+		const done = svc.mergeStack({ pollIntervalMs: 1_000, perBranchTimeoutMs: 30 * 60_000 })
+		for (let i = 0; i < 10; i++) {
+			await Promise.resolve()
+			await clock.tick(1_000)
+		}
+		const results = await done
+
+		assert.strictEqual(results.length, 1)
+		assert.strictEqual(results[0].ok, false)
+		assert.ok(results[0].message?.includes('not found'), `expected a not-found message, got: ${String(results[0].message)}`)
+		// 1 pre-enqueue lookup + a handful of poll misses before giving up —
+		// nowhere near the 10 polls the fake clock was driven through above,
+		// which is what "waited out the full timeout" would look like.
+		assert.ok(pollCount <= 5, `expected to bail out after a few misses, but getPR was called ${String(pollCount)} times`)
+	})
+
 	test('skips branches with no PR and reports why', async () => {
 		await config.addBranch({ name: 'feature/x', base: 'main', color: '#abc' })
 		const clock = new FakeClock()

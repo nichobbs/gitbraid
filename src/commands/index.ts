@@ -6,6 +6,7 @@ import { registerBranchCommands } from './branchCommands'
 import { registerScmCommands } from './scmCommands'
 import { registerPrCommands } from './prCommands'
 import { registerVirtualBranchCommands } from './virtualBranchCommands'
+import { registerDoctorCommand } from './doctorCommand'
 import type { CommandDeps } from './types'
 
 export type { CommandDeps }
@@ -22,5 +23,6 @@ export function registerAllCommands(
 		...registerVirtualBranchCommands(deps),
 		...registerScmCommands(deps),
 		...registerPrCommands(deps, secrets),
+		...registerDoctorCommand(deps),
 	]
 }

@@ -279,4 +279,49 @@ suite('VirtualBranchStore', () => {
 		assert.strictEqual(store.listFiles('b').length, 4)
 	})
 
+	// ─── withBranchLock / flushAndRemoveLocked (materialisation race) ───────
+	//
+	// Regression coverage for the race where a save landing between
+	// materialiseBranch's old snapshot step and its separate removeBranch
+	// call could be silently discarded. `withBranchLock` lets a multi-step
+	// caller hold the branch's write mutex across both steps so a concurrent
+	// `writeFile` either completes fully before the flush (captured) or is
+	// forced to queue until after it releases (never interleaved).
+
+	test('writeFile queued behind a held withBranchLock does not run until the lock releases', async () => {
+		await store.writeFile('b', 'a.ts', bytes('before'))
+
+		let releaseHold: () => void = () => { /* replaced below */ }
+		const held = new Promise<void>((resolve) => { releaseHold = resolve })
+		let flushedFiles: string[] | undefined
+
+		const worktreeDir = path.join(root.fsPath, 'wt-b')
+		const locked = store.withBranchLock('b', async () => {
+			flushedFiles = await store.flushAndRemoveLocked('b', worktreeDir)
+			await held
+		})
+
+		// Issued while the lock above is held — must queue, not interleave.
+		const queuedWrite = store.writeFile('b', 'b.ts', bytes('after'))
+
+		await new Promise((r) => setImmediate(r))
+		assert.strictEqual(
+			store.hasFile('b', 'b.ts'), false,
+			'the queued write must not land while the lock is still held',
+		)
+
+		releaseHold()
+		await locked
+		await queuedWrite
+
+		assert.deepStrictEqual(flushedFiles, ['a.ts'], 'only the pre-lock write should be in the flush snapshot')
+		assert.strictEqual(toString(fs.readFileSync(path.join(worktreeDir, 'a.ts'))), 'before', 'flush wrote the snapshotted file to the worktree dir')
+		// The queued write landed *after* flushAndRemoveLocked, into a freshly
+		// recreated state — this is exactly the case `WorkspaceSync` avoids by
+		// re-checking `isVirtual()` inside the same lock before ever calling
+		// `writeFileLocked`, routing to the worktree sync instead once the
+		// branch has been materialised.
+		assert.strictEqual(toString(store.readFile('b', 'b.ts')), 'after')
+	})
+
 })
