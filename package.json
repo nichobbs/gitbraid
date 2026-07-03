@@ -300,6 +300,12 @@
 				"icon": "$(filter)"
 			},
 			{
+				"command": "gitbraid.runDoctor",
+				"title": "Run Doctor (Health Check)",
+				"category": "GitBraid",
+				"icon": "$(pulse)"
+			},
+			{
 				"command": "gitbraid.saveCheckpoint",
 				"title": "Save Stack Checkpoint",
 				"category": "GitBraid",
