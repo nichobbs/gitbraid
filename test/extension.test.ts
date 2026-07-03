@@ -78,6 +78,8 @@ suite('extension: registered commands', function () {
 		'gitbraid.unassignHunk',
 		'gitbraid.openResolvedAtTop',
 		'gitbraid.showStackDiff',
+		'gitbraid.openStackDiff',
+		'gitbraid.previewRouting',
 		'gitbraid.routeHunks',
 		'gitbraid.assignFile',
 		'gitbraid.unassignFile',
