@@ -524,6 +524,119 @@ suite('GitLabAdapter (REST)', () => {
 		assert.ok(call, 'expected a remote.origin.url lookup')
 		assert.strictEqual(call!.cwd, '/tmp')
 	})
+
+	test('getPR: filters merge_requests by source_branch and returns the first match', async () => {
+		recorder.on({
+			url: /merge_requests\?state=opened&source_branch=feature%2Fx/,
+			respond: () => ([
+				{ iid: 9, web_url: 'u', state: 'opened', title: 'feat: x', description: 'd', source_branch: 'feature/x', target_branch: 'main' },
+			]),
+		})
+		const pr = await adapter.getPR('feature/x')
+		assert.strictEqual(pr?.number, 9)
+		assert.strictEqual(pr?.head, 'feature/x')
+	})
+
+	test('getPR: undefined when no merge request matches', async () => {
+		recorder.on({ url: /merge_requests\?state=opened&source_branch=/, respond: () => ([]) })
+		const pr = await adapter.getPR('feature/none')
+		assert.strictEqual(pr, undefined)
+	})
+
+	test('createPR: POSTs merge_requests with source/target branch and parses response', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /merge_requests$/,
+			method: 'POST',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return {
+					iid: 55, web_url: 'https://gitlab.com/group/proj/-/merge_requests/55', state: 'opened',
+					title: bodySeen.title, description: bodySeen.description,
+					source_branch: bodySeen.source_branch, target_branch: bodySeen.target_branch,
+				}
+			},
+		})
+		const mr = await adapter.createPR({ title: 't', body: 'b', head: 'feature/x', base: 'main', draft: false })
+		assert.strictEqual(mr.number, 55)
+		assert.strictEqual(bodySeen?.source_branch, 'feature/x')
+		assert.strictEqual(bodySeen?.target_branch, 'main')
+		assert.strictEqual(bodySeen?.title, 't')
+	})
+
+	test('createPR: draft prefixes the title with "Draft:"', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /merge_requests$/,
+			method: 'POST',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return { iid: 56, web_url: 'u', state: 'opened', title: bodySeen.title, description: '', source_branch: 'feature/x', target_branch: 'main' }
+			},
+		})
+		await adapter.createPR({ title: 'my change', body: '', head: 'feature/x', base: 'main', draft: true })
+		assert.strictEqual(bodySeen?.title, 'Draft: my change')
+	})
+
+	test('updatePR: PUTs only the provided fields', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /merge_requests\/7$/,
+			method: 'PUT',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return { iid: 7, web_url: 'u', state: 'opened', title: bodySeen.title ?? 't', description: '', source_branch: 'feature/x', target_branch: bodySeen.target_branch ?? 'main' }
+			},
+		})
+		await adapter.updatePR(7, { title: 'new title', base: 'develop' })
+		assert.strictEqual(bodySeen?.title, 'new title')
+		assert.strictEqual(bodySeen?.target_branch, 'develop')
+		assert.ok(!('description' in (bodySeen ?? {})))
+	})
+
+	test('enqueue: PUTs merge_when_pipeline_succeeds and returns position 1', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /merge_requests\/7\/merge$/,
+			method: 'PUT',
+			respond: ({ body }) => { bodySeen = body as Record<string, unknown>; return {} },
+		})
+		const result = await adapter.enqueue(7)
+		assert.deepStrictEqual(result, { position: 1 })
+		assert.strictEqual(bodySeen?.merge_when_pipeline_succeeds, true)
+	})
+
+	test('dequeue: POSTs cancel_merge_when_pipeline_succeeds', async () => {
+		recorder.on({ url: /merge_requests\/7\/cancel_merge_when_pipeline_succeeds$/, method: 'POST', respond: () => ({}) })
+		await adapter.dequeue(7)
+		assert.strictEqual(recorder.calls.length, 1)
+	})
+
+	test('queueStatus: reports inQueue + checksStatus from the merge request payload', async () => {
+		recorder.on({
+			url: /merge_requests\/7$/,
+			respond: () => ({
+				merge_when_pipeline_succeeds: true,
+				state: 'opened',
+				head_pipeline: { status: 'running' },
+			}),
+		})
+		const status = await adapter.queueStatus(7)
+		assert.strictEqual(status.inQueue, true)
+		assert.strictEqual(status.position, 1)
+		assert.strictEqual(status.checksStatus, 'pending')
+	})
+
+	test('queueStatus: swallows errors and reports not-in-queue', async () => {
+		recorder.on({ url: /merge_requests\/7$/, respond: () => ({ message: 'boom' }), status: 500 })
+		const status = await adapter.queueStatus(7)
+		assert.deepStrictEqual(status, { inQueue: false })
+	})
+
+	test('listOpen: throws on HTTP error', async () => {
+		recorder.on({ url: /merge_requests/, respond: () => ({ message: 'bad creds' }), status: 401 })
+		await assert.rejects(() => adapter.listOpen(), /authentication failed \(401\)/)
+	})
 })
 
 // ─── BitbucketAdapter ────────────────────────────────────────────────────────
@@ -597,6 +710,96 @@ suite('BitbucketAdapter (REST)', () => {
 		const call = runner.calls.find((c) => c.args.join(' ').startsWith('config --get remote.origin.url'))
 		assert.ok(call, 'expected a remote.origin.url lookup')
 		assert.strictEqual(call!.cwd, '/tmp')
+	})
+
+	test('getPR: finds the matching PR via listOpen', async () => {
+		recorder.on({
+			url: /pullrequests/,
+			respond: () => ({
+				values: [{
+					id: 5, state: 'OPEN', title: 'feat: a', description: 'd',
+					source: { branch: { name: 'feature/x' } }, destination: { branch: { name: 'main' } },
+					links: { html: { href: 'https://bb/5' } },
+				}],
+			}),
+		})
+		const pr = await adapter.getPR('feature/x')
+		assert.strictEqual(pr?.number, 5)
+	})
+
+	test('createPR: POSTs pullrequests with source/destination and parses response', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /pullrequests$/,
+			method: 'POST',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return {
+					id: 77, state: 'OPEN', title: bodySeen.title, description: bodySeen.description,
+					source: { branch: { name: 'feature/x' } }, destination: { branch: { name: 'main' } },
+					links: { html: { href: 'https://bb/77' } },
+				}
+			},
+		})
+		const pr = await adapter.createPR({ title: 't', body: 'b', head: 'feature/x', base: 'main', draft: false })
+		assert.strictEqual(pr.number, 77)
+		assert.deepStrictEqual(bodySeen?.source, { branch: { name: 'feature/x' } })
+		assert.deepStrictEqual(bodySeen?.destination, { branch: { name: 'main' } })
+	})
+
+	test('createPR: draft prefixes the title with "Draft:"', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /pullrequests$/,
+			method: 'POST',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return { id: 78, state: 'OPEN', title: bodySeen.title, description: '', source: { branch: { name: 'feature/x' } }, destination: { branch: { name: 'main' } }, links: { html: { href: 'u' } } }
+			},
+		})
+		await adapter.createPR({ title: 'my change', body: '', head: 'feature/x', base: 'main', draft: true })
+		assert.strictEqual(bodySeen?.title, 'Draft: my change')
+	})
+
+	test('updatePR: PUTs only the provided fields', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /pullrequests\/7$/,
+			method: 'PUT',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return {
+					id: 7, state: 'OPEN', title: bodySeen.title ?? 't', description: '',
+					source: { branch: { name: 'feature/x' } },
+					destination: (bodySeen.destination as { branch?: { name?: string } } | undefined) ?? { branch: { name: 'main' } },
+					links: { html: { href: 'u' } },
+				}
+			},
+		})
+		await adapter.updatePR(7, { title: 'new title', base: 'develop' })
+		assert.strictEqual(bodySeen?.title, 'new title')
+		assert.deepStrictEqual(bodySeen?.destination, { branch: { name: 'develop' } })
+		assert.ok(!('description' in (bodySeen ?? {})))
+	})
+
+	test('enqueue: throws an actionable error — Bitbucket Cloud has no merge queue API', async () => {
+		await assert.rejects(() => adapter.enqueue(7), /does not expose a merge queue/)
+		assert.strictEqual(recorder.calls.length, 0, 'must not make a network call for an unsupported operation')
+	})
+
+	test('dequeue: throws an actionable error', async () => {
+		await assert.rejects(() => adapter.dequeue(7), /no merge queue to dequeue/)
+	})
+
+	test('queueStatus: always reports not-in-queue', async () => {
+		const status = await adapter.queueStatus(7)
+		assert.deepStrictEqual(status, { inQueue: false })
+		assert.strictEqual(recorder.calls.length, 0, 'queueStatus is a pure stub — no network call expected')
+	})
+
+	test('listOpen: throws on HTTP error', async () => {
+		recorder.on({ url: /pullrequests/, respond: () => ({ error: { message: 'bad creds' } }), status: 401 })
+		await assert.rejects(() => adapter.listOpen(), /authentication failed \(401\)/)
 	})
 })
 
@@ -674,6 +877,81 @@ suite('AzureDevOpsAdapter (REST)', () => {
 		const call = runner.calls.find((c) => c.args.join(' ').startsWith('config --get remote.origin.url'))
 		assert.ok(call, 'expected a remote.origin.url lookup')
 		assert.strictEqual(call!.cwd, '/tmp')
+	})
+
+	test('getPR: finds the matching PR via listOpen', async () => {
+		recorder.on({
+			url: /pullrequests/,
+			respond: () => ({
+				value: [{
+					pullRequestId: 11, sourceRefName: 'refs/heads/feature/x', targetRefName: 'refs/heads/main',
+					title: 'feat: a', description: 'd', status: 'active', _links: { web: { href: 'https://ado/11' } },
+				}],
+			}),
+		})
+		const pr = await adapter.getPR('feature/x')
+		assert.strictEqual(pr?.number, 11)
+	})
+
+	test('createPR: POSTs pullrequests with full ref names and parses response', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /pullrequests\?api-version/,
+			method: 'POST',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return {
+					pullRequestId: 21, sourceRefName: bodySeen.sourceRefName, targetRefName: bodySeen.targetRefName,
+					title: bodySeen.title, description: bodySeen.description, status: 'active',
+					_links: { web: { href: 'https://ado/21' } },
+				}
+			},
+		})
+		const pr = await adapter.createPR({ title: 't', body: 'b', head: 'feature/x', base: 'main', draft: true })
+		assert.strictEqual(pr.number, 21)
+		assert.strictEqual(bodySeen?.sourceRefName, 'refs/heads/feature/x')
+		assert.strictEqual(bodySeen?.targetRefName, 'refs/heads/main')
+		assert.strictEqual(bodySeen?.isDraft, true)
+	})
+
+	test('updatePR: PATCHes only the provided fields', async () => {
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /pullrequests\/7\?api-version/,
+			method: 'PATCH',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return {
+					pullRequestId: 7, sourceRefName: 'refs/heads/feature/x',
+					targetRefName: bodySeen.targetRefName ?? 'refs/heads/main',
+					title: bodySeen.title ?? 't', description: '', status: 'active', _links: { web: { href: 'u' } },
+				}
+			},
+		})
+		await adapter.updatePR(7, { title: 'new title', base: 'develop' })
+		assert.strictEqual(bodySeen?.title, 'new title')
+		assert.strictEqual(bodySeen?.targetRefName, 'refs/heads/develop')
+		assert.ok(!('description' in (bodySeen ?? {})))
+	})
+
+	test('enqueue: throws an actionable error — Azure DevOps has no merge queue API', async () => {
+		await assert.rejects(() => adapter.enqueue(7), /has no native merge queue API/)
+		assert.strictEqual(recorder.calls.length, 0, 'must not make a network call for an unsupported operation')
+	})
+
+	test('dequeue: throws an actionable error', async () => {
+		await assert.rejects(() => adapter.dequeue(7), /no merge queue to dequeue/)
+	})
+
+	test('queueStatus: always reports not-in-queue', async () => {
+		const status = await adapter.queueStatus(7)
+		assert.deepStrictEqual(status, { inQueue: false })
+		assert.strictEqual(recorder.calls.length, 0, 'queueStatus is a pure stub — no network call expected')
+	})
+
+	test('listOpen: throws on HTTP error', async () => {
+		recorder.on({ url: /pullrequests/, respond: () => ({ message: 'bad creds' }), status: 401 })
+		await assert.rejects(() => adapter.listOpen(), /authentication failed \(401\)/)
 	})
 })
 
