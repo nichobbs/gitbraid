@@ -31,7 +31,11 @@ suite('stackResolver', () => {
 	})
 
 	suiteTeardown('remove temp repo', () => {
-		node_fs.rmSync(tmpDir, { recursive: true, force: true })
+		// Windows CI intermittently holds a handle on `.git` just after the
+		// process exits (AV scanning / delayed file-lock release), which
+		// rmSync surfaces as EPERM. maxRetries/retryDelay are Node's built-in
+		// backoff for exactly this class of transient Windows lock error.
+		node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 	})
 
 	test('sr.1 - git show retrieves file content', async () => {
@@ -85,7 +89,7 @@ suite('rebaseSuggestionService', () => {
 	})
 
 	suiteTeardown('remove temp repo', () => {
-		node_fs.rmSync(tmpDir, { recursive: true, force: true })
+		node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 	})
 
 	test('rs.1 - rev-list count zero when equal', async () => {

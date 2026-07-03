@@ -73,7 +73,11 @@ suite('RebaseRecovery (T70)', () => {
 		// Simulate `git worktree add` layout: repo.root/.git is a FILE
 		// pointing at repo.root/_real_gitdir/rebase-merge/.
 		const dotgit = path.join(repo.root, '.git')
-		fs.rmSync(dotgit, { recursive: true, force: true })
+		// Windows CI intermittently holds a handle on a just-`git init`ed
+		// `.git` dir (AV scanning / delayed lock release), which rmSync
+		// surfaces as EPERM. maxRetries/retryDelay are Node's built-in
+		// backoff for exactly this class of transient Windows lock error.
+		fs.rmSync(dotgit, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 		const realGitDir = path.join(repo.root, '_real_gitdir')
 		fs.mkdirSync(path.join(realGitDir, 'rebase-merge'), { recursive: true })
 		fs.writeFileSync(dotgit, `gitdir: ${realGitDir}\n`)

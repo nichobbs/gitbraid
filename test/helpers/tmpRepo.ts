@@ -56,7 +56,10 @@ export class TmpRepo {
 	/** Remove the tmp directory.  Safe to call multiple times. */
 	dispose(): void {
 		try {
-			fs.rmSync(this.root, { recursive: true, force: true })
+			// maxRetries/retryDelay ride out the transient EPERM/EBUSY Windows
+			// throws when AV scanning or a lingering handle briefly holds
+			// `.git` open right after a git process exits.
+			fs.rmSync(this.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 		} catch {
 			// Ignore cleanup failures in CI — the OS will reclaim /tmp.
 		}
