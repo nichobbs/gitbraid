@@ -6,13 +6,10 @@ import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 
 /** LRU cap on the DiffEngine hunk cache. */
 const HUNK_CACHE_MAX = 32
-/** Minimum time (ms) a cache entry is trusted without a stat check. */
-const HUNK_CACHE_TTL_MS = 1_500
 
 interface CachedHunks {
 	hunks: DiffHunk[]
 	mtimeMs: number
-	stampedAt: number
 }
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -158,20 +155,18 @@ export class DiffEngine {
 		const cacheKey = `${wsRoot}::${safe}`
 		const absPath = path.join(wsRoot, safe)
 		const cached = this._hunkCache.get(cacheKey)
-		const now = Date.now()
 
-		// Cache hit if the entry is recent AND the on-disk mtime matches.
-		// Quick TTL short-circuits the stat call when the cache was just filled.
+		// Cache hit only if the on-disk mtime still matches what we cached.
+		// The mtime check always runs on every call — a stat() is cheap
+		// enough that skipping it for a short window after the cache was
+		// filled isn't worth the risk of serving stale hunks (and therefore
+		// misrouting a patch) to a save that lands soon after the previous
+		// one, which happens routinely with format-on-save or a quick
+		// follow-up edit.
 		if (cached) {
-			if (now - cached.stampedAt < HUNK_CACHE_TTL_MS) {
-				this._hunkCache.delete(cacheKey)
-				this._hunkCache.set(cacheKey, cached)
-				return cached.hunks
-			}
 			try {
 				const st = await fsp.stat(absPath)
 				if (st.mtimeMs === cached.mtimeMs) {
-					cached.stampedAt = now
 					this._hunkCache.delete(cacheKey)
 					this._hunkCache.set(cacheKey, cached)
 					return cached.hunks
@@ -197,7 +192,7 @@ export class DiffEngine {
 			const oldest = this._hunkCache.keys().next().value
 			if (oldest !== undefined) this._hunkCache.delete(oldest)
 		}
-		this._hunkCache.set(cacheKey, { hunks, mtimeMs, stampedAt: now })
+		this._hunkCache.set(cacheKey, { hunks, mtimeMs })
 		return hunks
 	}
 

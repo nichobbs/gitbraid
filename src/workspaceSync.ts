@@ -450,9 +450,29 @@ export class WorkspaceSync implements vscode.Disposable {
 		// copying to a worktree.  The primary workspace keeps the edit so the
 		// cumulative view stays intact.
 		if (this._virtualStore && this._config.isVirtual(branch)) {
+			const virtualStore = this._virtualStore
 			try {
-				const content = await vscode.workspace.fs.readFile(uri)
-				await this._virtualStore.writeFile(branch, relativePath, content)
+				// Acquire the branch's write lock and re-check `isVirtual` inside
+				// it before writing.  `BranchStackService.materialiseBranch`
+				// flushes the store and flips this same flag under the same
+				// lock, so if materialisation raced ahead of us while we
+				// waited, we're guaranteed to observe the flip here instead of
+				// writing into a store that's about to be (or was just)
+				// discarded — closing the race that could otherwise silently
+				// drop this edit.
+				let materialisedDuringWait = false
+				await virtualStore.withBranchLock(branch, async () => {
+					if (!this._config.isVirtual(branch)) {
+						materialisedDuringWait = true
+						return
+					}
+					const content = await vscode.workspace.fs.readFile(uri)
+					await virtualStore.writeFileLocked(branch, relativePath, content)
+				})
+				if (materialisedDuringWait) {
+					await this._syncFile(relativePath, uri, branch)
+					return
+				}
 				log.info(`WorkspaceSync: captured ${relativePath} → ${branch} (virtual)`)
 				this._onDidSyncFile.fire({ relativePath: normKey, branch })
 			} catch (e) {

@@ -6,6 +6,7 @@ import { ConfigService } from '../src/configService'
 import { WorkspaceSync } from '../src/workspaceSync'
 import { git } from '../src/gitFunctions'
 import { branchToWorktreeDirName } from '../src/branchStackService'
+import { VirtualBranchStore } from '../src/virtualBranchStore'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -239,5 +240,91 @@ suite('WorkspaceSync', function () {
 
 		// If the worktrees dir is excluded, no extra sync fires
 		assert.strictEqual(syncCount, 0)
+	})
+})
+
+// ─── Suite: virtual-branch save vs. materialisation race ────────────────────
+//
+// Regression coverage for the race where a save landing while
+// BranchStackService.materialiseBranch is flushing the virtual store and
+// flipping `isVirtual` could be silently dropped: the save's `isVirtual()`
+// check happened before the write, and by the time the write actually ran
+// the branch could already have been materialised out from under it. The
+// fix has `_handleSave` re-check `isVirtual()` inside the *same* per-branch
+// lock that materialisation now holds across its flush + flag flip.
+
+suite('WorkspaceSync — virtual branch save vs. materialise race', () => {
+	let config: ConfigService
+	let store: VirtualBranchStore
+	let sync: WorkspaceSync
+	const branchName = 'feature/virt-race'
+
+	function worktreeRoot(): string {
+		return path.join(wsRoot().fsPath, '.worktrees', branchToWorktreeDirName(branchName))
+	}
+
+	suiteSetup(async () => {
+		try { await git.init() } catch { /* already a repo */ }
+		try { await git.add(undefined, '.gitkeep') } catch { /* already tracked */ }
+		try { await git.commit('initial commit', '--no-gpg-sign') } catch { /* nothing to commit */ }
+	})
+
+	setup(async () => {
+		cleanup()
+		config = new ConfigService()
+		await config.load(wsRoot())
+		store = new VirtualBranchStore()
+		await store.load(wsRoot(), [])
+		await config.addBranch({ name: branchName, base: 'main', color: '#4CAF50', virtual: true })
+		sync = new WorkspaceSync(config, store)
+		sync.init(wsRoot())
+	})
+
+	teardown(() => {
+		sync.dispose()
+		store.dispose()
+		config.dispose()
+		cleanup()
+	})
+
+	test('a save queued behind an in-flight materialise re-checks isVirtual and syncs to the worktree ' +
+		'instead of writing into the store that is being flushed/removed', async () => {
+		await config.setAssignment('src/race.ts', branchName)
+		const uri = await writeWorkspaceFile('src/race.ts', 'const race = 1')
+
+		// Pretend BranchStackService.materialiseBranch's step 1 (git worktree
+		// add) already completed — the worktree dir exists on disk.
+		fs.mkdirSync(worktreeRoot(), { recursive: true })
+
+		let releaseHold: () => void = () => { /* replaced below */ }
+		const held = new Promise<void>((resolve) => { releaseHold = resolve })
+
+		// Simulate materialiseBranch's locked steps 2+3: hold the branch's
+		// write lock, then flip `isVirtual` off — mirroring
+		// BranchStackService.materialiseBranch's withBranchLock callback.
+		const materialise = store.withBranchLock(branchName, async () => {
+			await held
+			await config.setVirtual(branchName, false)
+		})
+
+		// Let the lock-acquisition above actually register as "held" before
+		// queuing the save behind it.
+		await new Promise((r) => setImmediate(r))
+
+		const save = (sync as unknown as {
+			_handleSave: (relativePath: string, uri: vscode.Uri) => Promise<void>
+		})._handleSave('src/race.ts', uri)
+
+		releaseHold()
+		await materialise
+		await save
+
+		const destPath = path.join(worktreeRoot(), 'src', 'race.ts')
+		assert.ok(fs.existsSync(destPath), 'edit should have synced to the worktree once isVirtual flipped')
+		assert.strictEqual(fs.readFileSync(destPath, 'utf-8'), 'const race = 1')
+		assert.strictEqual(
+			store.readFile(branchName, 'src/race.ts'), undefined,
+			'must not have been written into the virtual store being torn down',
+		)
 	})
 })

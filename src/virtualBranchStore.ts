@@ -56,9 +56,12 @@ export class VirtualBranchStore implements vscode.Disposable {
 	private readonly _appendCount = new Map<string, number>()
 	/**
 	 * Branch-scoped write mutex.  Ensures concurrent `writeFile` / `deleteFile`
-	 * calls for the same branch don't interleave appendFile/compact operations.
+	 * calls for the same branch don't interleave appendFile/compact operations,
+	 * and — via the public `withBranchLock` — lets a multi-step coordinated
+	 * operation spanning this store and another service (materialisation)
+	 * serialise against them too. See `withBranchLock`.
 	 */
-	private readonly _writeLocks = new Map<string, Promise<void>>()
+	private readonly _writeLocks = new Map<string, Promise<unknown>>()
 	private _loaded = false
 
 	dispose(): void {
@@ -140,20 +143,30 @@ export class VirtualBranchStore implements vscode.Disposable {
 
 	/** Record that `relativePath` has content `content` on `branch`. */
 	async writeFile(branch: string, relativePath: string, content: Uint8Array): Promise<void> {
+		await this._withLock(branch, () => this.writeFileLocked(branch, relativePath, content))
+	}
+
+	/**
+	 * Same as `writeFile`, but does not acquire the branch lock itself — the
+	 * caller MUST already hold it via `withBranchLock`.  Used by
+	 * `WorkspaceSync` to re-check `isVirtual()` and write atomically with
+	 * respect to `BranchStackService.materialiseBranch`'s flush, closing the
+	 * race where a save lands between the store snapshot and its removal
+	 * (see `withBranchLock` and `flushAndRemoveLocked`).
+	 */
+	async writeFileLocked(branch: string, relativePath: string, content: Uint8Array): Promise<void> {
 		if (content.byteLength > MAX_FILE_BYTES) {
 			log.warn(`VirtualBranchStore: skipping ${relativePath} on "${branch}" (${String(content.byteLength)} bytes > ${String(MAX_FILE_BYTES)})`)
 			return
 		}
-		await this._withLock(branch, async () => {
-			const key = normalisePath(relativePath)
-			const state = this._stateFor(branch)
-			state.files.set(key, content)
-			state.deleted.delete(key)
-			await this._appendEntry(branch, {
-				path: key,
-				contentBase64: Buffer.from(content).toString('base64'),
-				ts: Date.now(),
-			})
+		const key = normalisePath(relativePath)
+		const state = this._stateFor(branch)
+		state.files.set(key, content)
+		state.deleted.delete(key)
+		await this._appendEntry(branch, {
+			path: key,
+			contentBase64: Buffer.from(content).toString('base64'),
+			ts: Date.now(),
 		})
 	}
 
@@ -174,6 +187,50 @@ export class VirtualBranchStore implements vscode.Disposable {
 
 	/** Drop every entry for `branch` from memory AND disk. */
 	async removeBranch(branch: string): Promise<void> {
+		await this._withLock(branch, () => this._removeBranchLocked(branch))
+	}
+
+	/**
+	 * Acquire the branch-scoped write lock and run `task` while holding it.
+	 *
+	 * Exposed so a multi-step operation spanning this store and another
+	 * service — namely `BranchStackService.materialiseBranch`, which flushes
+	 * the store into a new worktree and then flips `ConfigService`'s
+	 * `virtual` flag — can serialise against `writeFile`/`deleteFile`/
+	 * `removeBranch` for the same branch instead of racing them. Pair with
+	 * `flushAndRemoveLocked` / `writeFileLocked` inside the callback.
+	 */
+	async withBranchLock<T>(branch: string, task: () => Promise<T>): Promise<T> {
+		return this._withLock(branch, task)
+	}
+
+	/**
+	 * Copy every tracked file for `branch` into `worktreeDir`, then drop the
+	 * branch's in-memory state and on-disk log. Caller MUST already hold the
+	 * branch's write lock via `withBranchLock`.
+	 *
+	 * This exists so `materialiseBranch` can snapshot-and-remove atomically:
+	 * a `writeFile`/`deleteFile` call already queued on the same lock is
+	 * guaranteed to run either fully before this snapshot (captured) or
+	 * fully after it (queued behind it), never interleaved with it — closing
+	 * the race where a concurrent save lands between the old snapshot step
+	 * and the old separate `removeBranch` call and is silently discarded.
+	 */
+	async flushAndRemoveLocked(branch: string, worktreeDir: string): Promise<string[]> {
+		const state = this._state.get(branch)
+		const files = state ? [...state.files.keys()] : []
+		if (state) {
+			for (const [rel, content] of state.files) {
+				const dest = path.join(worktreeDir, rel)
+				await fs.promises.mkdir(path.dirname(dest), { recursive: true })
+				await fs.promises.writeFile(dest, Buffer.from(content))
+			}
+		}
+		await this._removeBranchLocked(branch)
+		return files
+	}
+
+	private async _removeBranchLocked(branch: string): Promise<void> {
 		this._state.delete(branch)
 		this._appendCount.delete(branch)
 		const filePath = this._fileForBranch(branch)
@@ -218,11 +275,11 @@ export class VirtualBranchStore implements vscode.Disposable {
 		return state
 	}
 
-	private async _withLock(branch: string, task: () => Promise<void>): Promise<void> {
+	private async _withLock<T>(branch: string, task: () => Promise<T>): Promise<T> {
 		const prev = this._writeLocks.get(branch) ?? Promise.resolve()
 		const next = prev.then(task, task)
 		this._writeLocks.set(branch, next.catch(() => undefined))
-		await next
+		return next
 	}
 
 	private async _appendEntry(branch: string, entry: VirtualFileEntry): Promise<void> {
