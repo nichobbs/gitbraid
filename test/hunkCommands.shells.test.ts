@@ -64,6 +64,7 @@ function makeDeps(
 		undoStack: { push: () => undefined },
 		hunkRouter: {
 			routeFile: async () => routeFileResult,
+			buildPatch: (hunks: unknown[]) => `<patch for ${String(hunks.length)} hunk(s)>`,
 		},
 		stackResolver: {
 			getStackDiff: async () => undefined,
@@ -295,5 +296,173 @@ suite('hunkCommands shell coverage (direct-import)', () => {
 		assert.ok(warned, 'should warn about the partial failure')
 		assert.strictEqual(hunkAssignments.get(0), undefined, 'the applied hunk should be cleared')
 		assert.strictEqual(hunkAssignments.get(1), 'feat/b', 'the failed hunk must remain assigned so a retry doesn\'t re-apply hunk 0')
+	})
+
+	// ─── openStackDiff ───────────────────────────────────────────────────────
+
+	test('openStackDiff: no editor and no arg → warning, no diff opened', async () => {
+		const { deps } = makeDeps()
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let opened = false
+		const orig = vscode.commands.executeCommand
+		;(vscode.commands as unknown as { executeCommand: unknown }).executeCommand = async (cmd: string) => {
+			if (cmd === 'vscode.diff') opened = true
+			return undefined
+		}
+		try {
+			let warned = false
+			await withStubbedWindow(
+				{ showWarningMessage: async () => { warned = true; return undefined } },
+				async () => {
+					await handlers.get('gitbraid.openStackDiff')!()
+				},
+			)
+			assert.ok(warned)
+			assert.strictEqual(opened, false)
+		} finally {
+			;(vscode.commands as unknown as { executeCommand: unknown }).executeCommand = orig
+		}
+	})
+
+	test('openStackDiff: empty stack → info, no diff opened', async () => {
+		const { deps } = makeDeps()
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let infoed = false
+		let opened = false
+		const orig = vscode.commands.executeCommand
+		;(vscode.commands as unknown as { executeCommand: unknown }).executeCommand = async (cmd: string) => {
+			if (cmd === 'vscode.diff') opened = true
+			return undefined
+		}
+		try {
+			await withStubbedWindow(
+				{ showInformationMessage: async () => { infoed = true; return undefined } },
+				async () => {
+					await handlers.get('gitbraid.openStackDiff')!(fakeUri)
+				},
+			)
+			assert.ok(infoed)
+			assert.strictEqual(opened, false)
+		} finally {
+			;(vscode.commands as unknown as { executeCommand: unknown }).executeCommand = orig
+		}
+	})
+
+	test('openStackDiff: with a stack → opens vscode.diff against the bottom branch\'s base', async () => {
+		const stack = [entry('feat/a', 1), entry('feat/b', 2)]
+		const { deps } = makeDeps(stack)
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let diffArgs: unknown[] | undefined
+		const orig = vscode.commands.executeCommand
+		;(vscode.commands as unknown as { executeCommand: unknown }).executeCommand =
+			async (cmd: string, ...args: unknown[]) => {
+				if (cmd === 'vscode.diff') diffArgs = args
+				return undefined
+			}
+		try {
+			await handlers.get('gitbraid.openStackDiff')!(fakeUri)
+		} finally {
+			;(vscode.commands as unknown as { executeCommand: unknown }).executeCommand = orig
+		}
+		assert.ok(diffArgs, 'vscode.diff should have been called')
+		assert.strictEqual((diffArgs![2] as string).includes('main'), true, 'title should reference the bottom branch\'s base')
+	})
+
+	// ─── previewRouting ──────────────────────────────────────────────────────
+
+	test('previewRouting: no editor → warning', async () => {
+		const { deps } = makeDeps()
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let warned = false
+		await withStubbedWindow(
+			{ showWarningMessage: async () => { warned = true; return undefined } },
+			async () => {
+				await handlers.get('gitbraid.previewRouting')!()
+			},
+		)
+		assert.ok(warned)
+	})
+
+	test('previewRouting: no hunk assignments → info, no document opened', async () => {
+		const { deps } = makeDeps()
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let infoed = false
+		let opened = false
+		const origOpen = vscode.workspace.openTextDocument
+		;(vscode.workspace as unknown as { openTextDocument: unknown }).openTextDocument =
+			async () => { opened = true; return {} as vscode.TextDocument }
+		try {
+			await withStubbedWindow(
+				{ showInformationMessage: async () => { infoed = true; return undefined } },
+				async () => {
+					await handlers.get('gitbraid.previewRouting')!(fakeUri)
+				},
+			)
+			assert.ok(infoed)
+			assert.strictEqual(opened, false)
+		} finally {
+			;(vscode.workspace as unknown as { openTextDocument: unknown }).openTextDocument = origOpen
+		}
+	})
+
+	test('previewRouting: assignments exist but no pending hunks → info "No pending hunks"', async () => {
+		const { deps, hunkAssignments } = makeDeps()
+		hunkAssignments.set(0, 'feat/a')
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let infoMsg: string | undefined
+		await withStubbedWindow(
+			{ showInformationMessage: async (msg: string) => { infoMsg = msg; return undefined } },
+			async () => {
+				await handlers.get('gitbraid.previewRouting')!(fakeUri)
+			},
+		)
+		assert.match(infoMsg ?? '', /No pending hunks/)
+	})
+
+	test('previewRouting: assignments reference indices past the hunk array → "No routable hunks"', async () => {
+		const { deps, hunkAssignments } = makeDeps()
+		hunkAssignments.set(5, 'feat/a')
+		const ctx = deps.contextForUri(fakeUri) as unknown as { diffEngine: { getHunksForFile: unknown } }
+		ctx.diffEngine = { getHunksForFile: async () => [{ startLine: 1, endLine: 2 }] } as unknown as never
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let infoMsg: string | undefined
+		await withStubbedWindow(
+			{ showInformationMessage: async (msg: string) => { infoMsg = msg; return undefined } },
+			async () => {
+				await handlers.get('gitbraid.previewRouting')!(fakeUri)
+			},
+		)
+		assert.match(infoMsg ?? '', /No routable hunks/)
+	})
+
+	test('previewRouting: with assignments and matching hunks → builds a per-branch patch preview document', async () => {
+		const { deps, hunkAssignments } = makeDeps()
+		hunkAssignments.set(0, 'feat/a')
+		hunkAssignments.set(1, 'feat/b')
+		const ctx = deps.contextForUri(fakeUri) as unknown as { diffEngine: { getHunksForFile: unknown } }
+		ctx.diffEngine = {
+			getHunksForFile: async () => [{ startLine: 1, endLine: 2 }, { startLine: 3, endLine: 4 }],
+		} as unknown as never
+		const handlers = captureHandlers(() => registerHunkCommands(deps))
+		let openedContent: string | undefined
+		let openedLanguage: string | undefined
+		const origOpen = vscode.workspace.openTextDocument
+		;(vscode.workspace as unknown as { openTextDocument: unknown }).openTextDocument =
+			async (opts: { language: string, content: string }) => {
+				openedLanguage = opts.language
+				openedContent = opts.content
+				return {} as vscode.TextDocument
+			}
+		const origShow = vscode.window.showTextDocument
+		;(vscode.window as unknown as { showTextDocument: unknown }).showTextDocument = async () => undefined
+		try {
+			await handlers.get('gitbraid.previewRouting')!(fakeUri)
+		} finally {
+			;(vscode.workspace as unknown as { openTextDocument: unknown }).openTextDocument = origOpen
+			;(vscode.window as unknown as { showTextDocument: unknown }).showTextDocument = origShow
+		}
+		assert.strictEqual(openedLanguage, 'diff')
+		assert.ok(openedContent?.includes('feat/a'))
+		assert.ok(openedContent?.includes('feat/b'))
 	})
 })
