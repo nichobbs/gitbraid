@@ -550,23 +550,41 @@ export class BranchStackService implements vscode.Disposable {
 	 * e.g. A→B, B→A would be circular.
 	 */
 	private _validateNoCycle(newBranch: string, base: string): void {
-		const stack = this._config.getStack()
-		const visited = new Set<string>([newBranch])
-		let current: string = base
-
-		while (current) {
-			if (visited.has(current)) {
-				throw new BranchStackError(
-					`Circular base reference detected: adding "${newBranch}" with base "${base}" ` +
-					`creates a cycle through "${current}"`
-				)
-			}
-			visited.add(current)
-			const entry = stack.find((e) => e.name === current)
-			if (!entry) {
-				break
-			}
-			current = entry.base
+		const cycleAt = detectStackCycle(this._config.getStack(), newBranch, base)
+		if (cycleAt) {
+			throw new BranchStackError(
+				`Circular base reference detected: adding "${newBranch}" with base "${base}" ` +
+				`creates a cycle through "${cycleAt}"`
+			)
 		}
 	}
+}
+
+/**
+ * Returns the branch name where a cycle would close if `newBranch` were
+ * added to `stack` with the given `base`, or `undefined` if the addition is
+ * safe. Pure so callers without a `BranchStackService` instance — e.g.
+ * `StackShareService` validating an imported stack before it's ever
+ * written to config — can check before mutating.
+ */
+export function detectStackCycle(
+	stack: ReadonlyArray<Pick<BranchStackEntry, 'name' | 'base'>>,
+	newBranch: string,
+	base: string,
+): string | undefined {
+	const visited = new Set<string>([newBranch])
+	let current: string = base
+
+	while (current) {
+		if (visited.has(current)) {
+			return current
+		}
+		visited.add(current)
+		const entry = stack.find((e) => e.name === current)
+		if (!entry) {
+			break
+		}
+		current = entry.base
+	}
+	return undefined
 }

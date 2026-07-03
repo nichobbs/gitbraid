@@ -180,6 +180,43 @@ suite('StackShareService (T71)', () => {
 		assert.strictEqual(config.getAssignment('src/foo.ts'), 'feature/b', 'shared must win now')
 	})
 
+	test('applyImport: refuses a shared stack with a circular base chain', async () => {
+		// A crafted or corrupted shared file could reference bases that only
+		// exist within the incoming stack itself (A→B, B→A). ConfigService.
+		// addBranch does no cycle validation on its own — applyImport must
+		// catch this before it's ever written to disk.
+		const incoming = {
+			version: SHARED_SCHEMA_VERSION,
+			stack: [
+				{ name: 'feature/a', base: 'feature/b', color: '#aa0000', order: 1 },
+				{ name: 'feature/b', base: 'feature/a', color: '#00aa00', order: 2 },
+			],
+			assignments: {},
+		}
+		const summary = await share.applyImport(incoming, { branches: 'theirs', assignments: 'theirs' })
+		assert.strictEqual(summary.addedBranches, 0, 'neither branch should be added')
+		assert.strictEqual(summary.skipped, 2)
+		assert.strictEqual(config.getBranch('feature/a'), undefined)
+		assert.strictEqual(config.getBranch('feature/b'), undefined)
+	})
+
+	test('applyImport: refuses to update a branch if the shared base would create a cycle with an existing branch', async () => {
+		await config.addBranch({ name: 'feature/a', base: 'main', color: '#4ec9b0' })
+		await config.addBranch({ name: 'feature/b', base: 'feature/a', color: '#c586c0' })
+
+		// Shared file tries to re-point feature/a's base at feature/b, which
+		// already bases on feature/a — a two-branch cycle.
+		const incoming = {
+			version: SHARED_SCHEMA_VERSION,
+			stack: [{ name: 'feature/a', base: 'feature/b', color: '#ffffff', order: 1 }],
+			assignments: {},
+		}
+		const summary = await share.applyImport(incoming, { branches: 'theirs', assignments: 'theirs' })
+		assert.strictEqual(summary.updatedBranches, 0)
+		assert.strictEqual(summary.skipped, 1)
+		assert.strictEqual(config.getBranch('feature/a')?.base, 'main', 'base must be left unchanged')
+	})
+
 	// ── isValidSharedFile ────────────────────────────────────────────────────
 
 	test('isValidSharedFile: accepts a well-formed file', () => {
