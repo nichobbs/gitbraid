@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { log } from './channelLogger'
+import { requireInside } from './pathGuard'
 
 const WORKTREES_DIR = '.worktrees'
 const VIRTUAL_DIR = 'virtual'
@@ -221,7 +222,14 @@ export class VirtualBranchStore implements vscode.Disposable {
 		const files = state ? [...state.files.keys()] : []
 		if (state) {
 			for (const [rel, content] of state.files) {
-				const dest = path.join(worktreeDir, rel)
+				// `rel` comes from a tracked-path key written by `writeFileLocked`
+				// (workspace-relative, forward-slash-normalised) — but it's
+				// still attacker-influenceable via anything that reaches
+				// `writeFile` with an unvalidated path (the MCP write tool, LM
+				// chat tool, a hand-edited config). Guard against `..`
+				// traversal the same way DiffEngine/WorkspaceSync already do
+				// before writing outside `worktreeDir`.
+				const dest = requireInside(worktreeDir, rel)
 				await fs.promises.mkdir(path.dirname(dest), { recursive: true })
 				await fs.promises.writeFile(dest, Buffer.from(content))
 			}

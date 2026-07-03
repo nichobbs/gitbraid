@@ -324,4 +324,21 @@ suite('VirtualBranchStore', () => {
 		assert.strictEqual(toString(store.readFile('b', 'b.ts')), 'after')
 	})
 
+	// ─── flushAndRemoveLocked path containment ───────────────────────────────
+
+	test('flushAndRemoveLocked rejects a tracked path that escapes the worktree dir', async () => {
+		await store.writeFile('b', '../evil.txt', bytes('pwned'))
+		const worktreeDir = path.join(root.fsPath, 'wt-escape')
+		fs.mkdirSync(worktreeDir, { recursive: true })
+
+		await assert.rejects(
+			() => store.withBranchLock('b', () => store.flushAndRemoveLocked('b', worktreeDir)),
+			/escapes workspace root/,
+		)
+		assert.strictEqual(
+			fs.existsSync(path.join(root.fsPath, 'evil.txt')), false,
+			'must not have written outside the worktree dir (one level up from it)',
+		)
+	})
+
 })
