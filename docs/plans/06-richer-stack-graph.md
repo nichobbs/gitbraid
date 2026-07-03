@@ -2,10 +2,12 @@
 
 **Inspiration:** GitButler commit graph view.
 
-**Status:** **Partially implementing.** The data source (`CommitListService`
-in `src/commitListService.ts`) is in place with caching and the
-`parseLogOutput` helper.  Tree-provider integration that hangs
-`CommitGroupNode` / `CommitNode` off each `BranchNode` is still to do.
+**Status:** **Implemented.** The data source (`CommitListService` in
+`src/commitListService.ts`) backs both the tree-view integration —
+`CommitGroupNode` / `CommitNode` hang off each `BranchNode` in
+`branchStackTreeProvider.ts` — and the dashboard's collapsible Commits
+drawer per row. This doc's "Design" section below now describes the
+shipped behaviour rather than a proposal.
 
 ## Goal
 

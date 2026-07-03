@@ -2,10 +2,13 @@
 
 **Inspiration:** git-branchless, Sapling's "smartlog" history.
 
-**Status:** **Implementing.** See `src/persistentUndoLog.ts`; each
-`FolderContext` owns a `.worktrees/undo-log.jsonl` writer and assignment
-changes are mirrored to it.  The `gitbraid.showUndoLog` QuickPick reads it.
-Full replay-through-this-action UX remains pending.
+**Status:** **Implemented (replay supported).** See
+`src/persistentUndoLog.ts`; each `FolderContext` owns a
+`.worktrees/undo-log.jsonl` writer and assignment changes are mirrored
+to it. The `gitbraid.showUndoLog` QuickPick reads it, and
+`src/undoReplay.ts`'s `buildReplayPlan`/`applyReplay` implement
+replay-through-this-action — picking a past entry undoes every
+recorded change newer than it.
 
 ## Goal
 

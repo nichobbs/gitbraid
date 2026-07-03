@@ -127,9 +127,10 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
     branch's history; GitBraid's (`gitbraid.absorbHunks`) operates
     _across branches_ by routing each hunk to its owning branch's
     worktree first, then running the same blame-dominant attribution.
-  - Sapling's `sl undo` remains more powerful than GitBraid's
-    informational undo log — replay-through-an-action is still TBD on
-    the GitBraid side.
+  - `sl undo` and `gitbraid.showUndoLog` are now closer in capability:
+    both support replaying back to a past point (GitBraid via
+    `undoReplay.ts`'s `buildReplayPlan`/`applyReplay`). Sapling's is
+    still the more mature implementation given its head start.
 
 ### GitButler
 
@@ -145,9 +146,10 @@ Legend: `✅` shipped · `🟡` partial / feature-flagged / plan in flight · `�
     Azure DevOps via dedicated `PrHostAdapter` implementations —
     broader host coverage, though GitButler's GitHub/GitLab support
     is more battle-tested.
-  - GitButler has richer UI polish for visualising parallel work and
-    shipping commits-under-branch inspection; GitBraid has the data
-    source (`CommitListService`) but hasn't yet hung the tree nodes.
+  - GitButler still has richer UI polish for visualising parallel work;
+    GitBraid's commits-under-branch inspection (`CommitListService`
+    backing collapsible `CommitGroupNode`/`CommitNode` tree items) has
+    closed most of the gap but is newer and less battle-tested.
   - GitBraid stays in the user's editor and exposes an AI/LM-tool
     surface plus an MCP server that GitButler doesn't.
 
@@ -231,13 +233,12 @@ closest *workflow* cousin is Graphite.
 
 With the 2026-04-25 wave, the gap to Graphite shrinks meaningfully —
 GitBraid now has **first-class PR creation**, a **stacked-PR
-dashboard**, **merge-queue driving**, and a **cross-branch absorb** —
-but several of those pieces are still "read-only dashboard / flag
-without enforcement / data source without tree node"
-(see `docs/plans/` for each plan's status). The next wave should
-close the remaining 🟡 cells: tree-view PR decorations + queue
-position, commit-inspector nodes, and the `singleCommit` invariant
-at commit/push time.
+dashboard**, **merge-queue driving**, a **cross-branch absorb**, and
+(since) commit-inspector tree nodes and `singleCommit` enforcement at
+commit/push time (see `docs/plans/` for each plan's status). The
+remaining 🟡 cell worth closing next is tree-view PR decorations +
+queue position — `PRHostAdapter.queueStatus()` exists but nothing in
+`branchStackTreeProvider.ts` or the dashboard surfaces it yet.
 
 See `docs/plans/00-index.md` for the full list of implementation
 plans keyed to the competitor features these matrix cells are
