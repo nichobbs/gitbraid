@@ -123,7 +123,7 @@ suite('GitHubOctokitAdapter (REST)', () => {
 		await secrets.store('gitbraid.githubToken', 'gh-token-123')
 		runner = new FakeGitRunner()
 		runner.fixture('config --get remote.origin.url', { stdout: 'https://github.com/foo/bar.git\n' })
-		adapter = new GitHubOctokitAdapter(secrets, runner)
+		adapter = new GitHubOctokitAdapter('/tmp', secrets, runner)
 	})
 
 	teardown(() => recorder.uninstall())
@@ -135,6 +135,18 @@ suite('GitHubOctokitAdapter (REST)', () => {
 	test('detect: false when no token', async () => {
 		await secrets.delete('gitbraid.githubToken')
 		assert.strictEqual(await adapter.detect('/tmp'), false)
+	})
+
+	test('listOpen: uses the constructor repoRoot, not vscode.workspace.workspaceFolders[0], to resolve the remote', async () => {
+		// This adapter is constructed with repoRoot='/tmp', which differs from
+		// the real workspace root the test host runs in — proving `_ctx()`
+		// reads the constructor's repoRoot rather than re-deriving one from
+		// global workspace state (the bug this test guards against).
+		recorder.on({ url: /pulls\?state=open/, respond: () => [] })
+		await adapter.listOpen()
+		const call = runner.calls.find((c) => c.args.join(' ').startsWith('config --get remote.origin.url'))
+		assert.ok(call, 'expected a remote.origin.url lookup')
+		assert.strictEqual(call!.cwd, '/tmp')
 	})
 
 	test('listOpen: parses GitHub REST array of PRs', async () => {
@@ -382,14 +394,14 @@ suite('GitHubVSCodeAdapter.updatePR (token delegation)', () => {
 				}
 			},
 		})
-		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const adapter = new GitHubVSCodeAdapter('/tmp', secrets, runner)
 		const pr = await adapter.updatePR(7, { body: 'new stacked-PR block' })
 		assert.strictEqual(bodySeen?.body, 'new stacked-PR block')
 		assert.strictEqual(pr.number, 7)
 	})
 
 	test('throws an actionable error instead of silently succeeding when no token is stored', async () => {
-		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const adapter = new GitHubVSCodeAdapter('/tmp', secrets, runner)
 		await assert.rejects(
 			() => adapter.updatePR(7, { body: 'new stacked-PR block' }),
 			/Store a token/,
@@ -418,7 +430,7 @@ suite('GitHubVSCodeAdapter.updatePR (token delegation)', () => {
 			respond: () => ({ check_runs: [{ name: 'build', status: 'completed', conclusion: 'success' }] }),
 		})
 
-		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const adapter = new GitHubVSCodeAdapter('/tmp', secrets, runner)
 		const basePr = { number: 7, url: 'u', state: 'open' as const, base: 'main', head: 'feature/x', title: 't', body: 'b' }
 		const enriched = await (adapter as unknown as {
 			_enrichWithReviewAndChecks: (pr: typeof basePr) => Promise<typeof basePr & { reviewState?: string, reviewCount?: number }>
@@ -429,13 +441,30 @@ suite('GitHubVSCodeAdapter.updatePR (token delegation)', () => {
 	})
 
 	test('_enrichWithReviewAndChecks: returns the PR unchanged when no token is stored', async () => {
-		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const adapter = new GitHubVSCodeAdapter('/tmp', secrets, runner)
 		const basePr = { number: 7, url: 'u', state: 'open' as const, base: 'main', head: 'feature/x', title: 't', body: 'b' }
 		const result = await (adapter as unknown as {
 			_enrichWithReviewAndChecks: (pr: typeof basePr) => Promise<typeof basePr>
 		})._enrichWithReviewAndChecks(basePr)
 		assert.deepStrictEqual(result, basePr)
 		assert.strictEqual(recorder.calls.length, 0)
+	})
+
+	test('_enrichWithReviewAndChecks: uses the constructor repoRoot, not vscode.workspace.workspaceFolders[0]', async () => {
+		await secrets.store('gitbraid.githubToken', 'gh-token-123')
+		recorder.on({ url: /pulls\/7$/, respond: () => ({ head: { sha: 'deadbeef' } }) })
+		recorder.on({ url: /pulls\/7\/reviews/, respond: () => [] })
+		recorder.on({ url: /commits\/deadbeef\/check-runs/, respond: () => ({ check_runs: [] }) })
+
+		const adapter = new GitHubVSCodeAdapter('/tmp', secrets, runner)
+		const basePr = { number: 7, url: 'u', state: 'open' as const, base: 'main', head: 'feature/x', title: 't', body: 'b' }
+		await (adapter as unknown as {
+			_enrichWithReviewAndChecks: (pr: typeof basePr) => Promise<unknown>
+		})._enrichWithReviewAndChecks(basePr)
+
+		const call = runner.calls.find((c) => c.args.join(' ').startsWith('config --get remote.origin.url'))
+		assert.ok(call, 'expected a remote.origin.url lookup')
+		assert.strictEqual(call!.cwd, '/tmp')
 	})
 })
 
@@ -454,7 +483,7 @@ suite('GitLabAdapter (REST)', () => {
 		await secrets.store('gitbraid.gitlabToken', 'gl-token')
 		runner = new FakeGitRunner()
 		runner.fixture('config --get remote.origin.url', { stdout: 'https://gitlab.com/group/proj.git\n' })
-		adapter = new GitLabAdapter(secrets, runner)
+		adapter = new GitLabAdapter('/tmp', secrets, runner)
 	})
 
 	teardown(() => recorder.uninstall())
@@ -487,6 +516,14 @@ suite('GitLabAdapter (REST)', () => {
 		assert.strictEqual(lastCall.headers['PRIVATE-TOKEN'], 'gl-token')
 		assert.strictEqual(lastCall.headers['Authorization'], undefined)
 	})
+
+	test('listOpen: uses the constructor repoRoot, not vscode.workspace.workspaceFolders[0]', async () => {
+		recorder.on({ url: /merge_requests/, respond: () => ([]) })
+		await adapter.listOpen()
+		const call = runner.calls.find((c) => c.args.join(' ').startsWith('config --get remote.origin.url'))
+		assert.ok(call, 'expected a remote.origin.url lookup')
+		assert.strictEqual(call!.cwd, '/tmp')
+	})
 })
 
 // ─── BitbucketAdapter ────────────────────────────────────────────────────────
@@ -504,7 +541,7 @@ suite('BitbucketAdapter (REST)', () => {
 		await secrets.store('gitbraid.bitbucketToken', 'user:apppwd')
 		runner = new FakeGitRunner()
 		runner.fixture('config --get remote.origin.url', { stdout: 'https://bitbucket.org/team/repo.git\n' })
-		adapter = new BitbucketAdapter(secrets, runner)
+		adapter = new BitbucketAdapter('/tmp', secrets, runner)
 	})
 
 	teardown(() => recorder.uninstall())
@@ -553,6 +590,14 @@ suite('BitbucketAdapter (REST)', () => {
 		const expected = 'Basic ' + Buffer.from('user:apppwd', 'utf-8').toString('base64')
 		assert.strictEqual(last.headers['Authorization'], expected)
 	})
+
+	test('listOpen: uses the constructor repoRoot, not vscode.workspace.workspaceFolders[0]', async () => {
+		recorder.on({ url: /pullrequests/, respond: () => ({ values: [] }) })
+		await adapter.listOpen()
+		const call = runner.calls.find((c) => c.args.join(' ').startsWith('config --get remote.origin.url'))
+		assert.ok(call, 'expected a remote.origin.url lookup')
+		assert.strictEqual(call!.cwd, '/tmp')
+	})
 })
 
 // ─── AzureDevOpsAdapter ──────────────────────────────────────────────────────
@@ -572,7 +617,7 @@ suite('AzureDevOpsAdapter (REST)', () => {
 		runner.fixture('config --get remote.origin.url', {
 			stdout: 'https://dev.azure.com/contoso/MyProject/_git/myrepo\n',
 		})
-		adapter = new AzureDevOpsAdapter(secrets, runner)
+		adapter = new AzureDevOpsAdapter('/tmp', secrets, runner)
 	})
 
 	teardown(() => recorder.uninstall())
@@ -621,6 +666,14 @@ suite('AzureDevOpsAdapter (REST)', () => {
 		assert.strictEqual(prs.length, 3)
 		assert.strictEqual(prs.find((p) => p.head === 'feature/y')?.state, 'draft')
 		assert.strictEqual(prs.find((p) => p.head === 'feature/z')?.state, 'merged')
+	})
+
+	test('listOpen: uses the constructor repoRoot, not vscode.workspace.workspaceFolders[0]', async () => {
+		recorder.on({ url: /pullrequests/, respond: () => ({ value: [] }) })
+		await adapter.listOpen()
+		const call = runner.calls.find((c) => c.args.join(' ').startsWith('config --get remote.origin.url'))
+		assert.ok(call, 'expected a remote.origin.url lookup')
+		assert.strictEqual(call!.cwd, '/tmp')
 	})
 })
 
