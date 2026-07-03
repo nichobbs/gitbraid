@@ -31,11 +31,18 @@ suite('stackResolver', () => {
 	})
 
 	suiteTeardown('remove temp repo', () => {
-		// Windows CI intermittently holds a handle on `.git` just after the
-		// process exits (AV scanning / delayed file-lock release), which
-		// rmSync surfaces as EPERM. maxRetries/retryDelay are Node's built-in
-		// backoff for exactly this class of transient Windows lock error.
-		node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+		// Windows CI intermittently holds a handle on `.git` well past the
+		// point the git process reports as exited (AV scanning / delayed
+		// handle release) — long enough that even rmSync's built-in
+		// maxRetries/retryDelay backoff doesn't outlast it. This is cleanup
+		// of an ephemeral CI temp dir the OS reclaims regardless, so don't
+		// fail the whole suite over it — the actual test assertions above
+		// already ran and passed.
+		try {
+			node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+		} catch (e) {
+			log.warn(`stackResolver: could not remove temp repo at ${tmpDir}: ${e instanceof Error ? e.message : String(e)}`)
+		}
 	})
 
 	test('sr.1 - git show retrieves file content', async () => {
@@ -89,7 +96,11 @@ suite('rebaseSuggestionService', () => {
 	})
 
 	suiteTeardown('remove temp repo', () => {
-		node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+		try {
+			node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+		} catch (e) {
+			log.warn(`rebaseSuggestionService: could not remove temp repo at ${tmpDir}: ${e instanceof Error ? e.message : String(e)}`)
+		}
 	})
 
 	test('rs.1 - rev-list count zero when equal', async () => {
