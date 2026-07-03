@@ -29,6 +29,22 @@ function isMidRebase(worktreeDir: string): boolean {
 		fs.existsSync(path.join(gitdir, 'rebase-apply'))
 }
 
+/**
+ * Result of a conflict-prediction dry run (see {@link RebaseSuggestionService.predictConflict}).
+ */
+export interface ConflictPrediction {
+	/**
+	 * `false` when the installed git doesn't support `merge-tree --write-tree`
+	 * (added in git 2.38) — callers should treat this as "prediction
+	 * unavailable" and skip the warning rather than reporting a false
+	 * "no conflicts".
+	 */
+	supported: boolean
+	conflicted: boolean
+	/** Best-effort list of conflicting paths, parsed from `merge-tree`'s output. */
+	files: string[]
+}
+
 /** Default interval between automatic rebase checks (ms). */
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60 * 1_000  // 5 minutes
 
@@ -119,6 +135,51 @@ export class RebaseSuggestionService implements vscode.Disposable {
 		return this._countRevsBehind(workspaceRoot, childBranch, parentBranch)
 	}
 
+	/**
+	 * Dry-run whether rebasing `branch` onto `base` is likely to conflict,
+	 * without touching the working tree, the index, or any ref — via
+	 * `git merge-tree --write-tree` (git ≥ 2.38), which performs the merge
+	 * entirely on tree objects. This is a proxy, not an exact simulation:
+	 * a merge of the two tips can conflict in different places than a
+	 * commit-by-commit rebase would, but it catches the common case (the
+	 * branch's own edits diverging from its base) cheaply and up front,
+	 * rather than the user discovering it mid-rebase with a half-applied
+	 * working tree to clean up.
+	 */
+	async predictConflict(cwd: string, branch: string, base: string): Promise<ConflictPrediction> {
+		// Verify both refs actually resolve before asking merge-tree to
+		// evaluate them — a nonexistent ref makes merge-tree exit non-zero
+		// with wording that isn't worth trying to distinguish from a real
+		// conflict by parsing stderr, so check explicitly instead.
+		const branchOk = await this._refExists(cwd, branch)
+		const baseOk = branchOk && await this._refExists(cwd, base)
+		if (!branchOk || !baseOk) {
+			return { supported: false, conflicted: false, files: [] }
+		}
+
+		const { stdout, stderr, exitCode } = await this._runner.run(
+			['merge-tree', '--write-tree', base, branch],
+			{ cwd },
+		)
+		if (exitCode === 0) {
+			return { supported: true, conflicted: false, files: [] }
+		}
+		if (/unknown option|usage:/i.test(stderr)) {
+			// Older git (pre-2.38) doesn't support `--write-tree` at all —
+			// prediction isn't available; proceed without a warning rather
+			// than surface a false one.
+			return { supported: false, conflicted: false, files: [] }
+		}
+		const files = [...stdout.matchAll(/CONFLICT \([^)]*\):.*? in (.+)$/gm)].map((m) => m[1].trim())
+		return { supported: true, conflicted: true, files }
+	}
+
+	/** Does `ref` resolve to a real commit in `cwd`'s repository? */
+	private async _refExists(cwd: string, ref: string): Promise<boolean> {
+		const { exitCode } = await this._runner.run(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd })
+		return exitCode === 0
+	}
+
 	// ─── Private ─────────────────────────────────────────────────────────────
 
 	private _stopInterval(): void {
@@ -197,6 +258,22 @@ export class RebaseSuggestionService implements vscode.Disposable {
 		const cwd = this._branchStack.worktreeExists(branchName)
 			? wtPath.fsPath
 			: this._workspaceRoot.fsPath
+
+		const prediction = await this.predictConflict(cwd, entry.name, entry.base)
+		if (prediction.supported && prediction.conflicted) {
+			const fileList = prediction.files.length > 0
+				? ` in ${prediction.files.slice(0, 5).join(', ')}${prediction.files.length > 5 ? `, +${String(prediction.files.length - 5)} more` : ''}`
+				: ''
+			const choice = await vscode.window.showWarningMessage(
+				`Rebasing "${entry.name}" onto "${entry.base}" is predicted to conflict${fileList}. Continue anyway?`,
+				{ modal: true },
+				'Continue Anyway',
+			)
+			if (choice !== 'Continue Anyway') {
+				log.info(`RebaseSuggestionService: user declined predicted-conflict rebase of "${entry.name}"`)
+				return
+			}
+		}
 
 		const { exitCode, stderr } = await this._runner.run(
 			['rebase', '--autostash', entry.base],
