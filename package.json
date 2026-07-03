@@ -94,6 +94,15 @@
 						}
 					},
 					{
+						"id": "routeHunks",
+						"title": "Split a file's edits across branches",
+						"description": "Editing the same file for two unrelated changes? Each diff hunk gets its own CodeLens above it — assign individual hunks to different branches, and each lands in its own branch on save.\n\n[Assign Hunk](command:gitbraid.assignHunk)",
+						"media": {
+							"image": "resources/walkthrough-hunk-routing.svg",
+							"altText": "Two diff hunks in the same file, each assigned to a different branch via CodeLens"
+						}
+					},
+					{
 						"id": "makeCommit",
 						"title": "Commit to a branch",
 						"description": "Each branch in the stack has its own SCM entry. Type a message there and press the commit button, or run the command below.\n\n[Commit Branch](command:gitbraid.scm.commitBranch)",

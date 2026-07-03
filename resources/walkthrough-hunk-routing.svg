@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Route individual hunks to different branches</title>
+  <desc id="desc">A code editor shows two separate diff hunks in the same file, each with its own CodeLens assigning it to a different branch.</desc>
+
+  <defs>
+    <style>
+      .title { fill: #cccccc; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 13px; font-weight: 600; }
+      .subtitle { fill: #9d9d9d; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 12px; }
+      .code { fill: #d4d4d4; font-family: Consolas, Menlo, monospace; font-size: 12px; }
+      .added { fill: #6a9955; font-family: Consolas, Menlo, monospace; font-size: 12px; }
+      .removed { fill: #ce9178; font-family: Consolas, Menlo, monospace; font-size: 12px; }
+      .lens { fill: #4ec9b0; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 11px; font-weight: 600; }
+      .lensB { fill: #c586c0; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 11px; font-weight: 600; }
+      .faint { fill: #6a6a6a; font-family: -apple-system, Segoe UI, Ubuntu, sans-serif; font-size: 11px; }
+    </style>
+  </defs>
+
+  <rect width="640" height="360" fill="#1e1e1e"/>
+
+  <!-- Editor tab bar -->
+  <rect x="0" y="0" width="640" height="30" fill="#252526"/>
+  <rect x="0" y="0" width="120" height="30" fill="#1e1e1e"/>
+  <text x="16" y="19" class="code">payments.ts</text>
+
+  <!-- Line-number gutter -->
+  <rect x="0" y="30" width="36" height="330" fill="#1e1e1e"/>
+  <g class="faint" text-anchor="end">
+    <text x="30" y="66">12</text>
+    <text x="30" y="86">13</text>
+    <text x="30" y="106">14</text>
+    <text x="30" y="146">15</text>
+    <text x="30" y="186">28</text>
+    <text x="30" y="206">29</text>
+    <text x="30" y="226">30</text>
+  </g>
+
+  <!-- Hunk A CodeLens -->
+  <text x="46" y="52" class="lens">$(git-branch) Hunk → feature/refunds</text>
+
+  <!-- Hunk A body -->
+  <g>
+    <rect x="40" y="58" width="580" height="52" rx="3" fill="#2a2d2e"/>
+    <text x="46" y="70" class="code"> function chargeCard(amount) {</text>
+    <text x="46" y="90" class="removed">-  return legacyGateway.submit(amount)</text>
+    <text x="46" y="106" class="added">+  return gateway.charge(amount, { retries: 3 })</text>
+  </g>
+
+  <text x="46" y="132" class="code"> }</text>
+
+  <!-- Hunk B CodeLens -->
+  <text x="46" y="172" class="lensB">$(git-branch) Hunk → feature/logging</text>
+
+  <!-- Hunk B body -->
+  <g>
+    <rect x="40" y="178" width="580" height="52" rx="3" fill="#2a2d2e"/>
+    <text x="46" y="190" class="code"> function chargeCard(amount) {</text>
+    <text x="46" y="206" class="added">+  log.info("charging " + amount)</text>
+    <text x="46" y="222" class="code">   return gateway.charge(amount)</text>
+  </g>
+
+  <!-- Explanation -->
+  <text x="40" y="270" class="subtitle">Two edits landed in the same function. Instead of one commit</text>
+  <text x="40" y="288" class="subtitle">mixing both concerns, each hunk gets its own CodeLens and routes</text>
+  <text x="40" y="306" class="subtitle">to its own branch on save — no manual patch-splitting required.</text>
+
+  <text x="320" y="344" text-anchor="middle" class="faint">Placeholder illustration — replace with screenshot before 1.0 (see resources/README.md)</text>
+</svg>

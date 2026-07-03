@@ -12,12 +12,13 @@ Marketplace assets and walkthrough media.
 
 ## Walkthrough images
 
-`package.json:contributes.walkthroughs` references four images:
+`package.json:contributes.walkthroughs` references five images:
 
 | File | Step | Status |
 | --- | --- | --- |
 | `walkthrough-add-branch.svg` | "Add a branch to the stack" | Placeholder SVG |
 | `walkthrough-assign-file.svg` | "Assign a file to a branch" | Placeholder SVG |
+| `walkthrough-hunk-routing.svg` | "Split a file's edits across branches" | Placeholder SVG |
 | `walkthrough-commit.svg` | "Commit to a branch" | Placeholder SVG |
 | `walkthrough-rebase.svg` | "Add another layer" | Placeholder SVG |
 
