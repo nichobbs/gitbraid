@@ -4,6 +4,8 @@
 import * as assert from 'node:assert'
 import * as vscode from 'vscode'
 import { registerScmCommands } from '../src/commands/scmCommands'
+import { setDefaultGitRunnerForTest } from '../src/gitRunner'
+import { FakeGitRunner } from './helpers/fakeGitRunner'
 import type { CommandDeps } from '../src/commands/types'
 
 type Handler = (...args: unknown[]) => unknown
@@ -280,5 +282,108 @@ suite('scmCommands shell coverage (direct-import)', () => {
 			},
 		)
 		assert.ok(warned)
+	})
+
+	test('generateCommitMessage: no staged or unstaged changes → info, no LM call', async () => {
+		const { deps } = makeDeps({ resolveBranchNameArg: async () => 'feat/a', worktreeExists: true })
+		const runner = new FakeGitRunner()
+		runner.fixture('diff --cached', { stdout: '' })
+		runner.fixture('diff', { stdout: '' })
+		setDefaultGitRunnerForTest(runner)
+		let selectCalled = false
+		const origSelect = vscode.lm.selectChatModels
+		;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = async () => {
+			selectCalled = true
+			return []
+		}
+		try {
+			const handlers = captureHandlers(() => registerScmCommands(deps))
+			let infoMsg: string | undefined
+			await withStubbedWindow(
+				{ showInformationMessage: async (msg: string) => { infoMsg = msg; return undefined } },
+				async () => {
+					await handlers.get('gitbraid.scm.generateCommitMessage')!()
+				},
+			)
+			assert.match(infoMsg ?? '', /No changes in "feat\/a"/)
+			assert.strictEqual(selectCalled, false, 'must bail before ever checking for a language model')
+		} finally {
+			setDefaultGitRunnerForTest(undefined)
+			;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = origSelect
+		}
+	})
+
+	test('generateCommitMessage: no language model available → warning', async () => {
+		const { deps } = makeDeps({ resolveBranchNameArg: async () => 'feat/a', worktreeExists: true })
+		const runner = new FakeGitRunner()
+		runner.fixture('diff --cached', { stdout: '+staged change\n' })
+		setDefaultGitRunnerForTest(runner)
+		const origSelect = vscode.lm.selectChatModels
+		;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = async () => []
+		try {
+			const handlers = captureHandlers(() => registerScmCommands(deps))
+			let warnMsg: string | undefined
+			await withStubbedWindow(
+				{ showWarningMessage: async (msg: string) => { warnMsg = msg; return undefined } },
+				async () => {
+					await handlers.get('gitbraid.scm.generateCommitMessage')!()
+				},
+			)
+			assert.match(warnMsg ?? '', /No language model available/)
+		} finally {
+			setDefaultGitRunnerForTest(undefined)
+			;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = origSelect
+		}
+	})
+
+	test('generateCommitMessage: falls back to the unstaged diff when nothing is staged', async () => {
+		const { deps } = makeDeps({ resolveBranchNameArg: async () => 'feat/a', worktreeExists: true })
+		const runner = new FakeGitRunner()
+		runner.fixture('diff --cached', { stdout: '' })
+		runner.fixture('diff', { stdout: '+unstaged change\n' })
+		setDefaultGitRunnerForTest(runner)
+		let sentDiff: string | undefined
+		const origSelect = vscode.lm.selectChatModels
+		;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = async () => ([{
+			sendRequest: async (messages: Array<{ content?: unknown }>) => {
+				sentDiff = JSON.stringify(messages)
+				return { text: (async function* () { yield 'chore: update' })() }
+			},
+		}] as unknown as vscode.LanguageModelChat[])
+		try {
+			const handlers = captureHandlers(() => registerScmCommands(deps))
+			await handlers.get('gitbraid.scm.generateCommitMessage')!()
+			assert.ok(sentDiff?.includes('unstaged change'))
+		} finally {
+			setDefaultGitRunnerForTest(undefined)
+			;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = origSelect
+		}
+	})
+
+	test('generateCommitMessage: full success path streams the response into the branch\'s input box', async () => {
+		const { deps } = makeDeps({ resolveBranchNameArg: async () => 'feat/a', worktreeExists: true })
+		const runner = new FakeGitRunner()
+		runner.fixture('diff --cached', { stdout: '+staged change\n' })
+		setDefaultGitRunnerForTest(runner)
+
+		const origSelect = vscode.lm.selectChatModels
+		;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = async () => ([{
+			sendRequest: async () => ({
+				text: (async function* () { yield 'feat: '; yield 'add the thing' })(),
+			}),
+		}] as unknown as vscode.LanguageModelChat[])
+
+		let setValueArgs: [string, string] | undefined
+		const ctx = deps.activeContext() as unknown as { scmManager: Record<string, unknown> }
+		ctx.scmManager.setInputBoxValue = (branch: string, msg: string) => { setValueArgs = [branch, msg] }
+
+		try {
+			const handlers = captureHandlers(() => registerScmCommands(deps))
+			await handlers.get('gitbraid.scm.generateCommitMessage')!()
+			assert.deepStrictEqual(setValueArgs, ['feat/a', 'feat: add the thing'])
+		} finally {
+			setDefaultGitRunnerForTest(undefined)
+			;(vscode.lm as unknown as { selectChatModels: unknown }).selectChatModels = origSelect
+		}
 	})
 })
