@@ -115,10 +115,23 @@ export function registerHunkCommands(deps: CommandDeps): vscode.Disposable[] {
 					const a = ctx.config.getHunkAnchor(rel, idx)
 					if (a) anchors.set(idx, a)
 				}
-				const ok = await ctx.hunkRouter.routeFile(ctx.root.fsPath, rel, worktreeDirs, assignments, anchors)
-				if (ok) {
+				const result = await ctx.hunkRouter.routeFile(ctx.root.fsPath, rel, worktreeDirs, assignments, anchors)
+				if (result.ok) {
 					await ctx.config.clearHunkAssignments(rel)
 					await vscode.window.showInformationMessage(`Routed hunks for ${rel} successfully.`)
+				} else {
+					// Only clear the hunks that actually applied — leaving the
+					// failed ones assigned prevents a retry from re-applying an
+					// already-applied branch's patch (which would then fail too).
+					for (const idx of result.appliedIndices) {
+						await ctx.config.removeHunkAssignment(rel, idx)
+					}
+					if (result.appliedIndices.length > 0) {
+						await vscode.window.showWarningMessage(
+							`gitbraid: routed ${String(result.appliedIndices.length)} hunk(s) for ${rel}; ` +
+							`${String(result.failedIndices.length)} failed and remain assigned.`,
+						)
+					}
 				}
 			}),
 		),

@@ -9,6 +9,7 @@ import { showError } from './errorSurfacer'
 import type { IFileChangeBus } from './fileChangeBus'
 import { getDefaultGitRunner } from './gitRunner'
 import type { VirtualBranchStore } from './virtualBranchStore'
+import { requireInside } from './pathGuard'
 
 const DEFAULT_DEBOUNCE_MS = 200
 /** Hard cap on `_floatingDirty` so a long-running session can't leak memory. */
@@ -325,6 +326,12 @@ export class WorkspaceSync implements vscode.Disposable {
 		let synced = 0
 		for (const [rel, branch] of entries) {
 			if (this._config.isVirtual(branch)) continue
+			try {
+				requireInside(this._workspaceRoot.fsPath, rel)
+			} catch (e) {
+				log.warn(`WorkspaceSync.syncAllAssigned: rejected out-of-workspace assignment "${rel}": ${e instanceof Error ? e.message : String(e)}`)
+				continue
+			}
 			const uri = vscode.Uri.joinPath(this._workspaceRoot, rel)
 			try {
 				await this._syncFile(rel, uri, branch)
@@ -483,6 +490,7 @@ export class WorkspaceSync implements vscode.Disposable {
 		this._floatingDirty.delete(normKey)
 		this._floatingSince.delete(normKey)
 		const wtPath = worktreePath(this._workspaceRoot, branch)
+		requireInside(wtPath.fsPath, relativePath)
 		const destUri = vscode.Uri.joinPath(wtPath, relativePath)
 
 		// Skip sync for files over the configured size limit to avoid reading

@@ -123,7 +123,7 @@ suite('dashboardSnapshot', () => {
 		assert.strictEqual(snap.branches[0].behindCount, undefined)
 	})
 
-	test('buildSnapshot: scratch branches are filtered out', async () => {
+	test('buildSnapshot: scratch branches are included with the scratch flag set', async () => {
 		await config.addBranch({ name: 'feat/a', base: 'main', color: '#abc' })
 		await config.addBranch({ name: 'scratch/x', base: 'main', color: '#abc', scratch: true })
 		const snap = await buildSnapshot({
@@ -133,7 +133,9 @@ suite('dashboardSnapshot', () => {
 			worktreeDirOf: () => undefined,
 			runner: new FakeGitRunner(),
 		})
-		assert.deepStrictEqual(snap.branches.map((b) => b.name), ['feat/a'])
+		assert.deepStrictEqual(snap.branches.map((b) => b.name), ['feat/a', 'scratch/x'])
+		assert.strictEqual(snap.branches.find((b) => b.name === 'feat/a')?.scratch, undefined)
+		assert.strictEqual(snap.branches.find((b) => b.name === 'scratch/x')?.scratch, true)
 	})
 
 	test('buildSnapshot: workspaceName is the final path segment', async () => {

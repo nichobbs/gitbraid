@@ -68,21 +68,26 @@ suite('HunkRouter reconciliation (T8)', () => {
 
 		// Manual reconciliation sanity-check via the HunkRouter helper surface.
 		const router = new HunkRouter(new DiffEngine())
-		const reconciled = (router as unknown as {
-			_reconcileAssignments: (h: DiffHunk[], a: Map<number, string>, an?: Map<number, HunkAnchor>) => Map<number, string>
+		const { resolved: reconciled, originalIndexOf } = (router as unknown as {
+			_reconcileAssignments: (h: DiffHunk[], a: Map<number, string>, an?: Map<number, HunkAnchor>) =>
+				{ resolved: Map<number, string>, originalIndexOf: Map<number, number> }
 		})._reconcileAssignments(laterHunks, assignments, anchors)
 
 		// The assignment should now point at live index 1, not 0.
 		assert.strictEqual(reconciled.get(1), 'feature/x')
 		assert.strictEqual(reconciled.has(0), false)
+		// The original (persisted) index must still be recoverable so the
+		// router can clear/report success against what's actually on disk.
+		assert.strictEqual(originalIndexOf.get(1), 0)
 	})
 
 	test('reconcile: missing anchor falls back to legacy index behaviour', () => {
 		const hunks = buildHunks(diffWith('@@ -5,1 +5,1 @@', '-x\n+y'))
 		const assignments = new Map<number, string>([[0, 'feature/legacy']])
 		const router = new HunkRouter(new DiffEngine())
-		const reconciled = (router as unknown as {
-			_reconcileAssignments: (h: DiffHunk[], a: Map<number, string>, an?: Map<number, HunkAnchor>) => Map<number, string>
+		const { resolved: reconciled } = (router as unknown as {
+			_reconcileAssignments: (h: DiffHunk[], a: Map<number, string>, an?: Map<number, HunkAnchor>) =>
+				{ resolved: Map<number, string>, originalIndexOf: Map<number, number> }
 		})._reconcileAssignments(hunks, assignments, undefined)
 		assert.strictEqual(reconciled.get(0), 'feature/legacy')
 	})
@@ -99,8 +104,9 @@ suite('HunkRouter reconciliation (T8)', () => {
 		const assignments = new Map<number, string>([[7, 'feature/stale']])
 		const anchors = new Map<number, HunkAnchor>([[7, staleAnchor]])
 		const router = new HunkRouter(new DiffEngine())
-		const reconciled = (router as unknown as {
-			_reconcileAssignments: (h: DiffHunk[], a: Map<number, string>, an?: Map<number, HunkAnchor>) => Map<number, string>
+		const { resolved: reconciled } = (router as unknown as {
+			_reconcileAssignments: (h: DiffHunk[], a: Map<number, string>, an?: Map<number, HunkAnchor>) =>
+				{ resolved: Map<number, string>, originalIndexOf: Map<number, number> }
 		})._reconcileAssignments(liveHunks, assignments, anchors)
 		assert.strictEqual(reconciled.size, 0)
 	})

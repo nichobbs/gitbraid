@@ -94,30 +94,59 @@ suite('HunkRouter.detectOverlaps', () => {
 
 suite('HunkRouter (patch building)', () => {
 
-	test('routeFile returns true immediately when assignments map is empty', async () => {
+	test('routeFile returns ok:true immediately when assignments map is empty', async () => {
 		const engine = makeMockEngine([])
 		const router = new HunkRouter(engine)
-		const ok = await router.routeFile('/some/dir', 'file.ts', new Map(), new Map())
-		assert.strictEqual(ok, true)
+		const result = await router.routeFile('/some/dir', 'file.ts', new Map(), new Map())
+		assert.strictEqual(result.ok, true)
+		assert.deepStrictEqual(result.appliedIndices, [])
+		assert.deepStrictEqual(result.failedIndices, [])
 	})
 
-	test('routeFile returns true when no hunks found for file', async () => {
+	test('routeFile returns ok:true when no hunks found for file', async () => {
 		const engine = makeMockEngine([])
 		const router = new HunkRouter(engine)
 		const assignments = new Map([[0, 'feat/a']])
 		const dirs = new Map([['feat/a', '/worktrees/a']])
-		const ok = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
-		assert.strictEqual(ok, true)
+		const result = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
+		assert.strictEqual(result.ok, true)
 	})
 
-	test('routeFile returns false when worktree dir not found for branch', async () => {
+	test('routeFile returns ok:false when worktree dir not found for branch', async () => {
 		const hunks = makeHunks([{ start: 1, end: 3 }])
 		const engine = makeMockEngine(hunks)
 		const router = new HunkRouter(engine)
 		const assignments = new Map([[0, 'feat/missing']])
 		const dirs = new Map<string, string>()  // no worktree dirs
-		const ok = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
-		assert.strictEqual(ok, false)
+		const result = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
+		assert.strictEqual(result.ok, false)
+		assert.deepStrictEqual(result.appliedIndices, [])
+		assert.deepStrictEqual(result.failedIndices, [0])
+	})
+
+	test('routeFile: partial failure reports the successful branch\'s hunk as applied ' +
+		'so a retry does not re-apply it', async () => {
+		const hunks = makeHunks([{ start: 1, end: 3 }, { start: 10, end: 12 }])
+		const engine = makeMockEngine(hunks)
+		const router = new HunkRouter(engine)
+		// Deterministically succeed for "feat/ok" and fail for "feat/broken",
+		// regardless of the (synthetic) patch content or real git state.
+		;(router as unknown as { _applyPatch: (patch: string, dir: string) => Promise<boolean> })._applyPatch =
+			async (_patch, dir) => dir === '/wt/ok'
+		const assignments = new Map([[0, 'feat/ok'], [1, 'feat/broken']])
+		const dirs = new Map([['feat/ok', '/wt/ok'], ['feat/broken', '/wt/broken']])
+		// routeFile awaits showErrorMessage on the failure path — stub it so
+		// the test doesn't hang waiting on a real notification.
+		const orig = vscode.window.showErrorMessage
+		;(vscode.window as { showErrorMessage: unknown }).showErrorMessage = async () => undefined
+		try {
+			const result = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
+			assert.strictEqual(result.ok, false)
+			assert.deepStrictEqual(result.appliedIndices, [0])
+			assert.deepStrictEqual(result.failedIndices, [1])
+		} finally {
+			;(vscode.window as { showErrorMessage: unknown }).showErrorMessage = orig
+		}
 	})
 
 	test('parseDiffHunks output produces valid patch structure for each hunk', () => {
@@ -214,9 +243,9 @@ suite('HunkRouter.routeFile (edge cases)', () => {
 		// Should not throw — the bad index is skipped
 		// However, since there are no valid hunks to assign, the branch loop
 		// may produce no results; result depends on whether byBranch ends up empty
-		const ok = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
-		// Could be true (empty byBranch) or false; just must not throw
-		assert.ok(typeof ok === 'boolean')
+		const result = await router.routeFile('/some/dir', 'file.ts', dirs, assignments)
+		// Could be ok:true (empty byBranch) or ok:false; just must not throw
+		assert.ok(typeof result.ok === 'boolean')
 	})
 
 })
