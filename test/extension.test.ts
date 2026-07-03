@@ -377,7 +377,21 @@ suite('extension: command execution', function () {
 			warn: win.showWarningMessage,
 		}
 		win.showInputBox = async () => 'feature/virt-discard'
-		win.showQuickPick = async () => 'main'
+		// Base-branch-pick call (from addVirtualBranch) always includes 'main'
+		// first; a stray "which virtual branch?" QuickPick (from
+		// discardVirtualBranch, only reachable if more than one virtual branch
+		// exists) would pass the virtual branch names instead. Pick from the
+		// actual list handed to us rather than hardcoding 'main' — hardcoding
+		// it previously meant that if this test's "exactly one virtual branch"
+		// premise was ever violated by leftover state, discardVirtualBranch
+		// would silently resolve to the bogus name 'main', fail the
+		// is-virtual check, and leave the branch undiscarded — turning a
+		// leftover-state bug into a confusing, hard-to-diagnose assertion
+		// failure instead of a clear one.
+		win.showQuickPick = async (items: unknown) => {
+			const list = Array.isArray(items) ? items as string[] : []
+			return list.includes('feature/virt-discard') ? 'feature/virt-discard' : list[0]
+		}
 		win.showInformationMessage = async () => undefined
 		win.showWarningMessage = async () => 'Discard'
 		try {
