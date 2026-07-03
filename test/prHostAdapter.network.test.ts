@@ -2,6 +2,7 @@ import * as assert from 'node:assert'
 import * as vscode from 'vscode'
 import {
 	GitHubOctokitAdapter,
+	GitHubVSCodeAdapter,
 	GitLabAdapter,
 	BitbucketAdapter,
 	AzureDevOpsAdapter,
@@ -227,6 +228,64 @@ suite('GitHubOctokitAdapter (REST)', () => {
 			status: 401,
 		})
 		await assert.rejects(() => adapter.listOpen(), /401/)
+	})
+})
+
+// ─── GitHubVSCodeAdapter.updatePR (token delegation) ─────────────────────────
+//
+// The vscode-pull-request-github extension has no programmatic edit API, so
+// `updatePR` must delegate to a REST PATCH via GitHubOctokitAdapter whenever
+// a token is available, and fail loudly (not silently "succeed" with an
+// unchanged PR) when it isn't.
+
+suite('GitHubVSCodeAdapter.updatePR (token delegation)', () => {
+	let recorder: FetchRecorder
+	let secrets: FakeSecretStorage
+	let runner: FakeGitRunner
+
+	setup(() => {
+		recorder = new FetchRecorder()
+		recorder.install()
+		secrets = new FakeSecretStorage()
+		runner = new FakeGitRunner()
+		runner.fixture('config --get remote.origin.url', { stdout: 'https://github.com/foo/bar.git\n' })
+	})
+
+	teardown(() => recorder.uninstall())
+
+	test('delegates to a real PATCH when a token is stored', async () => {
+		await secrets.store('gitbraid.githubToken', 'gh-token-123')
+		let bodySeen: Record<string, unknown> | undefined
+		recorder.on({
+			url: /pulls\/7$/,
+			method: 'PATCH',
+			respond: ({ body }) => {
+				bodySeen = body as Record<string, unknown>
+				return {
+					number: 7,
+					html_url: 'u',
+					state: 'open',
+					title: bodySeen.title ?? 't',
+					body: bodySeen.body ?? '',
+					head: { ref: 'feature/x' },
+					base: { ref: 'main' },
+				}
+			},
+		})
+		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		const pr = await adapter.updatePR(7, { body: 'new stacked-PR block' })
+		assert.strictEqual(bodySeen?.body, 'new stacked-PR block')
+		assert.strictEqual(pr.number, 7)
+	})
+
+	test('throws an actionable error instead of silently succeeding when no token is stored', async () => {
+		const adapter = new GitHubVSCodeAdapter(secrets, runner)
+		await assert.rejects(
+			() => adapter.updatePR(7, { body: 'new stacked-PR block' }),
+			/Store a token/,
+		)
+		// No PATCH (or any network call) should have been attempted.
+		assert.strictEqual(recorder.calls.length, 0)
 	})
 })
 

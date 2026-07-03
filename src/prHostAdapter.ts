@@ -117,12 +117,26 @@ export class NullPRHostAdapter implements PRHostAdapter {
  * We deliberately only implement `getPR`/`listOpen` via the extension and
  * route mutation (create/update) through the extension's command contributions
  * — the API does not expose stable create/update methods across versions.
+ *
+ * `updatePR` is the one exception: the extension has no programmatic edit
+ * API at all (not even a command that applies a patch), so when the caller
+ * also has a GitHub token stored (e.g. for merge-queue support) we delegate
+ * the actual PATCH to {@link GitHubOctokitAdapter} instead of silently
+ * no-opping. Without a token there is genuinely no way to apply the edit
+ * automatically, so `updatePR` opens the description for the user and
+ * throws — callers (`SubmitStackService`) already treat a thrown
+ * `updatePR` as a reportable failure rather than silent success.
  */
 export class GitHubVSCodeAdapter implements PRHostAdapter {
 
 	private static readonly EXTENSION_ID = 'GitHub.vscode-pull-request-github'
 
 	readonly name = 'github-vscode'
+
+	constructor(
+		private readonly _secrets?: vscode.SecretStorage,
+		private readonly _runner: IGitRunner = getDefaultGitRunner(),
+	) {}
 
 	async detect(_repoRoot: string): Promise<boolean> {
 		const ext = vscode.extensions.getExtension(GitHubVSCodeAdapter.EXTENSION_ID)
@@ -183,14 +197,33 @@ export class GitHubVSCodeAdapter implements PRHostAdapter {
 	}
 
 	async updatePR(prNumber: number, patch: Partial<CreatePRInput>): Promise<PRMetadata> {
-		// No stable programmatic edit API; fall back to open-in-editor.
-		await vscode.commands.executeCommand('pr.openDescription', prNumber)
-		const match = (await this.listOpen()).find((p) => p.number === prNumber)
-		if (!match) {
-			throw new Error(`GitBraid: PR #${String(prNumber)} was not visible after update.`)
+		// Prefer a real PATCH via the Octokit fallback when a token is stored —
+		// the extension itself exposes no programmatic edit API at all.
+		if (this._secrets) {
+			try {
+				const token = await this._secrets.get('gitbraid.githubToken')
+				if (token) {
+					return await new GitHubOctokitAdapter(this._secrets, this._runner).updatePR(prNumber, patch)
+				}
+			} catch (e) {
+				log.warn(`GitHubVSCodeAdapter.updatePR: token-based update failed, falling back: ${errMsg(e)}`)
+			}
 		}
-		log.info(`GitHubVSCodeAdapter.updatePR: opened PR #${String(prNumber)} for user to apply patch ${JSON.stringify(patch)}`)
-		return match
+		// No token available — there is no way to apply this edit
+		// automatically. Open the description so the user can apply it by
+		// hand, but throw rather than report success so callers (e.g.
+		// SubmitStackService) surface this as a failure instead of silently
+		// claiming the PR was updated.
+		try {
+			await vscode.commands.executeCommand('pr.openDescription', prNumber)
+		} catch (e) {
+			log.debug(`GitHubVSCodeAdapter.updatePR: pr.openDescription failed: ${errMsg(e)}`)
+		}
+		throw new Error(
+			`GitBraid: cannot automatically update PR #${String(prNumber)} — the GitHub Pull Requests extension ` +
+			'has no programmatic edit API. Opened the PR description for you to apply the change by hand. ' +
+			'Store a token via "GitBraid: Set GitHub Token…" to enable automatic updates.',
+		)
 	}
 
 	async enqueue(_prNumber: number): Promise<{ position: number }> {
@@ -913,7 +946,7 @@ export async function pickAdapter(
 		return new NullPRHostAdapter()
 	}
 	if (setting === 'github') {
-		const vs = new GitHubVSCodeAdapter()
+		const vs = new GitHubVSCodeAdapter(secrets)
 		if (await vs.detect(repoRoot)) return vs
 		const oct = new GitHubOctokitAdapter(secrets)
 		if (await oct.detect(repoRoot)) return oct
@@ -938,7 +971,7 @@ export async function pickAdapter(
 		if (await ado.detect(repoRoot)) return ado
 	}
 	if (host === 'github' || host === undefined) {
-		const vs = new GitHubVSCodeAdapter()
+		const vs = new GitHubVSCodeAdapter(secrets)
 		if (await vs.detect(repoRoot)) return vs
 		const oct = new GitHubOctokitAdapter(secrets)
 		if (await oct.detect(repoRoot)) return oct
