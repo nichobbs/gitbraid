@@ -7,6 +7,7 @@
  * via `executeCommand` does not.
  */
 import * as assert from 'node:assert'
+import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { registerFileCommands } from '../src/commands/fileCommands'
 import { setDefaultGitRunnerForTest } from '../src/gitRunner'
@@ -81,7 +82,11 @@ function makeDeps(overrides: Partial<DepsState & {
 		primary: ctx as unknown as CommandDeps['primary'],
 		activeContext: () => ctx as unknown as CommandDeps['primary'],
 		contextForUri: () => ctx as unknown as CommandDeps['primary'],
-		relativePathIn: (_c, u) => u.fsPath.replace(/^\/tmp\/fake-repo\//, ''),
+		// Mirrors the real `relativePathIn` in extension.ts: `path.relative` +
+		// backslash normalisation, so it matches on Windows too (where the
+		// fake repo's `/tmp/fake-repo` root has no drive letter and yields
+		// backslash-separated fsPaths).
+		relativePathIn: (c, u) => path.relative(c.root.fsPath, u.fsPath).replaceAll('\\', '/'),
 		resolveBranchNameArg: async () => undefined,
 		resolveActiveBranchWorktree: async () => undefined,
 		extractFileUri: overrides.extractFileUri ?? (() => undefined),

@@ -238,7 +238,13 @@ suite('doctorCommand shell (direct-import)', () => {
 
 		await handlers.get('gitbraid.runDoctor')!()
 		assert.strictEqual(seenItems.length, 2)
-		assert.deepStrictEqual(seenItems.map((i) => i.description).sort(), [rootA, rootB].sort())
+		// Compare through `vscode.Uri.file(...).fsPath` rather than the raw
+		// `mkTmpRoot()` string — on Windows, `Uri.file` lower-cases the drive
+		// letter, so the description (built from `ctx.root.fsPath`) and the
+		// raw path string are not literally equal even though they name the
+		// same directory.
+		const expected = [rootA, rootB].map((r) => vscode.Uri.file(r).fsPath).sort()
+		assert.deepStrictEqual(seenItems.map((i) => i.description).sort(), expected)
 	})
 
 	test('single folder: QuickPick item description is left undefined', async () => {
