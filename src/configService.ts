@@ -161,9 +161,20 @@ export class ConfigService implements vscode.Disposable {
 	 * Re-read `gitbraid-config.json` from disk and fire change events for any
 	 * differences.  Safe to call at any time — used when the file is edited
 	 * externally (e.g. manually removing stale entries).
+	 *
+	 * Skips the reload while a local write is still debounced (`_flushTimer`
+	 * pending): the file-system watcher that drives `reload()` fires from our
+	 * own writes too, and its delivery isn't ordered against `FLUSH_DEBOUNCE_MS`
+	 * — a watcher event from an earlier write can arrive after a newer mutation
+	 * has already updated `_config` in memory but before that mutation's own
+	 * flush has landed on disk. Reloading in that window would clobber the
+	 * newer in-memory state with the stale on-disk snapshot. The pending flush
+	 * already performs its own disk-conflict detection and merge (see
+	 * `_writeNow`), so deferring to it here loses no genuinely-external edit.
 	 */
 	async reload(): Promise<void> {
 		if (!this._configPath) return
+		if (this._flushTimer) return
 		const prev = this._config
 		this._config = await this._readFromDisk()
 		log.info('ConfigService reloaded (' + this._config.stack.length + ' branches, ' +

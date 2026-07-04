@@ -7,8 +7,11 @@
  * via `executeCommand` does not.
  */
 import * as assert from 'node:assert'
+import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { registerFileCommands } from '../src/commands/fileCommands'
+import { setDefaultGitRunnerForTest } from '../src/gitRunner'
+import { FakeGitRunner } from './helpers/fakeGitRunner'
 import type { CommandDeps } from '../src/commands/types'
 import type { BranchStackEntry } from '../src/configTypes'
 
@@ -79,7 +82,11 @@ function makeDeps(overrides: Partial<DepsState & {
 		primary: ctx as unknown as CommandDeps['primary'],
 		activeContext: () => ctx as unknown as CommandDeps['primary'],
 		contextForUri: () => ctx as unknown as CommandDeps['primary'],
-		relativePathIn: (_c, u) => u.fsPath.replace(/^\/tmp\/fake-repo\//, ''),
+		// Mirrors the real `relativePathIn` in extension.ts: `path.relative` +
+		// backslash normalisation, so it matches on Windows too (where the
+		// fake repo's `/tmp/fake-repo` root has no drive letter and yields
+		// backslash-separated fsPaths).
+		relativePathIn: (c, u) => path.relative(c.root.fsPath, u.fsPath).replaceAll('\\', '/'),
 		resolveBranchNameArg: async () => undefined,
 		resolveActiveBranchWorktree: async () => undefined,
 		extractFileUri: overrides.extractFileUri ?? (() => undefined),
@@ -259,6 +266,37 @@ suite('fileCommands shell coverage (direct-import)', () => {
 		}
 	})
 
+	test('assignFile: directory arg expands via ls-files to the changed files inside it', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({ stack })
+		const fs = await import('node:fs')
+		const path = await import('node:path')
+		const os = await import('node:os')
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-dir-'))
+		const runner = new FakeGitRunner()
+		runner.fixture('ls-files --modified --others --exclude-standard --', { stdout: 'src/a.ts\nsrc/b.ts\n' })
+		setDefaultGitRunnerForTest(runner)
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			await withStubbedWindow(
+				{
+					showQuickPick: async () => ({ label: 'feat/a', description: '#fff' }),
+					showInformationMessage: async () => undefined,
+				},
+				async () => {
+					await handlers.get('gitbraid.assignFile')!(vscode.Uri.file(dir))
+				},
+			)
+			assert.deepStrictEqual(
+				state.setAssignmentCalls.sort(),
+				[['src/a.ts', 'feat/a'], ['src/b.ts', 'feat/a']].sort(),
+			)
+		} finally {
+			setDefaultGitRunnerForTest(undefined)
+			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
 	test('assignFolder: delegates to gitbraid.assignFile', async () => {
 		const { deps } = makeDeps()
 		const handlers = captureHandlers(() => registerFileCommands(deps))
@@ -310,6 +348,69 @@ suite('fileCommands shell coverage (direct-import)', () => {
 		assert.ok(warned)
 	})
 
+	// ─── unassignFolder ──────────────────────────────────────────────────────
+
+	test('unassignFolder: no folder arg → warning, no throw', async () => {
+		const { deps } = makeDeps()
+		const handlers = captureHandlers(() => registerFileCommands(deps))
+		let warned = false
+		await withStubbedWindow(
+			{ showWarningMessage: async () => { warned = true; return undefined } },
+			async () => {
+				await handlers.get('gitbraid.unassignFolder')!()
+			},
+		)
+		assert.ok(warned)
+	})
+
+	test('unassignFolder: no assigned files under the folder → info, no throw', async () => {
+		const { deps } = makeDeps({
+			extractFileUri: (a) => a instanceof vscode.Uri ? a : undefined,
+		})
+		const runner = new FakeGitRunner()
+		runner.fixture('ls-files --modified --others --exclude-standard --', { stdout: 'src/a.ts\nsrc/b.ts\n' })
+		setDefaultGitRunnerForTest(runner)
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			let infoMsg: string | undefined
+			await withStubbedWindow(
+				{ showInformationMessage: async (msg: string) => { infoMsg = msg; return undefined } },
+				async () => {
+					await handlers.get('gitbraid.unassignFolder')!(vscode.Uri.file('/tmp/fake-repo/src'))
+				},
+			)
+			assert.match(infoMsg ?? '', /No assigned files found/)
+		} finally {
+			setDefaultGitRunnerForTest(undefined)
+		}
+	})
+
+	test('unassignFolder: unassigns every assigned file under the folder and reports the count', async () => {
+		const { deps, state } = makeDeps({
+			assignments: { 'src/a.ts': 'feat/a', 'src/b.ts': 'feat/a', 'src/c.ts': 'feat/a' },
+			extractFileUri: (a) => a instanceof vscode.Uri ? a : undefined,
+		})
+		// Only a.ts and c.ts are reported by ls-files — b.ts stays assigned.
+		const runner = new FakeGitRunner()
+		runner.fixture('ls-files --modified --others --exclude-standard --', { stdout: 'src/a.ts\nsrc/c.ts\n' })
+		setDefaultGitRunnerForTest(runner)
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			let infoMsg: string | undefined
+			await withStubbedWindow(
+				{ showInformationMessage: async (msg: string) => { infoMsg = msg; return undefined } },
+				async () => {
+					await handlers.get('gitbraid.unassignFolder')!(vscode.Uri.file('/tmp/fake-repo/src'))
+				},
+			)
+			assert.deepStrictEqual(state.removeAssignmentCalls.sort(), ['src/a.ts', 'src/c.ts'])
+			assert.strictEqual(state.assignments['src/b.ts'], 'feat/a', 'b.ts was not reported by ls-files, so it stays assigned')
+			assert.match(infoMsg ?? '', /Unassigned 2 files/)
+		} finally {
+			setDefaultGitRunnerForTest(undefined)
+		}
+	})
+
 	test('copyToWorktree: no node and no editor → no-op (no picker shown)', async () => {
 		const { deps } = makeDeps()
 		const handlers = captureHandlers(() => registerFileCommands(deps))
@@ -334,6 +435,122 @@ suite('fileCommands shell coverage (direct-import)', () => {
 			},
 		)
 		assert.strictEqual(pickerShown, false)
+	})
+
+	test('copyToWorktree: happy path copies the file into the worktree and leaves the original in place', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps } = makeDeps({ stack })
+		const fs = await import('node:fs')
+		const path = await import('node:path')
+		const os = await import('node:os')
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-copy-'))
+		const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-copy-wt-'))
+		const file = path.join(dir, 'foo.ts')
+		fs.writeFileSync(file, 'hello')
+		;(deps as unknown as { relativePathIn: typeof deps.relativePathIn }).relativePathIn =
+			(_c, u) => path.basename(u.fsPath)
+		;(deps.activeContext() as unknown as { branchStack: { getWorktreePath: unknown } }).branchStack = {
+			getWorktreePath: () => vscode.Uri.file(worktreeDir),
+		}
+		const { FileNode } = await import('../src/branchStackTreeProvider')
+		const node = new FileNode('foo.ts', 'feat/old')
+		node.resourceUri = vscode.Uri.file(file)
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			let infoMsg: string | undefined
+			await withStubbedWindow(
+				{
+					showQuickPick: async () => 'feat/a',
+					showInformationMessage: async (msg: string) => { infoMsg = msg; return undefined },
+				},
+				async () => {
+					await handlers.get('gitbraid.copyToWorktree')!(node)
+				},
+			)
+			assert.strictEqual(fs.readFileSync(path.join(worktreeDir, 'foo.ts'), 'utf-8'), 'hello')
+			assert.strictEqual(fs.existsSync(file), true, 'original file must remain after a copy')
+			assert.match(infoMsg ?? '', /Copied foo\.ts → feat\/a/)
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true })
+			fs.rmSync(worktreeDir, { recursive: true, force: true })
+		}
+	})
+
+	test('moveToWorktree: FileNode happy path copies, deletes the original, and clears the assignment', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({ stack, assignments: { 'foo.ts': 'feat/old' } })
+		const fs = await import('node:fs')
+		const path = await import('node:path')
+		const os = await import('node:os')
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-move-'))
+		const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-move-wt-'))
+		const file = path.join(dir, 'foo.ts')
+		fs.writeFileSync(file, 'hello')
+		;(deps as unknown as { relativePathIn: typeof deps.relativePathIn }).relativePathIn =
+			(_c, u) => path.basename(u.fsPath)
+		;(deps.activeContext() as unknown as { branchStack: { getWorktreePath: unknown } }).branchStack = {
+			getWorktreePath: () => vscode.Uri.file(worktreeDir),
+		}
+		const { FileNode } = await import('../src/branchStackTreeProvider')
+		const node = new FileNode('foo.ts', 'feat/old')
+		node.resourceUri = vscode.Uri.file(file)
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			let infoMsg: string | undefined
+			await withStubbedWindow(
+				{
+					showQuickPick: async () => 'feat/a',
+					showInformationMessage: async (msg: string) => { infoMsg = msg; return undefined },
+				},
+				async () => {
+					await handlers.get('gitbraid.moveToWorktree')!(node)
+				},
+			)
+			assert.strictEqual(fs.readFileSync(path.join(worktreeDir, 'foo.ts'), 'utf-8'), 'hello')
+			assert.strictEqual(fs.existsSync(file), false, 'original file must be deleted after a move')
+			assert.deepStrictEqual(state.removeAssignmentCalls, ['foo.ts'])
+			assert.match(infoMsg ?? '', /Moved foo\.ts → feat\/a/)
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true })
+			fs.rmSync(worktreeDir, { recursive: true, force: true })
+		}
+	})
+
+	test('moveToWorktree: FloatingFileNode happy path does not touch config assignments', async () => {
+		const stack = [entry('feat/a', 1)]
+		const { deps, state } = makeDeps({ stack })
+		const fs = await import('node:fs')
+		const path = await import('node:path')
+		const os = await import('node:os')
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-move-float-'))
+		const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbraid-fc-move-float-wt-'))
+		const file = path.join(dir, 'floaty.ts')
+		fs.writeFileSync(file, 'hi')
+		;(deps as unknown as { relativePathIn: typeof deps.relativePathIn }).relativePathIn =
+			(_c, u) => path.basename(u.fsPath)
+		;(deps.activeContext() as unknown as { branchStack: { getWorktreePath: unknown } }).branchStack = {
+			getWorktreePath: () => vscode.Uri.file(worktreeDir),
+		}
+		const { FloatingFileNode } = await import('../src/branchStackTreeProvider')
+		const node = new FloatingFileNode(path.basename(file))
+		;(node as unknown as { resourceUri: vscode.Uri }).resourceUri = vscode.Uri.file(file)
+		try {
+			const handlers = captureHandlers(() => registerFileCommands(deps))
+			await withStubbedWindow(
+				{
+					showQuickPick: async () => 'feat/a',
+					showInformationMessage: async () => undefined,
+				},
+				async () => {
+					await handlers.get('gitbraid.moveToWorktree')!(node)
+				},
+			)
+			assert.strictEqual(fs.existsSync(file), false)
+			assert.strictEqual(state.removeAssignmentCalls.length, 0, 'a floating file has no assignment to clear')
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true })
+			fs.rmSync(worktreeDir, { recursive: true, force: true })
+		}
 	})
 
 	test('assignGlob: empty stack → warning, no throw', async () => {

@@ -134,6 +134,7 @@ export class GitHubVSCodeAdapter implements PRHostAdapter {
 	readonly name = 'github-vscode'
 
 	constructor(
+		private readonly _repoRoot?: string,
 		private readonly _secrets?: vscode.SecretStorage,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {}
@@ -190,7 +191,7 @@ export class GitHubVSCodeAdapter implements PRHostAdapter {
 		try {
 			const token = await this._secrets.get('gitbraid.githubToken')
 			if (!token) return pr
-			const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+			const root = this._repoRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 			if (!root) return pr
 			const r = await this._runner.run(['config', '--get', 'remote.origin.url'], { cwd: root })
 			if (r.exitCode !== 0) return pr
@@ -238,7 +239,10 @@ export class GitHubVSCodeAdapter implements PRHostAdapter {
 			try {
 				const token = await this._secrets.get('gitbraid.githubToken')
 				if (token) {
-					return await new GitHubOctokitAdapter(this._secrets, this._runner).updatePR(prNumber, patch)
+					const root = this._repoRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+					if (root) {
+						return await new GitHubOctokitAdapter(root, this._secrets, this._runner).updatePR(prNumber, patch)
+					}
 				}
 			} catch (e) {
 				log.warn(`GitHubVSCodeAdapter.updatePR: token-based update failed, falling back: ${errMsg(e)}`)
@@ -321,6 +325,7 @@ export class GitHubOctokitAdapter implements PRHostAdapter {
 	readonly name = 'github-octokit'
 
 	constructor(
+		private readonly _repoRoot: string,
 		private readonly _secrets: vscode.SecretStorage,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {}
@@ -484,9 +489,7 @@ export class GitHubOctokitAdapter implements PRHostAdapter {
 	private async _ctx(): Promise<{ owner: string, repo: string, token: string }> {
 		const token = await this._token()
 		if (!token) throw new Error('GitBraid: no GitHub token in secret storage (gitbraid.githubToken).')
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-		if (!root) throw new Error('GitBraid: no workspace folder — cannot determine GitHub repo.')
-		const slug = await this._repoSlug(root)
+		const slug = await this._repoSlug(this._repoRoot)
 		if (!slug) throw new Error('GitBraid: this workspace has no github.com remote.')
 		return { ...slug, token }
 	}
@@ -523,6 +526,7 @@ export class GitLabAdapter implements PRHostAdapter {
 	readonly name = 'gitlab'
 
 	constructor(
+		private readonly _repoRoot: string,
 		private readonly _secrets: vscode.SecretStorage,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {}
@@ -640,9 +644,7 @@ export class GitLabAdapter implements PRHostAdapter {
 	private async _ctx(): Promise<{ projectId: string, host: string, token: string }> {
 		const token = await this._token()
 		if (!token) throw new Error('GitBraid: no GitLab token in secret storage (gitbraid.gitlabToken).')
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-		if (!root) throw new Error('GitBraid: no workspace folder — cannot determine GitLab project.')
-		const slug = await this._slug(root)
+		const slug = await this._slug(this._repoRoot)
 		if (!slug) throw new Error('GitBraid: this workspace has no gitlab remote.')
 		return { ...slug, token }
 	}
@@ -676,6 +678,7 @@ export class BitbucketAdapter implements PRHostAdapter {
 	readonly name = 'bitbucket'
 
 	constructor(
+		private readonly _repoRoot: string,
 		private readonly _secrets: vscode.SecretStorage,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {}
@@ -761,9 +764,7 @@ export class BitbucketAdapter implements PRHostAdapter {
 	private async _ctx(): Promise<{ workspace: string, repo: string, token: string }> {
 		const token = await this._token()
 		if (!token) throw new Error('GitBraid: no Bitbucket token in secret storage (gitbraid.bitbucketToken).')
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-		if (!root) throw new Error('GitBraid: no workspace folder — cannot determine Bitbucket repo.')
-		const slug = await this._slug(root)
+		const slug = await this._slug(this._repoRoot)
 		if (!slug) throw new Error('GitBraid: this workspace has no bitbucket.org remote.')
 		return { ...slug, token }
 	}
@@ -806,6 +807,7 @@ export class AzureDevOpsAdapter implements PRHostAdapter {
 	readonly name = 'azure-devops'
 
 	constructor(
+		private readonly _repoRoot: string,
 		private readonly _secrets: vscode.SecretStorage,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {}
@@ -892,9 +894,7 @@ export class AzureDevOpsAdapter implements PRHostAdapter {
 		// separator so the shared `Basic` branch of `fetchJson` base64-encodes
 		// `:<PAT>` as required.
 		const token = ':' + raw
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-		if (!root) throw new Error('GitBraid: no workspace folder — cannot determine Azure DevOps repo.')
-		const slug = await this._slug(root)
+		const slug = await this._slug(this._repoRoot)
 		if (!slug) throw new Error('GitBraid: this workspace has no Azure DevOps remote.')
 		const baseUrl = slug.host === 'dev.azure.com'
 			? `https://dev.azure.com/${encodeURIComponent(slug.org)}`
@@ -991,24 +991,24 @@ export async function pickAdapter(
 	if (setting === 'none') return new NullPRHostAdapter()
 
 	if (setting === 'gitlab') {
-		const gl = new GitLabAdapter(secrets)
+		const gl = new GitLabAdapter(repoRoot, secrets)
 		if (await gl.detect(repoRoot)) return gl
 		return new NullPRHostAdapter()
 	}
 	if (setting === 'bitbucket') {
-		const bb = new BitbucketAdapter(secrets)
+		const bb = new BitbucketAdapter(repoRoot, secrets)
 		if (await bb.detect(repoRoot)) return bb
 		return new NullPRHostAdapter()
 	}
 	if (setting === 'azure') {
-		const ado = new AzureDevOpsAdapter(secrets)
+		const ado = new AzureDevOpsAdapter(repoRoot, secrets)
 		if (await ado.detect(repoRoot)) return ado
 		return new NullPRHostAdapter()
 	}
 	if (setting === 'github') {
-		const vs = new GitHubVSCodeAdapter(secrets)
+		const vs = new GitHubVSCodeAdapter(repoRoot, secrets)
 		if (await vs.detect(repoRoot)) return vs
-		const oct = new GitHubOctokitAdapter(secrets)
+		const oct = new GitHubOctokitAdapter(repoRoot, secrets)
 		if (await oct.detect(repoRoot)) return oct
 		return new NullPRHostAdapter()
 	}
@@ -1019,21 +1019,21 @@ export async function pickAdapter(
 	// seen will still go through each adapter's own `detect`).
 	const host = await _detectRemoteHost(repoRoot)
 	if (host === 'gitlab') {
-		const gl = new GitLabAdapter(secrets)
+		const gl = new GitLabAdapter(repoRoot, secrets)
 		if (await gl.detect(repoRoot)) return gl
 	}
 	if (host === 'bitbucket') {
-		const bb = new BitbucketAdapter(secrets)
+		const bb = new BitbucketAdapter(repoRoot, secrets)
 		if (await bb.detect(repoRoot)) return bb
 	}
 	if (host === 'azure') {
-		const ado = new AzureDevOpsAdapter(secrets)
+		const ado = new AzureDevOpsAdapter(repoRoot, secrets)
 		if (await ado.detect(repoRoot)) return ado
 	}
 	if (host === 'github' || host === undefined) {
-		const vs = new GitHubVSCodeAdapter(secrets)
+		const vs = new GitHubVSCodeAdapter(repoRoot, secrets)
 		if (await vs.detect(repoRoot)) return vs
-		const oct = new GitHubOctokitAdapter(secrets)
+		const oct = new GitHubOctokitAdapter(repoRoot, secrets)
 		if (await oct.detect(repoRoot)) return oct
 	}
 	return new NullPRHostAdapter()

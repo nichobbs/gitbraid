@@ -31,6 +31,8 @@ export class PrReviewCommentsProvider implements vscode.Disposable {
 	private readonly _threadsByFile = new Map<string, vscode.CommentThread[]>()
 	private readonly _cache = new Map<number, { fetchedAt: number, comments: PrReviewComment[] }>()
 	private static readonly CACHE_TTL_MS = 60_000
+	/** Shown at most once per session — see `_commentsForPr`. */
+	private _hintedNonGithubRemote = false
 
 	private readonly _disposables: vscode.Disposable[] = []
 
@@ -125,6 +127,24 @@ export class PrReviewCommentsProvider implements vscode.Disposable {
 		}
 	}
 
+	/**
+	 * Inline PR review comments only speak GitHub's REST API today — a
+	 * GitLab/Bitbucket/Azure DevOps user with a token stored would otherwise
+	 * just silently see no comments with no indication why. Surface it once
+	 * per session rather than on every file open.
+	 */
+	private _hintNonGithubRemoteOnce(originUrl: string): void {
+		if (this._hintedNonGithubRemote) return
+		const lower = originUrl.toLowerCase()
+		const isKnownNonGithubHost = /gitlab|bitbucket\.org|dev\.azure\.com|visualstudio\.com/.test(lower)
+		if (!isKnownNonGithubHost) return
+		this._hintedNonGithubRemote = true
+		void vscode.window.showInformationMessage(
+			'GitBraid: inline PR review comments currently only support GitHub. ' +
+			'This repository\'s remote looks like a different host, so no comments will be shown here.',
+		)
+	}
+
 	private _clearThreadsFor(fsPath: string): void {
 		const existing = this._threadsByFile.get(fsPath)
 		if (!existing) return
@@ -142,8 +162,12 @@ export class PrReviewCommentsProvider implements vscode.Disposable {
 		if (!token) return []
 		const r = await this._runner.run(['config', '--get', 'remote.origin.url'], { cwd: this._workspaceRoot.fsPath })
 		if (r.exitCode !== 0) return []
-		const slug = parseGithubSlug(r.stdout.trim())
-		if (!slug) return []
+		const originUrl = r.stdout.trim()
+		const slug = parseGithubSlug(originUrl)
+		if (!slug) {
+			this._hintNonGithubRemoteOnce(originUrl)
+			return []
+		}
 		const comments = await fetchGithubPrReviewComments(slug.owner, slug.repo, prNumber, token)
 		this._cache.set(prNumber, { fetchedAt: now, comments })
 		return comments

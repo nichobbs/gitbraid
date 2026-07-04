@@ -154,6 +154,51 @@ suite('PrReviewCommentsProvider', () => {
 		}
 	})
 
+	test('hints once when the remote is a known non-GitHub host', async () => {
+		runner.reset()
+		runner.fixture('config --get remote.origin.url', { stdout: 'https://gitlab.com/group/proj.git\n' })
+		await config.addBranch({ name: 'feature/a', base: 'main', color: '#abc' })
+		await config.setAssignment('src/foo.ts', 'feature/a')
+		await config.setAssignment('src/bar.ts', 'feature/a')
+		await secrets.store('gitbraid.githubToken', 'gh-token')
+		const prAwareness = fakePrAwareness({
+			'feature/a': { branch: 'feature/a', state: 'open', number: 7, title: 't' },
+		})
+		const win = vscode.window as unknown as { showInformationMessage: (...args: unknown[]) => Promise<unknown> }
+		const origInfo = win.showInformationMessage
+		let hintCount = 0
+		win.showInformationMessage = async (msg: string) => { if (msg.includes('only support GitHub')) hintCount++; return undefined }
+		try {
+			provider = new PrReviewCommentsProvider(config, prAwareness, secrets, wsRoot(), runner)
+			await provider.refreshForFile(vscode.Uri.joinPath(wsRoot(), 'src/foo.ts'))
+			await provider.refreshForFile(vscode.Uri.joinPath(wsRoot(), 'src/bar.ts'))
+			assert.strictEqual(hintCount, 1, 'should hint exactly once per session, not once per file')
+		} finally {
+			win.showInformationMessage = origInfo
+		}
+	})
+
+	test('does not hint when there is simply no token stored', async () => {
+		runner.reset()
+		runner.fixture('config --get remote.origin.url', { stdout: 'https://gitlab.com/group/proj.git\n' })
+		await config.addBranch({ name: 'feature/a', base: 'main', color: '#abc' })
+		await config.setAssignment('src/foo.ts', 'feature/a')
+		const prAwareness = fakePrAwareness({
+			'feature/a': { branch: 'feature/a', state: 'open', number: 7, title: 't' },
+		})
+		const win = vscode.window as unknown as { showInformationMessage: (...args: unknown[]) => Promise<unknown> }
+		const origInfo = win.showInformationMessage
+		let hintCount = 0
+		win.showInformationMessage = async () => { hintCount++; return undefined }
+		try {
+			provider = new PrReviewCommentsProvider(config, prAwareness, secrets, wsRoot(), runner)
+			await provider.refreshForFile(vscode.Uri.joinPath(wsRoot(), 'src/foo.ts'))
+			assert.strictEqual(hintCount, 0, 'no token means we bail before ever checking the remote host')
+		} finally {
+			win.showInformationMessage = origInfo
+		}
+	})
+
 	test('caches comments per PR across files sharing the same branch', async () => {
 		await config.addBranch({ name: 'feature/a', base: 'main', color: '#abc' })
 		await config.setAssignment('src/foo.ts', 'feature/a')

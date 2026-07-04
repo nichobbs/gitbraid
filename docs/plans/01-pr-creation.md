@@ -3,11 +3,12 @@
 **Inspiration:** Graphite `gt submit`, git-spr `git spr update`,
 ghstack `ghstack submit`.
 
-**Status:** **Implementing.** Core adapter seam + `gitbraid.submitStack` /
+**Status:** **Implemented.** Core adapter seam + `gitbraid.submitStack` /
 `gitbraid.openStackedPR` / `gitbraid.setGithubToken` commands are landed;
-Octokit + VS Code extension adapters present; body rewriting with idempotent
-stacked-PR block is wired.  GitLab backend still deferred.  See
-`src/prHostAdapter.ts`, `src/submitStackService.ts`, and
+GitHub (Octokit + VS Code extension), GitLab, Bitbucket, and Azure DevOps
+adapters all exist behind the same `PRHostAdapter` interface; body
+rewriting with an idempotent stacked-PR block is wired for all of them.
+See `src/prHostAdapter.ts`, `src/submitStackService.ts`, and
 `src/commands/prCommands.ts`.
 
 ## Goal
@@ -127,13 +128,13 @@ Refresh triggers:
     the new `base`.
 - Snapshot test of the stacked-PR body block.
 
-## Sequencing
+## Sequencing (historical — all steps below have shipped)
 
 1. Ship `PRHostAdapter` seam + `NullAdapter`.
 2. Implement `GitHubVSCodeAdapter`.
 3. Ship `gitbraid.submitStack` + decoration.
 4. Add Octokit fallback.
-5. GitLab adapter (deferred).
+5. GitLab, Bitbucket, and Azure DevOps adapters.
 
 ## Open questions
 

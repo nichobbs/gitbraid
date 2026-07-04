@@ -27,6 +27,12 @@ function writeEndpoint(record: EndpointRecord): void {
 	try {
 		fs.mkdirSync(ENDPOINT_DIR, { recursive: true })
 		fs.writeFileSync(ENDPOINT_FILE, JSON.stringify(record, null, 2), 'utf8')
+		// The endpoint file holds the plaintext auth token. Restrict it to the
+		// owner so another local user on a shared host can't read the token
+		// straight off disk and bypass the connection handshake entirely.
+		// (No-op in effect on Windows, which doesn't use POSIX mode bits, but
+		// harmless to call.)
+		fs.chmodSync(ENDPOINT_FILE, 0o600)
 	} catch (e) {
 		log.warn(`McpServer: could not write endpoint file: ${e instanceof Error ? e.message : String(e)}`)
 	}
@@ -125,6 +131,20 @@ export class GitBraidMcpServer implements vscode.Disposable {
 			})
 			server.listen(sockPath, resolve)
 		})
+
+		// Restrict the Unix domain socket to the owner. `net.Server.listen`
+		// creates it with the process umask, which on some systems permits
+		// other local users to connect — the token handshake still guards the
+		// session, but the socket shouldn't be connectable at all from outside
+		// this user. Named pipes on Windows don't use POSIX mode bits and
+		// already default to an owner-restricted DACL, so this is POSIX-only.
+		if (process.platform !== 'win32') {
+			try {
+				fs.chmodSync(sockPath, 0o600)
+			} catch (e) {
+				log.warn(`McpServer: could not chmod socket: ${e instanceof Error ? e.message : String(e)}`)
+			}
+		}
 
 		this._server = server
 		writeEndpoint({ socket: sockPath, token, pid: process.pid })

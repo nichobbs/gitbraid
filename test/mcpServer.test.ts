@@ -102,6 +102,21 @@ suite('GitBraidMcpServer', function () {
 		assert.strictEqual(readEndpoint(), null)
 	})
 
+	test('endpoint file is owner-only (0600) so other local users cannot read the token', async function () {
+		if (process.platform === 'win32') this.skip()
+		await mcpSrv.start()
+		const mode = fs.statSync(ENDPOINT_FILE).mode & 0o777
+		assert.strictEqual(mode, 0o600)
+	})
+
+	test('unix socket is owner-only (0600) so other local users cannot connect', async function () {
+		if (process.platform === 'win32') this.skip()
+		await mcpSrv.start()
+		const { socket: sockPath } = readEndpoint()!
+		const mode = fs.statSync(sockPath).mode & 0o777
+		assert.strictEqual(mode, 0o600)
+	})
+
 	test('second start() while already running is a no-op', async () => {
 		await mcpSrv.start()
 		const endpointBefore = readEndpoint()

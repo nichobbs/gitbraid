@@ -2,6 +2,108 @@
 
 ## [Unreleased]
 
+### Added
+- **GitBraid Doctor** (`gitbraid.runDoctor`) — a one-shot health check for
+  circular base references, orphaned worktrees, orphaned virtual-branch
+  store files, missing worktrees, and out-of-workspace assignments, each
+  with a one-click fix where one exists. New modules: `src/doctorService.ts`,
+  `src/commands/doctorCommand.ts`.
+- **Inline PR review comments** (GitHub) — line-level review comments on
+  a PR now show up as native VS Code comment threads directly on the file
+  they were left on. Read-only, GitHub-only for now. Toggle with
+  `gitbraid.showPrReviewComments`; refresh via
+  `gitbraid.refreshPrReviewComments`. New modules: `src/prReviewComments.ts`,
+  `src/prReviewCommentsProvider.ts`.
+- **Rebase / sync conflict prediction** — before `gitbraid.rebaseBranch` or
+  `gitbraid.syncStack` runs, GitBraid predicts whether the rebase will
+  conflict using `git merge-tree --write-tree` (no working-tree or index
+  changes) and warns up front with the affected files, instead of leaving
+  the user to discover a conflict mid-rebase.
+  `RebaseSuggestionService.predictConflict`.
+- **First-run interactive walkthrough** — a new "Route Hunks to Branches"
+  step, plus an accompanying SVG, between the file-assignment and
+  commit steps.
+- **Reviews & checks panel** in the stack dashboard — populated from each
+  PR's review-state rollup and per-check-run detail
+  (`fetchGithubReviewAndChecks`, `summariseGithubReviews`).
+
+### Fixed
+- **Path traversal (security)** — `WorkspaceSync.syncAllAssigned()` /
+  `_syncFile()` built read/write file URIs directly from config-stored
+  assignment keys with no containment check. A crafted assignment key
+  (reachable via the MCP write tool, the LM chat tool, or a hand-edited
+  `gitbraid-config.json`) could read/write files outside the workspace.
+  Now guarded with `pathGuard.requireInside()`.
+- **Hunk-routing partial-failure data loss** — `HunkRouter.routeFile()`
+  returned a single boolean, so a partial failure (one branch's hunks
+  apply, another's fail) left the caller either clearing *all*
+  assignments (losing the failure) or *none* (leaving a successfully
+  applied branch's hunks both on disk and still marked assigned — a retry
+  would then permanently fail re-applying an already-applied patch). Now
+  returns `{ok, appliedIndices, failedIndices}`.
+- **`GitHubVSCodeAdapter.updatePR` silent no-op** — the extension exposes
+  no programmatic edit API, so `updatePR` opened the PR description panel
+  and returned the *unchanged* PR while callers reported success. Now
+  delegates to a real REST PATCH via `GitHubOctokitAdapter` when a token
+  is stored, and throws an actionable error otherwise.
+- **Circular base references on stack import** — `StackShareService`
+  wrote branches through `ConfigService.addBranch` directly, bypassing
+  the cycle check that only ran on the `addBranchToStack` path. Extracted
+  `detectStackCycle()` and added a batch-aware check for the whole
+  incoming set together.
+- **Dead commands** — `gitbraid.openStackDiff` and `gitbraid.previewRouting`
+  were declared in `package.json` with menu bindings but had no
+  registered handler.
+- **Diff-cache staleness + virtual-branch materialise race** —
+  `DiffEngine`'s hunk cache skipped its mtime check for ~1.5s after a
+  fresh fill, serving stale hunks to a save landing in that window.
+  `BranchStackService.materialiseBranch` could silently drop an edit
+  landing between its virtual-store snapshot and the store removal;
+  `VirtualBranchStore.withBranchLock`/`flushAndRemoveLocked` now make the
+  flush and the config flag flip atomic.
+- **PR host adapters hardcoded `workspaceFolders[0]`** instead of the
+  resolved repo root, breaking PR operations in any multi-root workspace
+  where the relevant repo wasn't the first folder. `repoRoot` is now
+  threaded through each adapter's constructor.
+- **`VirtualBranchStore.flushAndRemoveLocked`** now guards the
+  materialise-time write with `pathGuard.requireInside()`, matching
+  `DiffEngine`/`WorkspaceSync`.
+- **MCP server endpoint file and Unix socket** are now `chmod 0600`
+  after creation, so another local user on a shared host can't read the
+  plaintext auth token or connect to the socket.
+- `gitbraid.unassignFolder`, `gitbraid.defaultBranchColor`, and
+  `gitbraid.suggestImportOnActivate` were either missing their
+  `contributes.commands` entry or never actually read — the command is
+  now declared, the default branch colour is honoured by
+  `gitbraid.addStackBranch`, and activation offers to import detected
+  stacked-tool metadata when the setting is on and the stack is empty.
+- **`ConfigService.reload()` clobbering a newer in-memory mutation** —
+  `FolderContext`'s config file watcher calls `reload()` on any change to
+  `gitbraid-config.json`, including changes from our own debounced
+  writes. A watcher event from an earlier write could be delivered after
+  a newer mutation had already updated in-memory state but before that
+  mutation's own flush had reached disk, so `reload()` would overwrite
+  the newer in-memory state with the stale on-disk snapshot — a rare but
+  real cause of a flaky "discard virtual branch" test and, in principle,
+  of dropped mutations in real usage. `reload()` now skips while a local
+  write is still debounced; the pending flush already performs its own
+  disk-conflict detection and merge, so no genuinely-external edit is
+  lost.
+
+### Changed
+- **Rate-limit-aware GitHub API error handling** — `fetchJson` retries
+  once on a secondary rate limit with a short `Retry-After`, and fails
+  fast with a "resets at HH:MM" message (instead of a generic 403) when
+  the primary rate limit is exhausted.
+- **Fast-fail on a stuck or deleted PR** in the merge queue — after 3
+  consecutive "PR not found" polls, `MergeQueueService` stops waiting
+  and reports the likely cause (deleted / renamed / force-pushed) instead
+  of waiting out the full timeout.
+- GitLab, Bitbucket, and Azure DevOps `PRHostAdapter` implementations
+  now have `createPR`/`updatePR`/`queueStatus`/error-path test coverage
+  matching GitHub's, closing a coverage gap where a regression in any of
+  the three wouldn't have been caught by CI.
+
 ### Tests / CI
 - Test coverage raised significantly — overall lines from ~62% to ~74%,
   branches from ~77% to ~77%, functions from ~63% to ~77%.  CI floors

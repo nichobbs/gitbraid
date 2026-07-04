@@ -169,6 +169,7 @@ export class FolderContext implements vscode.Disposable {
 		this._configWatcher.onDidChange(() => void this.config.reload())
 		this._configWatcher.onDidCreate(() => void this.config.reload())
 		await this.stackShare.detectAndOfferTemplate()
+		await this.stackedToolImporter.suggestImportIfEmpty()
 		await this.branchStack.initStack(this.root)
 
 		this.workspaceSync.init(this.root, this.bus)

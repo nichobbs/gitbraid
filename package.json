@@ -219,6 +219,12 @@
 				"icon": "$(tag-remove)"
 			},
 			{
+				"command": "gitbraid.unassignFolder",
+				"title": "Unassign Folder from Branches",
+				"category": "GitBraid",
+				"icon": "$(tag-remove)"
+			},
+			{
 				"command": "gitbraid.addStackBranch",
 				"title": "Add Branch to Stack",
 				"category": "GitBraid",
