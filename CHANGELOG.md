@@ -77,6 +77,18 @@
   now declared, the default branch colour is honoured by
   `gitbraid.addStackBranch`, and activation offers to import detected
   stacked-tool metadata when the setting is on and the stack is empty.
+- **`ConfigService.reload()` clobbering a newer in-memory mutation** —
+  `FolderContext`'s config file watcher calls `reload()` on any change to
+  `gitbraid-config.json`, including changes from our own debounced
+  writes. A watcher event from an earlier write could be delivered after
+  a newer mutation had already updated in-memory state but before that
+  mutation's own flush had reached disk, so `reload()` would overwrite
+  the newer in-memory state with the stale on-disk snapshot — a rare but
+  real cause of a flaky "discard virtual branch" test and, in principle,
+  of dropped mutations in real usage. `reload()` now skips while a local
+  write is still debounced; the pending flush already performs its own
+  disk-conflict detection and merge, so no genuinely-external edit is
+  lost.
 
 ### Changed
 - **Rate-limit-aware GitHub API error handling** — `fetchJson` retries

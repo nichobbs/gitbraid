@@ -440,6 +440,30 @@ suite('ConfigService', () => {
 		svc2.dispose()
 	})
 
+	test('reload() does not clobber a newer in-memory mutation while its flush is still debounced', async () => {
+		// Simulates the race behind a real flake: `FolderContext`'s file-system
+		// watcher calls `reload()` on any change to the config file, including
+		// changes caused by our own debounced writes. If a watcher event from
+		// an *earlier* write is delivered late — after a *newer* mutation has
+		// already updated in-memory state but before that mutation's own
+		// flush has landed on disk — `reload()` must not overwrite the
+		// newer in-memory state with the stale on-disk snapshot.
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#f00', base: 'main' })
+		await svc.flushPendingWrites()
+
+		// A second mutation lands and is still debounced (not yet flushed)
+		// when `reload()` fires — disk still reflects the pre-removal state.
+		await svc.removeBranch('feature/a')
+		assert.ok(svc.getStack().length === 0, 'in-memory state should reflect the removal immediately')
+
+		await svc.reload()
+		assert.strictEqual(svc.getStack().length, 0, 'reload() must not resurrect the removed branch from stale disk content')
+
+		await svc.flushPendingWrites()
+		assert.ok(!fs.readFileSync(configPath(), 'utf-8').includes('feature/a'), 'the debounced removal should still land on disk')
+	})
+
 	test('lock file is created and removed during a write', async () => {
 		await svc.load(wsRoot())
 		await svc.addBranch({ name: 'feature/a', color: '#f00', base: 'main' })
