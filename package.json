@@ -39,9 +39,6 @@
 	"engines": {
 		"vscode": "^1.95.0"
 	},
-	"enabledApiProposals": [
-		"scmActionButton"
-	],
 	"categories": [
 		"SCM Providers",
 		"Other"
@@ -623,6 +620,28 @@
 			}
 		],
 		"menus": {
+			"scm/sourceControl": [
+				{
+					"command": "gitbraid.scm.commitBranch",
+					"when": "scmProvider =~ /^gitbraid-(?!virtual:)/",
+					"group": "1_commit@1"
+				},
+				{
+					"command": "gitbraid.scm.commitAndPush",
+					"when": "scmProvider =~ /^gitbraid-(?!virtual:)/",
+					"group": "1_commit@2"
+				},
+				{
+					"command": "gitbraid.scm.commitAndSync",
+					"when": "scmProvider =~ /^gitbraid-(?!virtual:)/",
+					"group": "1_commit@3"
+				},
+				{
+					"command": "gitbraid.materialiseVirtualBranch",
+					"when": "scmProvider =~ /^gitbraid-virtual:/",
+					"group": "1_virtual@1"
+				}
+			],
 			"scm/inputBox": [
 				{
 					"command": "gitbraid.scm.commitFromInputBox",

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import { branchNameFromScmArg } from './scmProviderId'
 import * as path from 'node:path'
 import { log } from './channelLogger'
 import { BranchFileDecorationProvider } from './fileDecorationProvider'
@@ -286,10 +287,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const resolveBranchNameArg = async (arg: unknown, placeholder: string): Promise<string | undefined> => {
 		if (typeof arg === 'string') return arg
-		if (arg && typeof arg === 'object' && 'id' in arg) {
-			const id = (arg as { id?: unknown }).id
-			if (typeof id === 'string' && id.startsWith('gitbraid-')) return id.slice('gitbraid-'.length)
-		}
+		const fromScm = branchNameFromScmArg(arg)
+		if (fromScm) return fromScm
 		const ctx = activeContext()
 		const stack = ctx.config.getStack()
 		if (stack.length === 0) {

@@ -4,6 +4,7 @@ import { log } from '../channelLogger'
 import { withErrorHandler } from '../errorSurfacer'
 import type { CommandDeps } from './types'
 import type { BranchNode } from '../branchStackTreeProvider'
+import { branchNameFromScmArg } from '../scmProviderId'
 
 const cmd = withErrorHandler
 
@@ -12,9 +13,11 @@ export function registerScmCommands(deps: CommandDeps): vscode.Disposable[] {
 
 	return [
 		vscode.commands.registerCommand('gitbraid.scm.commitBranch', cmd(async (arg: string | BranchNode) => {
+			// `arg` is a branch name (SCM accept-input command), a tree node, or
+			// the SourceControl passed by the `scm/sourceControl` menu.
 			const name = arg && typeof arg === 'object' && 'entry' in arg
 				? (arg as { entry: { name: string } }).entry.name
-				: arg as string
+				: branchNameFromScmArg(arg) ?? arg as string
 			await activeContext().scmManager.commitBranch(name)
 		})),
 
