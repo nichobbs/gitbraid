@@ -9,6 +9,7 @@ import { BranchStackEntry } from './configTypes'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
 import { showError } from './errorSurfacer'
 import { confirmAmend, shouldAmendForSingleCommit } from './singleCommit'
+import { scmProviderId } from './scmProviderId'
 
 // ─── HEAD content provider ────────────────────────────────────────────────────
 
@@ -209,7 +210,7 @@ class BranchScmEntry implements vscode.Disposable {
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 	) {
 		this._sc = vscode.scm.createSourceControl(
-			`gitbraid-${_entry.name}`,
+			scmProviderId(_entry.name, _entry.virtual === true),
 			_entry.name,
 			_workspaceRoot,
 		)
@@ -218,49 +219,17 @@ class BranchScmEntry implements vscode.Disposable {
 			// and all commit/push action buttons.
 			this._sc.inputBox.visible = false
 		} else if (_entry.virtual) {
-			// Virtual branches have no worktree — expose a Materialise button
-			// where the commit one would normally live.  The command handler
-			// creates the worktree, applies the virtual store, and then the
-			// user commits through the regular SCM flow.
+			// Virtual branches have no worktree, so there is nothing to commit
+			// yet.  Materialise is offered from the `scm/sourceControl` menu
+			// (scoped by the `gitbraid-virtual:` provider id) and from the tree
+			// view; once materialised the user commits through the regular flow.
 			this._sc.inputBox.visible = false
-			this._sc.actionButton = {
-				command: {
-					command: 'gitbraid.materialiseVirtualBranch',
-					title: 'Materialise',
-					shortTitle: 'Materialise',
-					arguments: [_entry.name],
-				},
-				enabled: true,
-			}
 		} else {
 			this._sc.inputBox.placeholder = `Commit to ${_entry.name} (message)`
 			this._sc.acceptInputCommand = {
 				command: 'gitbraid.scm.commitBranch',
 				title: 'Commit',
 				arguments: [_entry.name],
-			}
-			this._sc.actionButton = {
-				command: {
-					command: 'gitbraid.scm.commitBranch',
-					title: 'Commit',
-					shortTitle: 'Commit',
-					arguments: [_entry.name],
-				},
-				secondaryCommands: [
-					[
-						{
-							command: 'gitbraid.scm.commitAndPush',
-							title: 'Commit & Push',
-							arguments: [_entry.name],
-						},
-						{
-							command: 'gitbraid.scm.commitAndSync',
-							title: 'Commit & Sync',
-							arguments: [_entry.name],
-						},
-					],
-				],
-				enabled: true,
 			}
 			this._sc.statusBarCommands = [
 				{

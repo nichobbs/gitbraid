@@ -5,6 +5,7 @@ import { git } from '../gitFunctions'
 import { BranchNode, VirtualBranchNode } from '../branchStackTreeProvider'
 import { withErrorHandler } from '../errorSurfacer'
 import type { CommandDeps } from './types'
+import { branchNameFromScmArg } from '../scmProviderId'
 
 const cmd = withErrorHandler
 
@@ -29,6 +30,9 @@ async function resolveVirtualBranchName(
 ): Promise<string | undefined> {
 	const node = arg instanceof BranchNode || arg instanceof VirtualBranchNode ? arg : undefined
 	if (node) return node.entry.name
+	// The `scm/sourceControl` menu passes the SourceControl instance.
+	const fromScm = branchNameFromScmArg(arg)
+	if (fromScm) return fromScm
 	const virtuals = ctx.config.getStack().filter((e) => e.virtual === true).map((e) => e.name)
 	if (virtuals.length === 0) {
 		await vscode.window.showInformationMessage('No virtual branches in the current stack.')

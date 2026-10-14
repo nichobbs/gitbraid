@@ -39,9 +39,6 @@
 	"engines": {
 		"vscode": "^1.95.0"
 	},
-	"enabledApiProposals": [
-		"scmActionButton"
-	],
 	"categories": [
 		"SCM Providers",
 		"Other"
@@ -623,6 +620,28 @@
 			}
 		],
 		"menus": {
+			"scm/sourceControl": [
+				{
+					"command": "gitbraid.scm.commitBranch",
+					"when": "scmProvider =~ /^gitbraid-(?!virtual:)/",
+					"group": "1_commit@1"
+				},
+				{
+					"command": "gitbraid.scm.commitAndPush",
+					"when": "scmProvider =~ /^gitbraid-(?!virtual:)/",
+					"group": "1_commit@2"
+				},
+				{
+					"command": "gitbraid.scm.commitAndSync",
+					"when": "scmProvider =~ /^gitbraid-(?!virtual:)/",
+					"group": "1_commit@3"
+				},
+				{
+					"command": "gitbraid.materialiseVirtualBranch",
+					"when": "scmProvider =~ /^gitbraid-virtual:/",
+					"group": "1_virtual@1"
+				}
+			],
 			"scm/inputBox": [
 				{
 					"command": "gitbraid.scm.commitFromInputBox",
@@ -1277,8 +1296,8 @@
 		"@typescript-eslint/eslint-plugin": "^7.18.0",
 		"@typescript-eslint/parser": "^7.18.0",
 		"@typescript-eslint/typescript-estree": "^8.59.0",
-		"@vscode/test-cli": "^0.0.11",
-		"@vscode/test-electron": "^2.4.1",
+		"@vscode/test-cli": "^0.0.15",
+		"@vscode/test-electron": "^3.1.0",
 		"@vscode/vsce": "^2.25.0",
 		"esbuild": "^0.28.0",
 		"eslint": "^8.57.1",

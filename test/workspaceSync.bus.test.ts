@@ -56,10 +56,16 @@ suite('WorkspaceSync ↔ FileChangeBus wiring', () => {
 		await sleep(400)
 		d.dispose()
 
+		// The bus forwards raw watcher events and does not coalesce them, and
+		// the number VS Code's watcher emits for one write varies by version
+		// (create plus one or more change events; 1.141 emits three).  What
+		// matters here is that the save reaches the bus at least once; the
+		// upper bound is only a loose sanity cap against unbounded duplication
+		// and would not reliably catch a single extra watcher.
 		const relevant = events.filter((r) => r === 'bus-wiring-target.txt')
 		assert.ok(
-			relevant.length >= 1 && relevant.length <= 2,
-			`expected 1–2 save events, got ${String(relevant.length)} (all: ${JSON.stringify(events)})`,
+			relevant.length >= 1 && relevant.length <= 4,
+			`expected 1–4 save events, got ${String(relevant.length)} (all: ${JSON.stringify(events)})`,
 		)
 	})
 

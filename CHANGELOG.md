@@ -27,7 +27,27 @@
   PR's review-state rollup and per-check-run detail
   (`fetchGithubReviewAndChecks`, `summariseGithubReviews`).
 
+### Changed
+- **SCM commit buttons no longer use the proposed `scmActionButton` API.**
+  The proposal (microsoft/vscode#133935) has never been finalised, and
+  current stable VS Code (1.141) refuses to let the extension use it, which
+  broke the extension's SCM provider. Committing now goes through
+  `acceptInputCommand` (Ctrl/Cmd+Enter) and new Commit, Commit & Push and
+  Commit & Sync entries in each branch's `scm/sourceControl` menu. Virtual
+  branches get a Materialise entry in the same menu. The large Commit button
+  under the input box is gone, because no stable API replaces it. The
+  `scm/inputBox` commit button is kept as a best-effort extra and may not
+  show in builds that do not allow that menu. Virtual-branch SCM providers
+  now use the id `gitbraid-virtual:<branch>` so menus can target them.
+- CI runs on Node 22, and `@vscode/test-cli` / `@vscode/test-electron` are
+  upgraded (0.0.15 / 3.1.0). The old `test-electron` looked for
+  `Contents/MacOS/Electron`, which VS Code 1.110+ renamed to `Code` on macOS,
+  so every macOS test run failed before any test started.
+
 ### Fixed
+- **Flaky-by-version bus wiring test** — `workspaceSync.bus.test.ts` capped
+  one write at two watcher events; VS Code 1.141 emits three. The cap is now
+  four (the test only needs the save to reach the bus).
 - **Path traversal (security)** — `WorkspaceSync.syncAllAssigned()` /
   `_syncFile()` built read/write file URIs directly from config-stored
   assignment keys with no containment check. A crafted assignment key
