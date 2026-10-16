@@ -2,6 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { removeDirBestEffort } from './removeDir'
 
 /**
  * A self-contained temporary git repository for a single test suite.
@@ -55,14 +56,10 @@ export class TmpRepo {
 
 	/** Remove the tmp directory.  Safe to call multiple times. */
 	dispose(): void {
-		try {
-			// maxRetries/retryDelay ride out the transient EPERM/EBUSY Windows
-			// throws when AV scanning or a lingering handle briefly holds
-			// `.git` open right after a git process exits.
-			fs.rmSync(this.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-		} catch {
-			// Ignore cleanup failures in CI — the OS will reclaim /tmp.
-		}
+		// Bounded retries (see removeDir.ts): the transient EPERM/EBUSY Windows
+		// throws right after a git process exits must not outlast mocha's hook
+		// timeout.  Cleanup failures are ignored; the OS reclaims the tmp dir.
+		removeDirBestEffort(this.root, 'TmpRepo')
 	}
 }
 

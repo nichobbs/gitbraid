@@ -5,6 +5,7 @@ import * as node_util from 'node:util'
 import * as node_path from 'node:path'
 import * as node_fs from 'node:fs'
 import { log } from '../src/channelLogger'
+import { removeDirBestEffort } from './helpers/removeDir'
 
 const execAsync = node_util.promisify(node_child_process.exec)
 
@@ -33,16 +34,10 @@ suite('stackResolver', () => {
 	suiteTeardown('remove temp repo', () => {
 		// Windows CI intermittently holds a handle on `.git` well past the
 		// point the git process reports as exited (AV scanning / delayed
-		// handle release) — long enough that even rmSync's built-in
-		// maxRetries/retryDelay backoff doesn't outlast it. This is cleanup
-		// of an ephemeral CI temp dir the OS reclaims regardless, so don't
-		// fail the whole suite over it — the actual test assertions above
-		// already ran and passed.
-		try {
-			node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-		} catch (e) {
-			log.warn(`stackResolver: could not remove temp repo at ${tmpDir}: ${e instanceof Error ? e.message : String(e)}`)
-		}
+		// handle release).  This is cleanup of an ephemeral CI temp dir the OS
+		// reclaims regardless, so it is best-effort and bounded well under
+		// mocha's hook timeout (see helpers/removeDir.ts).
+		removeDirBestEffort(tmpDir, 'stackResolver')
 	})
 
 	test('sr.1 - git show retrieves file content', async () => {
@@ -96,11 +91,7 @@ suite('rebaseSuggestionService', () => {
 	})
 
 	suiteTeardown('remove temp repo', () => {
-		try {
-			node_fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-		} catch (e) {
-			log.warn(`rebaseSuggestionService: could not remove temp repo at ${tmpDir}: ${e instanceof Error ? e.message : String(e)}`)
-		}
+		removeDirBestEffort(tmpDir, 'rebaseSuggestionService')
 	})
 
 	test('rs.1 - rev-list count zero when equal', async () => {

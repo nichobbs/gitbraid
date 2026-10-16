@@ -45,6 +45,12 @@
   so every macOS test run failed before any test started.
 
 ### Fixed
+- **Windows CI teardown timeouts** — test temp-dir cleanup used
+  `rmSync(..., { maxRetries: 10, retryDelay: 200 })`, which blocks for about
+  11 s when Windows holds a handle on `.git`, longer than mocha's 10 s hook
+  timeout. Four suites (`RebaseRecovery`, `stackResolver`,
+  `rebaseSuggestionService`, `FolderRegistry`) failed in their teardown hooks.
+  Cleanup now goes through a bounded best-effort helper (worst case about 1.5 s).
 - **Flaky-by-version bus wiring test** — `workspaceSync.bus.test.ts` capped
   one write at two watcher events; VS Code 1.141 emits three. The cap is now
   four (the test only needs the save to reach the bus).
