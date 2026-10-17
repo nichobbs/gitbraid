@@ -28,6 +28,14 @@
   (`fetchGithubReviewAndChecks`, `summariseGithubReviews`).
 
 ### Changed
+- **Shared append-only log primitive** (`src/jsonlLog.ts`, `src/fileLock.ts`) -
+  `PersistentUndoLog` and `VirtualBranchStore` now share one implementation of
+  locked appends, corrupt-line tolerance, torn-tail repair, atomic rewrite
+  (tmp file, fsync, rename) and compaction. Behaviour changes: the undo log
+  rewrites its file about every `maxEntries / 2` appends instead of on every
+  append once full (`load()` still returns exactly the newest `maxEntries`),
+  and `popLast` is now atomic against appends from another window. Appends
+  take a short-lived `<file>.lock`. See `docs/plans/14-jsonl-log-primitive.md`.
 - **Config concurrency uses a revision counter and a three-way merge**
   (`src/configMerge.ts`, `ConfigService`; schema version 3 adds `rev`).
   Two windows editing the same workspace no longer rely on file modification
