@@ -438,6 +438,12 @@
 				"icon": "$(git-fetch)"
 			},
 			{
+				"command": "gitbraid.adoptWorktrees",
+				"title": "Adopt Existing Worktrees…",
+				"category": "GitBraid",
+				"icon": "$(repo-pull)"
+			},
+			{
 				"command": "gitbraid.refreshPRStatus",
 				"title": "Refresh PR Status",
 				"category": "GitBraid",

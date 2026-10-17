@@ -81,6 +81,8 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`Absorb`** (`src/absorb.ts`) — Plans and applies `git commit --fixup + rebase --autosquash` for hunks that belong to an earlier commit. Guarded by `gitbraid.absorbRewritePushed` when the target commits have already been pushed.
 
+**`WorktreeAdopter`** (`src/worktreeAdopter.ts`) — Drives `gitbraid.adoptWorktrees`: lists worktrees outside `.worktrees/`, predicts per-layer conflicts for a chosen order via `StackSimulation` (`merge-tree --write-tree` + throwaway `commit-tree`), then stashes, rebases onto the layer below, and re-creates each branch's worktree under `.worktrees/`. Stops at the first conflicting rebase, restoring that branch.
+
 **`PersistentUndoLog`** (`src/persistentUndoLog.ts`) — Append-only JSON-Lines log at `.worktrees/undo-log.jsonl` that survives VS Code restarts. Bounded by `gitbraid.undoLogMaxEntries`.
 
 **`StackedPRToolImporter`** (`src/stackedPRToolImporter.ts`) — Detects Graphite / git-spr / git-stack / GitButler / plain-upstream metadata and seeds `gitbraid-config.json` with the inferred stack.

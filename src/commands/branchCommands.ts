@@ -10,11 +10,14 @@ import { withErrorHandler } from '../errorSurfacer'
 import {
 	buildBaseList,
 	buildAddBranchPickItems,
+	describeAdoptPrediction,
 	filesAssignedTo,
+	pluralise,
 	reorderForMove,
 	toolDisplayName as _toolDisplayName,
 	type BranchPickItem,
 } from './_helpers'
+import { WorktreeAdopter, type AdoptStep, type ExternalWorktree, type LayerPrediction, type StackSimulation } from '../worktreeAdopter'
 import type { CommandDeps } from './types'
 
 const cmd = withErrorHandler
@@ -452,6 +455,141 @@ export function registerBranchCommands(deps: CommandDeps): vscode.Disposable[] {
 					log.error(`stackedToolImporter: ${err.branch}: ${err.message}`)
 				}
 			}
+		})),
+
+		// ─── Adopt external worktrees ────────────────────────────────────────────
+
+		vscode.commands.registerCommand('gitbraid.adoptWorktrees', cmd(async () => {
+			const ctx = activeContext()
+			const adopter = new WorktreeAdopter(ctx.config, ctx.branchStack, ctx.root.fsPath)
+			const external = await adopter.listExternalWorktrees()
+			if (external.length === 0) {
+				await vscode.window.showInformationMessage(
+					'GitBraid: no worktrees outside .worktrees/ to adopt. Every linked worktree is already managed or in the stack.',
+				)
+				return
+			}
+
+			const picked = await vscode.window.showQuickPick(
+				external.map((wt) => ({
+					label: wt.branch,
+					description: wt.path,
+					detail: wt.locked ? 'locked — unlock it first' : wt.dirty ? 'has uncommitted changes (carried over)' : undefined,
+					wt,
+				})),
+				{ canPickMany: true, placeHolder: 'Select the worktrees to adopt into the stack' },
+			)
+			if (!picked || picked.length === 0) return
+			const selected = picked.map((p) => p.wt)
+
+			// New layers go on top of the existing stack, or onto a base branch.
+			const existing = ctx.config.getStack().filter((e) => !e.scratch).sort((a, b) => a.order - b.order)
+			let base = existing.at(-1)?.name
+			if (!base) {
+				const defaultBranch = await detectDefaultBranch(ctx.root).catch(() => 'main')
+				const { local } = await git.listBranches(ctx.root)
+				const chosen = new Set(selected.map((w) => w.branch))
+				const bases = [defaultBranch, ...local.filter((b) => b !== defaultBranch && !chosen.has(b))]
+				base = await vscode.window.showQuickPick(bases, { placeHolder: 'Base branch for the bottom of the stack' })
+				if (!base) return
+			}
+			const stackBase = base
+
+			// Pick the order bottom-up, re-checking conflicts against the
+			// simulated stack after every placement.
+			type OrderItem = vscode.QuickPickItem & { wt?: ExternalWorktree, undo?: boolean }
+			const order: ExternalWorktree[] = []
+			const predictions = new Map<string, LayerPrediction>()
+			const rebuild = async (): Promise<StackSimulation> => {
+				const s = await adopter.simulate(stackBase)
+				predictions.clear()
+				for (const wt of order) predictions.set(wt.branch, await s.push(wt.branch))
+				return s
+			}
+			let sim = await rebuild()
+			while (order.length < selected.length) {
+				const remaining = selected.filter((w) => !order.includes(w))
+				if (remaining.length === 1) {
+					order.push(remaining[0])
+					predictions.set(remaining[0].branch, await sim.push(remaining[0].branch))
+					break
+				}
+				const current = sim
+				const items = (async (): Promise<OrderItem[]> => {
+					const preds = await Promise.all(remaining.map((w) => current.predict(w.branch)))
+					const out: OrderItem[] = remaining.map((wt, i) => {
+						const d = describeAdoptPrediction(preds[i])
+						return { label: `${d.icon} ${wt.branch}`, description: d.description, detail: d.detail, wt }
+					})
+					if (order.length > 0) {
+						out.push({ label: '', kind: vscode.QuickPickItemKind.Separator })
+						out.push({ label: `$(discard) Undo: take "${order.at(-1)!.branch}" back off the stack`, undo: true })
+					}
+					return out
+				})()
+				const placed = [stackBase, ...order.map((w) => w.branch)].join(' → ')
+				const next = await vscode.window.showQuickPick(items, {
+					title: `Adopt worktrees: layer ${String(order.length + 1)} of ${String(selected.length)}`,
+					placeHolder: `Stack so far: ${placed} — pick the branch to place next`,
+					matchOnDescription: true,
+				})
+				if (!next) return
+				if (next.undo) {
+					order.pop()
+					sim = await rebuild()
+					continue
+				}
+				order.push(next.wt!)
+				predictions.set(next.wt!.branch, await sim.push(next.wt!.branch))
+			}
+
+			const steps: AdoptStep[] = order.map((wt, i) => ({ worktree: wt, base: i === 0 ? stackBase : order[i - 1].branch }))
+			const conflicted = order.filter((w) => predictions.get(w.branch)?.conflicted)
+			const lines = steps.map((s) => {
+				const p = predictions.get(s.worktree.branch)
+				const flag = p?.conflicted ? `  ⚠ conflicts with ${p.conflictsWith.join(', ')}` : ''
+				const dirty = s.worktree.dirty ? '  (uncommitted changes)' : ''
+				return `  ${s.worktree.branch} → ${s.base}${flag}${dirty}`
+			})
+			const message = [
+				`Adopt ${pluralise(steps.length, 'branch', 'branches')} into the stack:`,
+				'',
+				...lines,
+				'',
+				'Each branch is rebased onto the one below it (pushed branches will need a force-push), ' +
+				'uncommitted changes are stashed and re-applied, and the original worktree directories are ' +
+				'removed (including ignored files such as node_modules).',
+				...(conflicted.length > 0
+					? ['', `${pluralise(conflicted.length, 'branch', 'branches')} predicted to conflict. ` +
+						'Adoption stops at the first rebase that conflicts and leaves that branch and the ones above it untouched.']
+					: []),
+			].join('\n')
+			const go = await vscode.window.showWarningMessage(message, { modal: true }, 'Adopt')
+			if (go !== 'Adopt') return
+
+			const color = vscode.workspace.getConfiguration('gitbraid').get<string>('defaultBranchColor', '#4ec9b0')
+			const results = await vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: 'GitBraid: adopting worktrees', cancellable: false },
+				(progress) => adopter.adopt(steps, color, (branch, i) => {
+					progress.report({ message: `${branch} (${String(i + 1)}/${String(steps.length)})`, increment: 100 / steps.length })
+				}),
+			)
+
+			const adopted = results.filter((r) => r.ok)
+			const failure = results.find((r) => !r.ok && !r.skipped)
+			const skipped = results.filter((r) => r.skipped)
+			const notes = results.filter((r) => r.ok && r.message).map((r) => `${r.branch}: ${r.message}${r.stash ? ` (stash ${r.stash.slice(0, 10)})` : ''}`)
+			if (!failure) {
+				const extra = notes.length > 0 ? ` Note — ${notes.join('; ')}` : ''
+				await vscode.window.showInformationMessage(`GitBraid: adopted ${pluralise(adopted.length, 'branch', 'branches')}.${extra}`)
+				return
+			}
+			const stashNote = failure.stash ? ` Uncommitted changes are kept in stash ${failure.stash.slice(0, 10)}.` : ''
+			const skippedNote = skipped.length > 0 ? ` Not attempted: ${skipped.map((r) => r.branch).join(', ')}.` : ''
+			await vscode.window.showWarningMessage(
+				`GitBraid: adopted ${pluralise(adopted.length, 'branch', 'branches')}; stopped at "${failure.branch}": ` +
+				`${failure.message ?? 'unknown error'}.${stashNote}${skippedNote} Resolve it and run Adopt Worktrees again.`,
+			)
 		})),
 
 		// ─── Checkpoints ─────────────────────────────────────────────────────────

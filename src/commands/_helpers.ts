@@ -195,3 +195,34 @@ export function toolDisplayName(tool: StackedToolKind): string {
 		case 'upstream':  return 'Upstream tracking'
 	}
 }
+
+// ─── Worktree adoption ───────────────────────────────────────────────────────
+
+/** Shape of a conflict prediction as far as the adoption picker cares. */
+export interface AdoptPredictionLike {
+	supported: boolean
+	conflicted: boolean
+	files: readonly string[]
+	conflictsWith: readonly string[]
+}
+
+/**
+ * Description / detail text for one candidate in the "which branch goes
+ * next" picker.  Conflicted candidates name the layers they collide with
+ * and the first few files so the user can choose a different order.
+ */
+export function describeAdoptPrediction(p: AdoptPredictionLike): { icon: string, description: string, detail?: string } {
+	if (!p.supported) {
+		return { icon: '$(question)', description: 'conflict check unavailable (needs git 2.38+)' }
+	}
+	if (!p.conflicted) {
+		return { icon: '$(check)', description: 'stacks cleanly' }
+	}
+	const shown = p.files.slice(0, 5).join(', ')
+	const more = p.files.length > 5 ? `, +${String(p.files.length - 5)} more` : ''
+	return {
+		icon: '$(warning)',
+		description: `conflicts with ${p.conflictsWith.join(', ')}`,
+		detail: p.files.length > 0 ? `${pluralise(p.files.length, 'file')}: ${shown}${more}` : undefined,
+	}
+}

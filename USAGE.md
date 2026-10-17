@@ -471,6 +471,34 @@ same prompt surfaces automatically.
 
 ---
 
+## Adopt existing worktrees
+
+If branches already live in their own `git worktree` checkouts (for example,
+ones a coding agent created), run `GitBraid: Adopt Existing Worktrees…`
+(`gitbraid.adoptWorktrees`):
+
+1. Pick the worktrees to adopt. Worktrees already under `.worktrees/`, the
+   primary checkout, and branches already in the stack are not offered.
+2. If the stack is empty, pick the base branch; otherwise the new layers go on
+   top of the current stack.
+3. Choose the order one layer at a time, bottom first. Every candidate is
+   re-checked against the stack built so far (`git merge-tree --write-tree`, no
+   working tree or ref changes) and flagged with a warning listing the layers and
+   files it would conflict with. "Undo" takes the last placement back off.
+4. Confirm. For each branch in order GitBraid stashes uncommitted changes,
+   rebases it onto the layer below, removes the old worktree, creates its own
+   under `.worktrees/`, and re-applies the stash there. Carried-over files are
+   copied into the workspace and assigned to the branch.
+
+Adoption stops at the first rebase that conflicts: that branch is restored
+exactly as it was (rebase aborted, stash re-applied in its original worktree)
+and the branches above it are left untouched. Resolve the conflict, then run the
+command again to adopt the rest. Rebasing rewrites history, so branches that
+were already pushed need a force-push afterwards. Removing an old worktree also
+deletes its ignored files (such as `node_modules`).
+
+---
+
 ## MCP server (external tools)
 
 GitBraid ships with a Model Context Protocol server so AI agents and CLIs outside

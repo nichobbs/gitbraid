@@ -242,12 +242,17 @@ export class BranchStackService implements vscode.Disposable {
 	 * @param opts  - `virtual: true` defers worktree creation until the branch
 	 *                is materialised or committed.  See
 	 *                `docs/plans/08-virtual-branches.md`.
+	 *                `prepareWorktree` runs after the worktree is created but
+	 *                before the branch is recorded in config, so anything it
+	 *                writes into the worktree is already there when
+	 *                `onDidChangeStack` listeners (e.g. `StackPopulator`) run.
+	 *                Ignored for virtual branches.
 	 */
 	async addBranchToStack(
 		name: string,
 		base: string,
 		color = '#888888',
-		opts?: { virtual?: boolean },
+		opts?: { virtual?: boolean, prepareWorktree?: (worktreeDir: string) => Promise<void> },
 	): Promise<void> {
 		this._assertInitialised()
 		// Two-tier validation: synchronous pre-filter rejects obvious junk
@@ -263,6 +268,9 @@ export class BranchStackService implements vscode.Disposable {
 		if (!virtual) {
 			// Create the worktree (which creates the branch too)
 			await this._createWorktree(name, base)
+			if (opts?.prepareWorktree) {
+				await opts.prepareWorktree(worktreePath(this._workspaceRoot!, name).fsPath)
+			}
 		}
 
 		// Record in config

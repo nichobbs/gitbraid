@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- **Adopt existing worktrees** (`gitbraid.adoptWorktrees`) — bring branches
+  that already have their own `git worktree` checkouts (e.g. from a coding
+  agent) into the stack. Pick the order bottom-up while each candidate is
+  checked for conflicts against the simulated stack below it; GitBraid then
+  rebases each branch onto the previous layer, moves it under `.worktrees/`,
+  and carries uncommitted changes across. Stops cleanly at the first
+  conflicting rebase. New module: `src/worktreeAdopter.ts`;
+  `BranchStackService.addBranchToStack` gains a `prepareWorktree` hook.
 - **GitBraid Doctor** (`gitbraid.runDoctor`) — a one-shot health check for
   circular base references, orphaned worktrees, orphaned virtual-branch
   store files, missing worktrees, and out-of-workspace assignments, each
