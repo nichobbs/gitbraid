@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Sparse worktrees** (plan 16) — `gitbraid.sparseWorktrees` (`off`/`auto`/`always`, default `auto`), `gitbraid.sparseWorktreeThreshold` and `gitbraid.sparseAlwaysInclude` create branch worktrees with a git sparse-checkout cone limited to the directories the branch owns; the cone grows on demand when a file is saved. `GitBraid: Convert Branch Worktree to Sparse or Full` converts existing worktrees. Needs git 2.25+. Also fixed `git worktree add/remove` running in the first workspace folder in multi-root workspaces.
 - **Agent-safe stack API** (plan 12) — one tool registry drives both MCP and chat tools, so the two surfaces can no longer drift (two chat tools were previously missing from the manifest). Structural invariants (unknown branch, cycles, base ordering, partial reorder) are enforced in the API with structured error codes and hints. New read tools (`getStackStatus`, `getFileOwnership`, `getFileHunks`, `getBranchDiff`, `getUndoLog`), working `pullBranch`/`syncBranch` in chat, MCP `getStackDiagram`/`assignGlob`. New settings `gitbraid.agentAllowForce` and `gitbraid.agentMaxDiffBytes`. MCP `addBranch` colour is now validated as `#rrggbb`.
 - **GitBraid Doctor** (`gitbraid.runDoctor`) — a one-shot health check for
   circular base references, orphaned worktrees, orphaned virtual-branch

@@ -1,3 +1,4 @@
+import type { SparseWorktreeService } from './sparseWorktree'
 import * as vscode from 'vscode'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
@@ -85,6 +86,13 @@ export class WorkspaceSync implements vscode.Disposable {
 		private readonly _config: ConfigService,
 		private readonly _virtualStore?: VirtualBranchStore,
 	) {}
+
+	private _sparse: SparseWorktreeService | undefined
+
+	/** Wire the sparse-worktree service so saves widen a sparse cone before copying. */
+	setSparseService(sparse: SparseWorktreeService | undefined): void {
+		this._sparse = sparse
+	}
 
 	/** Legacy singleton, retained for tests. */
 	static getInstance(config?: ConfigService): WorkspaceSync {
@@ -534,6 +542,17 @@ export class WorkspaceSync implements vscode.Disposable {
 		} catch {
 			// File may have been deleted between event and read — skip
 			return
+		}
+
+		// A sparse worktree only has its cone on disk: widen it first so the
+		// copy below is tracked rather than stranded outside the checkout.
+		if (this._sparse) {
+			try {
+				await this._sparse.ensureInCone(wtPath.fsPath, relativePath)
+			} catch (e: unknown) {
+				const msg = e instanceof Error ? e.message : JSON.stringify(e)
+				throw new SyncError(`Failed to widen the sparse checkout of "${branch}" for "${relativePath}": ${msg}`)
+			}
 		}
 
 		// Ensure dest directory exists
