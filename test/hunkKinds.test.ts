@@ -140,7 +140,10 @@ suite('hunkKinds: absorb skipTrivial', () => {
 	const next = base.replace('a()', '// about a\na()').replace('l()', 'l(1)')
 
 	function engineFor(hunks: DiffHunk[]): DiffEngine {
-		return { getHunksForFile: async () => hunks } as unknown as DiffEngine
+		return {
+			getHunksForFile: async () => hunks,
+			getHunksForFiles: async (_root: string, rels: readonly string[]) => new Map(rels.map((r) => [r, hunks])),
+		} as unknown as DiffEngine
 	}
 
 	function runner(): FakeGitRunner {
