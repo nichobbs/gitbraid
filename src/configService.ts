@@ -76,6 +76,12 @@ export class ConfigService implements vscode.Disposable {
 
 	/** Pending flush handle — coalesces rapid mutations (T48). */
 	private _flushTimer: ReturnType<typeof setTimeout> | undefined
+	/**
+	 * Number of `_writeNow()` calls currently running.  `_performFlush` clears
+	 * `_flushTimer` before it starts writing, so the timer alone does not cover
+	 * the async write itself - `reload()` also has to skip while this is > 0.
+	 */
+	private _writesInFlight = 0
 	/** Resolves when the current flush (if any) completes. */
 	private _flushPromise: Promise<void> = Promise.resolve()
 	private _flushResolver: (() => void) | undefined
@@ -163,8 +169,9 @@ export class ConfigService implements vscode.Disposable {
 	 * externally (e.g. manually removing stale entries).
 	 *
 	 * Skips the reload while a local write is still debounced (`_flushTimer`
-	 * pending): the file-system watcher that drives `reload()` fires from our
-	 * own writes too, and its delivery isn't ordered against `FLUSH_DEBOUNCE_MS`
+	 * pending) or running (`_writesInFlight`), checking both before and after
+	 * the disk read: the file-system watcher that drives `reload()` fires from
+	 * our own writes too, and its delivery isn't ordered against `FLUSH_DEBOUNCE_MS`
 	 * — a watcher event from an earlier write can arrive after a newer mutation
 	 * has already updated `_config` in memory but before that mutation's own
 	 * flush has landed on disk. Reloading in that window would clobber the
@@ -174,9 +181,13 @@ export class ConfigService implements vscode.Disposable {
 	 */
 	async reload(): Promise<void> {
 		if (!this._configPath) return
-		if (this._flushTimer) return
+		if (this._flushTimer || this._writesInFlight > 0) return
 		const prev = this._config
-		this._config = await this._readFromDisk()
+		const fromDisk = await this._readFromDisk()
+		// A local mutation may have landed while the read was in flight; the
+		// snapshot we just read predates it, so applying it would drop it.
+		if (this._flushTimer || this._writesInFlight > 0) return
+		this._config = fromDisk
 		log.info('ConfigService reloaded (' + this._config.stack.length + ' branches, ' +
 			Object.keys(this._config.assignments).length + ' assignments)')
 
@@ -602,11 +613,14 @@ export class ConfigService implements vscode.Disposable {
 		this._flushResolver = undefined
 		this._flushRejector = undefined
 
+		this._writesInFlight++
 		try {
 			await this._writeNow()
 			resolver?.()
 		} catch (e) {
 			rejector?.(e)
+		} finally {
+			this._writesInFlight--
 		}
 	}
 
