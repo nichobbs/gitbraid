@@ -77,7 +77,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`SubmitStackService`** (`src/submitStackService.ts`) — Pushes every layer and calls the selected adapter's `createPR` / `updatePR` to keep the stack's PRs in sync, rewriting each body with the `renderStackBlock` sentinel.
 
-**`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`.
+**`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`. `gitbraid.mergeStrategy: pipelined` (opt-in) keeps several layers in flight on adapters with `supportsOrderedQueue`, with pre-flight checks and a dequeue-everything-above failure policy.
 
 **`Absorb`** (`src/absorb.ts`) — Plans and applies `git commit --fixup + rebase --autosquash` for hunks that belong to an earlier commit. Guarded by `gitbraid.absorbRewritePushed` when the target commits have already been pushed.
 

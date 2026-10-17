@@ -75,6 +75,17 @@ export interface PRHostAdapter {
 	dequeue(prNumber: number): Promise<void>
 	/** Snapshot queue membership for the PR. */
 	queueStatus(prNumber: number): Promise<QueueStatus>
+	/**
+	 * True when the host's queue merges entries strictly in enqueue order, so a
+	 * child layer can be queued behind its still-queued parent (Plan 17).
+	 * Absent or false: the pipelined merge strategy clamps to one layer in flight.
+	 */
+	readonly supportsOrderedQueue?: boolean
+	/**
+	 * Point an open PR at a new base branch.  Optional; when absent callers
+	 * fall back to `updatePR(prNumber, { base })`.
+	 */
+	retargetPR?(prNumber: number, newBase: string): Promise<void>
 }
 
 // ─── NullAdapter ─────────────────────────────────────────────────────────────
@@ -323,6 +334,12 @@ export class GitHubVSCodeAdapter implements PRHostAdapter {
  */
 export class GitHubOctokitAdapter implements PRHostAdapter {
 	readonly name = 'github-octokit'
+	/** GitHub's merge queue is FIFO per target branch. */
+	readonly supportsOrderedQueue = true
+
+	async retargetPR(prNumber: number, newBase: string): Promise<void> {
+		await this.updatePR(prNumber, { base: newBase })
+	}
 
 	constructor(
 		private readonly _repoRoot: string,

@@ -29,7 +29,7 @@ documents — update them as decisions are made and link from
 | [14-jsonl-log-primitive.md](14-jsonl-log-primitive.md) | One `JsonlLog` for virtual store and undo log (#38) | Anthropic Scion article | **Not started** |
 | [15-content-addressed-diff-cache.md](15-content-addressed-diff-cache.md) | Hunk cache keyed on content, not mtime (#39) | Anthropic Scion article | **Not started** |
 | [16-sparse-worktrees.md](16-sparse-worktrees.md) | Sparse-checkout worktrees for large repos (#40) | Anthropic Scion article | **Not started** |
-| [17-pipelined-merge-queue.md](17-pipelined-merge-queue.md) | Pipelined merge-queue mode (#41) | Anthropic Scion article | **Not started** |
+| [17-pipelined-merge-queue.md](17-pipelined-merge-queue.md) | Pipelined merge-queue mode (#41) | Anthropic Scion article | **Implemented** (phase 1) |
 | [18-semantic-hunk-classification.md](18-semantic-hunk-classification.md) | Comment/whitespace/import/logic hunk kinds (#42) | Anthropic Scion article | **Not started** |
 
 ## Shared conventions

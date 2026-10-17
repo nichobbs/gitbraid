@@ -5,7 +5,7 @@ not fit agent-scale merging and leans on post-merge verification instead
 (https://www.anthropic.com/engineering/redesigning-source-control).
 Extends plan 05.
 
-**Status:** **Not started.** Tracking issue: #41.
+**Status:** **Implemented** (phase 1; see "As built"). Tracking issue: #41.
 
 ## Goal
 
@@ -75,3 +75,14 @@ called once.
 
 - Verify against a real GitHub merge queue before enabling by default.
 - Whether GitLab merge trains map onto `supportsOrderedQueue`.
+
+## As built
+
+- `MergeQueueService.mergeStack` dispatches on `options.strategy` (`serial` default, unchanged apart from every result now carrying `state`). `_mergePipelined` implements pre-flight, retarget, the sliding window, the failure policy, cancellation and backoff polling as designed. Settings: `gitbraid.mergeStrategy`, `gitbraid.mergePipelineDepth` (1 to 5, default 2), `gitbraid.mergeKeepQueuedOnCancel`.
+- `PRHostAdapter` gained optional `supportsOrderedQueue` and `retargetPR`. Only `GitHubOctokitAdapter` sets the former (GitHub's queue is FIFO per branch); others clamp to depth 1 but still get pre-flight and the new result states. When `retargetPR` is absent the service falls back to `updatePR(n, { base })`.
+- A layer is retargeted to trunk (the bottom layer's base) just before it is enqueued if it still targets its parent, since a host queue only accepts PRs against its own branch. This differs slightly from the plan, which retargeted after the parent merged: with a window above 1 the parent has not merged yet.
+- Pre-flight checks existence, open (not draft or closed) and expected base; on failure nothing is enqueued, the offending layer is `failed` and the remaining unmerged layers are `skipped`.
+- Failure: stop enqueuing, dequeue every in-flight layer above the failed one, mark layers above as `blocked` with `blockedBy`. Layers below keep running. Cancel dequeues in-flight layers unless `mergeKeepQueuedOnCancel`.
+- Polling is one `Promise.allSettled` round over all in-flight layers; the interval grows 1.5x per idle round up to 120 s and resets on progress; `MAX_CONSECUTIVE_PR_NOT_FOUND` applies per layer.
+
+Not done: phase 2 `postMergeCheckCommand`; verification against a real GitHub merge queue (the strategy stays opt-in); GitLab merge trains. Known risk: a child whose branch contains its parent's commits could land them if the parent is removed from the queue and the host does not drop the child; the failure policy dequeues the child, but there is an unavoidable race window on the host side.

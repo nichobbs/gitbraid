@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Pipelined merge queue** (plan 17) — opt-in `gitbraid.mergeStrategy: pipelined` keeps up to `gitbraid.mergePipelineDepth` (default 2) layers in flight on hosts with an ordered queue (GitHub), after a parallel pre-flight check. A child never merges before its parent; a failure dequeues and blocks the layers above it. `MergeStackResult` gained `state` (`merged`/`failed`/`blocked`/`skipped`) and `blockedBy`. New adapter capabilities `supportsOrderedQueue` and `retargetPR`. Default behaviour is unchanged.
 - **GitBraid Doctor** (`gitbraid.runDoctor`) — a one-shot health check for
   circular base references, orphaned worktrees, orphaned virtual-branch
   store files, missing worktrees, and out-of-workspace assignments, each
