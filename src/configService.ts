@@ -7,19 +7,19 @@ import {
 	AssignmentChangeEvent,
 	BranchConfig,
 	BranchStackEntry,
+	CONFIG_SCHEMA_VERSION,
 	HunkAnchor,
 	StackChangeEvent,
 	emptyConfig,
 	isValidConfig,
 	migrateConfig,
 } from './configTypes'
+import { MergeConflict, canonicalJson, mergeConfigs3 } from './configMerge'
 
 const CONFIG_FILENAME = 'gitbraid-config.json'
 /** Legacy filename — migrated automatically to `gitbraid-config.json` on first load. */
 const LEGACY_CONFIG_FILENAME = 'local-config.json'
 const WORKTREES_DIR = '.worktrees'
-/** Max retries when another writer races us on gitbraid-config.json. */
-const MAX_WRITE_RETRIES = 3
 /** Debounce window for coalescing rapid mutations into one flush (T48). */
 const FLUSH_DEBOUNCE_MS = 50
 /** Lock file is considered stale after this many ms (handles crashed windows). */
@@ -29,28 +29,15 @@ const LOCK_RETRY_DELAY_MS = 50
 /** Max attempts to acquire the lock before giving up. */
 const LOCK_MAX_RETRIES = 40
 
-/**
- * Merge an externally-modified config with our in-memory version.  The goal
- * is "don't lose data" rather than "produce the platonically correct state":
- * we take the union of stack branches and assignments, preferring our values
- * on any key collision since they represent the user's most recent action
- * in this window.  See T21 in the remediation plan.
- */
-function mergeConfigs(external: BranchConfig, ours: BranchConfig): BranchConfig {
-	const stackByName = new Map<string, BranchStackEntry>()
-	for (const e of external.stack) {
-		stackByName.set(e.name, e)
-	}
-	for (const e of ours.stack) {
-		stackByName.set(e.name, e)
-	}
-	const stack = [...stackByName.values()].sort((a, b) => a.order - b.order)
-	return {
-		version: Math.max(external.version ?? 0, ours.version ?? 0),
-		stack,
-		assignments: { ...external.assignments, ...ours.assignments },
-		hunkAssignments: { ...external.hunkAssignments, ...ours.hunkAssignments },
-	}
+/** What is currently on disk, as seen by {@link ConfigService._readDisk}. */
+type DiskRead =
+	| { kind: 'missing' }
+	| { kind: 'invalid', reason: string }
+	| { kind: 'newer', version: number }
+	| { kind: 'ok', config: BranchConfig, rev: number }
+
+function clone(config: BranchConfig): BranchConfig {
+	return JSON.parse(JSON.stringify(config)) as BranchConfig
 }
 
 /**
@@ -69,13 +56,29 @@ export class ConfigService implements vscode.Disposable {
 	private _config: BranchConfig = emptyConfig()
 	private _configPath: string | undefined
 	/**
-	 * Modification time (ms epoch) observed at the last successful read.
-	 * Used to detect concurrent writes from another VS Code window.
+	 * The revision and content this window last read from, or wrote to, disk.
+	 * A write compares the file against these: a different revision, or the
+	 * same revision with different content (a hand edit, or a writer that does
+	 * not bump `rev`), means someone else wrote and the two states are merged
+	 * three-way against `_baseSnapshot`.  No file modification times involved.
 	 */
-	private _lastSeenMtimeMs: number | undefined
+	private _baseRev = 0
+	private _baseSnapshot: BranchConfig = emptyConfig()
+	/**
+	 * Set when the file on disk was written by a newer GitBraid.  We keep an
+	 * empty in-memory config and refuse to write, so we never overwrite data
+	 * we do not understand.
+	 */
+	private _readOnlyReason: string | undefined
 
 	/** Pending flush handle — coalesces rapid mutations (T48). */
 	private _flushTimer: ReturnType<typeof setTimeout> | undefined
+	/**
+	 * Number of `_writeNow()` calls currently running.  `_performFlush` clears
+	 * `_flushTimer` before it starts writing, so the timer alone does not cover
+	 * the async write itself - `reload()` also has to skip while this is > 0.
+	 */
+	private _writesInFlight = 0
 	/** Resolves when the current flush (if any) completes. */
 	private _flushPromise: Promise<void> = Promise.resolve()
 	private _flushResolver: (() => void) | undefined
@@ -83,9 +86,19 @@ export class ConfigService implements vscode.Disposable {
 
 	private readonly _onDidChangeAssignment = new vscode.EventEmitter<AssignmentChangeEvent>()
 	private readonly _onDidChangeStack = new vscode.EventEmitter<StackChangeEvent>()
+	private readonly _onDidResolveConflict = new vscode.EventEmitter<MergeConflict[]>()
 
 	readonly onDidChangeAssignment: vscode.Event<AssignmentChangeEvent> = this._onDidChangeAssignment.event
 	readonly onDidChangeStack: vscode.Event<StackChangeEvent> = this._onDidChangeStack.event
+	/**
+	 * Fires when a write found another window had changed the same keys
+	 * differently.  One side was kept (ours, unless it had only deleted what
+	 * the other modified); the conflicts say which keys and which side.
+	 */
+	readonly onDidResolveConflict: vscode.Event<MergeConflict[]> = this._onDidResolveConflict.event
+
+	/** True if the config file was written by a newer GitBraid and is not being modified. */
+	get isReadOnly(): boolean { return this._readOnlyReason !== undefined }
 
 	/**
 	 * Public constructor — each `FolderContext` creates its own instance.
@@ -122,6 +135,7 @@ export class ConfigService implements vscode.Disposable {
 		}
 		this._onDidChangeAssignment.dispose()
 		this._onDidChangeStack.dispose()
+		this._onDidResolveConflict.dispose()
 	}
 
 	// ─── Initialisation ──────────────────────────────────────────────────────
@@ -135,7 +149,7 @@ export class ConfigService implements vscode.Disposable {
 		const worktreesDir = vscode.Uri.joinPath(workspaceRoot, WORKTREES_DIR)
 		this._configPath = path.join(worktreesDir.fsPath, CONFIG_FILENAME)
 		await this._migrateLegacyConfig(worktreesDir.fsPath)
-		this._config = await this._readFromDisk()
+		this._applyDiskRead(await this._readDisk())
 		log.info('ConfigService loaded (' + this._config.stack.length + ' branches, ' +
 			Object.keys(this._config.assignments).length + ' assignments)')
 	}
@@ -163,8 +177,9 @@ export class ConfigService implements vscode.Disposable {
 	 * externally (e.g. manually removing stale entries).
 	 *
 	 * Skips the reload while a local write is still debounced (`_flushTimer`
-	 * pending): the file-system watcher that drives `reload()` fires from our
-	 * own writes too, and its delivery isn't ordered against `FLUSH_DEBOUNCE_MS`
+	 * pending) or running (`_writesInFlight`), checking both before and after
+	 * the disk read: the file-system watcher that drives `reload()` fires from
+	 * our own writes too, and its delivery isn't ordered against `FLUSH_DEBOUNCE_MS`
 	 * — a watcher event from an earlier write can arrive after a newer mutation
 	 * has already updated `_config` in memory but before that mutation's own
 	 * flush has landed on disk. Reloading in that window would clobber the
@@ -174,9 +189,20 @@ export class ConfigService implements vscode.Disposable {
 	 */
 	async reload(): Promise<void> {
 		if (!this._configPath) return
-		if (this._flushTimer) return
+		if (this._flushTimer || this._writesInFlight > 0) return
 		const prev = this._config
-		this._config = await this._readFromDisk()
+		const fromDisk = await this._readDisk()
+		// A local mutation may have landed while the read was in flight; the
+		// snapshot we just read predates it, so applying it would drop it.
+		if (this._flushTimer || this._writesInFlight > 0) return
+		// The watcher also fires for our own writes. If the file is exactly what
+		// we last read or wrote, there is nothing to apply.
+		if (fromDisk.kind === 'ok'
+			&& fromDisk.rev === this._baseRev
+			&& canonicalJson(fromDisk.config) === canonicalJson(this._baseSnapshot)) {
+			return
+		}
+		this._applyDiskRead(fromDisk)
 		log.info('ConfigService reloaded (' + this._config.stack.length + ' branches, ' +
 			Object.keys(this._config.assignments).length + ' assignments)')
 
@@ -516,53 +542,72 @@ export class ConfigService implements vscode.Disposable {
 
 	// ─── Private helpers ──────────────────────────────────────────────────────
 
-	private async _readFromDisk(): Promise<BranchConfig> {
-		if (!this._configPath) {
-			return emptyConfig()
-		}
+	private async _readDisk(): Promise<DiskRead> {
+		if (!this._configPath) return { kind: 'missing' }
+		let raw: string
 		try {
-			const raw = await fs.promises.readFile(this._configPath, 'utf-8')
-			try {
-				const stat = await fs.promises.stat(this._configPath)
-				this._lastSeenMtimeMs = stat.mtimeMs
-			} catch {
-				this._lastSeenMtimeMs = undefined
-			}
-			const parsed: unknown = JSON.parse(raw)
-			if (!isValidConfig(parsed)) {
-				log.warn('ConfigService: config file has unexpected structure, using empty config')
-				return emptyConfig()
-			}
-			return migrateConfig(parsed)
+			raw = await fs.promises.readFile(this._configPath, 'utf-8')
 		} catch (e: unknown) {
 			if (isNodeError(e) && e.code === 'ENOENT') {
-				// Missing file is fine — user hasn't set up a stack yet
+				// Missing file is fine - user hasn't set up a stack yet
 				log.info('ConfigService: no config file found, starting with empty config')
-				this._lastSeenMtimeMs = undefined
-				return emptyConfig()
-			}
-			if (e instanceof SyntaxError) {
-				log.warn('ConfigService: malformed JSON in config file, using empty config: ' + e.message)
-				return emptyConfig()
+				return { kind: 'missing' }
 			}
 			throw new ConfigError('Failed to read config: ' + String(e))
 		}
+		let parsed: unknown
+		try {
+			parsed = JSON.parse(raw)
+		} catch (e: unknown) {
+			const reason = e instanceof SyntaxError ? e.message : String(e)
+			log.warn('ConfigService: malformed JSON in config file, using empty config: ' + reason)
+			return { kind: 'invalid', reason }
+		}
+		if (!isValidConfig(parsed)) {
+			log.warn('ConfigService: config file has unexpected structure, using empty config')
+			return { kind: 'invalid', reason: 'unexpected structure' }
+		}
+		// Refuse before migrating: migrateConfig stamps the current version, which
+		// would otherwise quietly downgrade (and later overwrite) a newer file.
+		if (parsed.version > CONFIG_SCHEMA_VERSION) {
+			return { kind: 'newer', version: parsed.version }
+		}
+		const rev = typeof parsed.rev === 'number' ? parsed.rev : 0
+		return { kind: 'ok', config: migrateConfig(parsed), rev }
+	}
+
+	/** Adopt what was read from disk as both the live state and the merge base. */
+	private _applyDiskRead(read: DiskRead): void {
+		this._readOnlyReason = undefined
+		if (read.kind === 'ok') {
+			this._config = read.config
+			this._baseRev = read.rev
+		} else {
+			this._config = emptyConfig()
+			this._baseRev = 0
+			if (read.kind === 'newer') {
+				this._readOnlyReason =
+					`gitbraid-config.json was written by a newer GitBraid (schema ${String(read.version)}, this version supports ${String(CONFIG_SCHEMA_VERSION)}); ` +
+					'it will not be modified. Update GitBraid to use this workspace.'
+				log.warn('ConfigService: ' + this._readOnlyReason)
+			}
+		}
+		this._baseSnapshot = clone(this._config)
 	}
 
 	/**
 	 * Write the current in-memory config to disk atomically.
 	 *
-	 * Optimistic concurrency (T21): if another VS Code window writes to
-	 * `gitbraid-config.json` between our last read and this write, we reload
-	 * from disk, merge the external changes conservatively, and retry.
+	 * Optimistic concurrency: the file carries a revision counter, and this
+	 * window remembers the revision and content it last read or wrote. If the
+	 * file differs from that (another window wrote, or it was hand edited), the
+	 * two states are merged three-way against what we last saw (see
+	 * `mergeConfigs3`), so a deletion made in one window is not undone by the
+	 * other's older copy. The merge and the write both happen under the lock, so
+	 * no other GitBraid window can interleave.
 	 *
-	 * Merge strategy (best-effort, non-interactive):
-	 *   - Stack order: prefer the longer stack; if equal length, use ours.
-	 *   - Assignments: union (our value wins on key conflict).
-	 *   - Hunk assignments: union (ours wins on conflict).
-	 *
-	 * After {@link MAX_WRITE_RETRIES} collisions we throw `ConfigError` so
-	 * the user can investigate rather than entering a retry loop.
+	 * A missing or unreadable file is simply overwritten with our state, and a
+	 * file from a newer GitBraid is never overwritten.
 	 */
 	private _writeToDisk(): Promise<void> {
 		// Coalesce rapid mutations into one on-disk flush (T48).  Multiple
@@ -602,17 +647,23 @@ export class ConfigService implements vscode.Disposable {
 		this._flushResolver = undefined
 		this._flushRejector = undefined
 
+		this._writesInFlight++
 		try {
 			await this._writeNow()
 			resolver?.()
 		} catch (e) {
 			rejector?.(e)
+		} finally {
+			this._writesInFlight--
 		}
 	}
 
 	private async _writeNow(): Promise<void> {
 		if (!this._configPath) {
-			throw new ConfigError('ConfigService not initialised — call load() first')
+			throw new ConfigError('ConfigService not initialised - call load() first')
+		}
+		if (this._readOnlyReason) {
+			throw new ConfigError(this._readOnlyReason)
 		}
 		const dir = path.dirname(this._configPath)
 		await fs.promises.mkdir(dir, { recursive: true })
@@ -620,35 +671,45 @@ export class ConfigService implements vscode.Disposable {
 		const lockPath = this._configPath + '.lock'
 		await this._acquireLock(lockPath)
 		try {
-			for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
-				const conflictDetected = this._detectDiskConflict()
-				if (conflictDetected) {
-					log.warn(`ConfigService: detected concurrent write (attempt ${String(attempt + 1)}/${String(MAX_WRITE_RETRIES)}); merging`)
-					const external = await this._readFromDisk()
-					this._config = mergeConfigs(external, this._config)
-					continue
-				}
-
-				const content = JSON.stringify(this._config, null, 2) + '\n'
-				const tmpPath = this._configPath + '.tmp'
-				await fs.promises.writeFile(tmpPath, content, 'utf-8')
-				await fs.promises.rename(tmpPath, this._configPath)
-
-				try {
-					const stat = await fs.promises.stat(this._configPath)
-					this._lastSeenMtimeMs = stat.mtimeMs
-				} catch {
-					// stat failure is non-fatal
-				}
-
-				await this._ensureGitignore()
-				return
+			const onDisk = await this._readDisk()
+			if (onDisk.kind === 'newer') {
+				// Someone upgraded the file since we loaded it.
+				this._readOnlyReason = `gitbraid-config.json was written by a newer GitBraid (schema ${String(onDisk.version)}); not overwriting it.`
+				throw new ConfigError(this._readOnlyReason)
 			}
 
-			throw new ConfigError(
-				`Failed to write gitbraid-config.json after ${String(MAX_WRITE_RETRIES)} retries due to concurrent modification. ` +
-				'Close other VS Code windows on this repository or edit the file manually.',
-			)
+			let nextRev = this._baseRev + 1
+			if (onDisk.kind === 'ok') {
+				const changedElsewhere = onDisk.rev !== this._baseRev
+					|| canonicalJson(onDisk.config) !== canonicalJson(this._baseSnapshot)
+				if (changedElsewhere) {
+					const { config, conflicts } = mergeConfigs3(this._baseSnapshot, this._config, onDisk.config)
+					// Merging another window's edits is routine; only real conflicts are worth a warning.
+					const note = `ConfigService: config changed on disk (rev ${String(this._baseRev)} -> ${String(onDisk.rev)}); merged `
+						+ `with ${String(conflicts.length)} conflict(s)`
+					if (conflicts.length > 0) log.warn(note)
+					else log.info(note)
+					this._config = config
+					this._baseSnapshot = clone(onDisk.config)
+					this._baseRev = onDisk.rev
+					if (conflicts.length > 0) {
+						for (const c of conflicts) log.warn(`ConfigService conflict: ${c.kind} "${c.key}" (kept ${c.kept})`)
+						this._onDidResolveConflict.fire(conflicts)
+					}
+				}
+				nextRev = Math.max(onDisk.rev, this._baseRev) + 1
+			}
+
+			this._config.version = CONFIG_SCHEMA_VERSION
+			this._config.rev = nextRev
+			const content = JSON.stringify(this._config, null, 2) + '\n'
+			const tmpPath = this._configPath + '.tmp'
+			await fs.promises.writeFile(tmpPath, content, 'utf-8')
+			await fs.promises.rename(tmpPath, this._configPath)
+			this._baseRev = nextRev
+			this._baseSnapshot = clone(this._config)
+
+			await this._ensureGitignore()
 		} finally {
 			await this._releaseLock(lockPath)
 		}
@@ -695,20 +756,6 @@ export class ConfigService implements vscode.Disposable {
 			await fs.promises.unlink(lockPath)
 		} catch {
 			// If the file is already gone (e.g. another process cleaned it up), ignore.
-		}
-	}
-
-	/** Returns true if the on-disk file has been modified since our last read. */
-	private _detectDiskConflict(): boolean {
-		if (!this._configPath || this._lastSeenMtimeMs === undefined) {
-			return false
-		}
-		try {
-			const stat = fs.statSync(this._configPath)
-			// 1 ms epsilon to tolerate filesystems with second-level resolution
-			return stat.mtimeMs > this._lastSeenMtimeMs + 1
-		} catch {
-			return false
 		}
 	}
 

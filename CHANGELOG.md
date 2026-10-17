@@ -36,6 +36,18 @@
   append once full (`load()` still returns exactly the newest `maxEntries`),
   and `popLast` is now atomic against appends from another window. Appends
   take a short-lived `<file>.lock`. See `docs/plans/14-jsonl-log-primitive.md`.
+- **Config concurrency uses a revision counter and a three-way merge**
+  (`src/configMerge.ts`, `ConfigService`; schema version 3 adds `rev`).
+  Two windows editing the same workspace no longer rely on file modification
+  times, which missed writes on coarse-resolution filesystems and used a
+  synchronous `stat` in the write path. A deletion in one window is no longer
+  brought back by the other window's older copy, and hunk anchors are no longer
+  dropped when the two are merged. Edits to the same branch's different fields
+  (for example colour here, cached PR number there) both survive. When both
+  windows change the same item differently the later writer's version is kept
+  and a warning is shown. A `gitbraid-config.json` written by a newer GitBraid
+  is now left untouched and treated as read-only instead of being downgraded.
+  Older GitBraid builds still read the file.
 - **SCM commit buttons no longer use the proposed `scmActionButton` API.**
   The proposal (microsoft/vscode#133935) has never been finalised, and
   current stable VS Code (1.141) refuses to let the extension use it, which
@@ -53,6 +65,14 @@
   so every macOS test run failed before any test started.
 
 ### Fixed
+- **`ConfigService.reload()` could undo a newer in-memory change** - the
+  existing guard only covered a debounced flush. Once the debounce timer fired
+  the write ran with no guard, so a late file-watcher event could reload the
+  stale on-disk snapshot over the newer state and the write would then persist
+  it, resurrecting e.g. a just-discarded virtual branch. `reload()` now also
+  skips while a write is in flight and drops a read that a local mutation
+  overtook. This was the cause of the recurring `discardVirtualBranch` test
+  flake in `extension.test.ts`.
 - **Windows CI teardown timeouts** — test temp-dir cleanup used
   `rmSync(..., { maxRetries: 10, retryDelay: 200 })`, which blocks for about
   11 s when Windows holds a handle on `.git`, longer than mocha's 10 s hook
