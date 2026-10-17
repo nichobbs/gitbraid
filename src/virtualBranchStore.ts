@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { log } from './channelLogger'
 import { requireInside } from './pathGuard'
+import { JsonlLog } from './jsonlLog'
 
 const WORKTREES_DIR = '.worktrees'
 const VIRTUAL_DIR = 'virtual'
@@ -63,9 +64,12 @@ export class VirtualBranchStore implements vscode.Disposable {
 	 * serialise against them too. See `withBranchLock`.
 	 */
 	private readonly _writeLocks = new Map<string, Promise<unknown>>()
+	/** One log per branch, created lazily; all file I/O goes through it. */
+	private readonly _logs = new Map<string, JsonlLog<VirtualFileEntry>>()
 	private _loaded = false
 
 	dispose(): void {
+		this._logs.clear()
 		this._state.clear()
 		this._appendCount.clear()
 		this._writeLocks.clear()
@@ -84,6 +88,7 @@ export class VirtualBranchStore implements vscode.Disposable {
 	 */
 	async load(workspaceRoot: vscode.Uri, branches: readonly string[] = []): Promise<void> {
 		this._workspaceRoot = workspaceRoot
+		this._logs.clear()
 		this._state.clear()
 		this._appendCount.clear()
 		const virtualDir = this._virtualDir()
@@ -95,7 +100,7 @@ export class VirtualBranchStore implements vscode.Disposable {
 		for (const branch of branches) {
 			const file = this._fileForBranch(branch)
 			if (!file || !fs.existsSync(file)) continue
-			await this._loadBranchFile(branch, file)
+			await this._loadBranchFile(branch)
 		}
 		this._loaded = true
 		log.info(`VirtualBranchStore: loaded ${this._state.size} virtual branch(es)`)
@@ -241,15 +246,13 @@ export class VirtualBranchStore implements vscode.Disposable {
 	private async _removeBranchLocked(branch: string): Promise<void> {
 		this._state.delete(branch)
 		this._appendCount.delete(branch)
-		const filePath = this._fileForBranch(branch)
-		if (!filePath) return
+		const branchLog = this._logFor(branch)
+		this._logs.delete(branch)
+		if (!branchLog) return
 		try {
-			await fs.promises.unlink(filePath)
+			await branchLog.remove()
 		} catch (e) {
-			const err = e as NodeJS.ErrnoException
-			if (err.code !== 'ENOENT') {
-				log.warn(`VirtualBranchStore.removeBranch: ${err.message}`)
-			}
+			log.warn(`VirtualBranchStore.removeBranch: ${e instanceof Error ? e.message : String(e)}`)
 		}
 	}
 
@@ -270,6 +273,8 @@ export class VirtualBranchStore implements vscode.Disposable {
 			await fs.promises.mkdir(path.dirname(newPath), { recursive: true })
 			await fs.promises.rename(oldPath, newPath)
 		}
+		this._logs.delete(oldName)
+		this._logs.delete(newName)
 	}
 
 	// ─── Private helpers ─────────────────────────────────────────────────────
@@ -291,11 +296,9 @@ export class VirtualBranchStore implements vscode.Disposable {
 	}
 
 	private async _appendEntry(branch: string, entry: VirtualFileEntry): Promise<void> {
-		const file = this._fileForBranch(branch)
-		if (!file) return
-		await fs.promises.mkdir(path.dirname(file), { recursive: true })
-		const line = JSON.stringify(entry) + '\n'
-		await fs.promises.appendFile(file, line, 'utf-8')
+		const branchLog = this._logFor(branch)
+		if (!branchLog) return
+		await branchLog.append(entry)
 		const count = (this._appendCount.get(branch) ?? 0) + 1
 		this._appendCount.set(branch, count)
 		// Compact when the log grows to more than 2x the live working-set size.
@@ -308,66 +311,59 @@ export class VirtualBranchStore implements vscode.Disposable {
 	}
 
 	private async _compact(branch: string): Promise<void> {
-		const file = this._fileForBranch(branch)
-		if (!file) return
+		const branchLog = this._logFor(branch)
+		if (!branchLog) return
 		const state = this._state.get(branch)
 		if (!state) return
-		const tmp = file + '.tmp'
-		const lines: string[] = []
+		const entries: VirtualFileEntry[] = []
 		for (const [p, content] of state.files) {
-			lines.push(JSON.stringify({
-				path: p,
-				contentBase64: Buffer.from(content).toString('base64'),
-				ts: Date.now(),
-			}))
+			entries.push({ path: p, contentBase64: Buffer.from(content).toString('base64'), ts: Date.now() })
 		}
 		for (const p of state.deleted) {
-			lines.push(JSON.stringify({ path: p, deleted: true, ts: Date.now() }))
+			entries.push({ path: p, deleted: true, ts: Date.now() })
 		}
-		await fs.promises.writeFile(tmp, lines.join('\n') + (lines.length > 0 ? '\n' : ''), 'utf-8')
-		await fs.promises.rename(tmp, file)
-		this._appendCount.set(branch, lines.length)
-		log.info(`VirtualBranchStore: compacted "${branch}" (${String(lines.length)} entries)`)
+		await branchLog.rewrite(entries)
+		this._appendCount.set(branch, entries.length)
+		log.info(`VirtualBranchStore: compacted "${branch}" (${String(entries.length)} entries)`)
 	}
 
-	private async _loadBranchFile(branch: string, filePath: string): Promise<void> {
-		let raw: string
+	private async _loadBranchFile(branch: string): Promise<void> {
+		const branchLog = this._logFor(branch)
+		if (!branchLog) return
+		let entries: VirtualFileEntry[]
 		try {
-			raw = await fs.promises.readFile(filePath, 'utf-8')
+			entries = await branchLog.readAll()
 		} catch (e) {
-			log.warn(`VirtualBranchStore: could not read ${filePath}: ${e instanceof Error ? e.message : String(e)}`)
+			log.warn(`VirtualBranchStore: could not read ${branchLog.path}: ${e instanceof Error ? e.message : String(e)}`)
 			return
 		}
 		const state = this._stateFor(branch)
-		let count = 0
-		for (const rawLine of raw.split('\n')) {
-			const line = rawLine.trim()
-			if (!line) continue
-			count++
-			let entry: VirtualFileEntry
-			try {
-				entry = JSON.parse(line) as VirtualFileEntry
-			} catch {
-				// Skip malformed lines — append-only log may have a truncated
-				// tail after a crash.  Previous entries are still valid.
-				continue
-			}
-			if (!entry.path) continue
+		for (const entry of entries) {
 			const key = normalisePath(entry.path)
 			if (entry.deleted) {
 				state.files.delete(key)
 				state.deleted.add(key)
 				continue
 			}
-			if (typeof entry.contentBase64 !== 'string') continue
-			try {
-				state.files.set(key, Buffer.from(entry.contentBase64, 'base64'))
-				state.deleted.delete(key)
-			} catch {
-				// Ignore malformed base64 payloads.
-			}
+			// parseEntry guarantees contentBase64 is a string for non-deletions.
+			state.files.set(key, Buffer.from(entry.contentBase64 ?? '', 'base64'))
+			state.deleted.delete(key)
 		}
-		this._appendCount.set(branch, count)
+		// Count every non-empty line, including skipped ones, so the compaction
+		// trigger sees the file's real size.
+		const { lines, skipped } = branchLog.stats()
+		this._appendCount.set(branch, lines + skipped)
+	}
+
+	private _logFor(branch: string): JsonlLog<VirtualFileEntry> | undefined {
+		let branchLog = this._logs.get(branch)
+		if (!branchLog) {
+			const file = this._fileForBranch(branch)
+			if (!file) return undefined
+			branchLog = new JsonlLog<VirtualFileEntry>({ path: file, parse: parseEntry })
+			this._logs.set(branch, branchLog)
+		}
+		return branchLog
 	}
 
 	private _virtualDir(): string | undefined {
@@ -392,6 +388,16 @@ export function encodeBranchToFilename(branch: string): string {
 	const slug = branch.replaceAll('/', '-').replaceAll(/[^a-zA-Z0-9._-]/g, '_')
 	const suffix = crypto.createHash('sha1').update(branch).digest('hex').slice(0, 7)
 	return `${slug}__${suffix}`
+}
+
+/** Accept a line only if it is a usable file mutation; anything else is skipped. */
+function parseEntry(raw: unknown): VirtualFileEntry | undefined {
+	if (typeof raw !== 'object' || raw === null) return undefined
+	const r = raw as Record<string, unknown>
+	if (typeof r.path !== 'string' || r.path === '') return undefined
+	if (r.deleted === true) return r as unknown as VirtualFileEntry
+	if (typeof r.contentBase64 !== 'string') return undefined
+	return r as unknown as VirtualFileEntry
 }
 
 function normalisePath(p: string): string {

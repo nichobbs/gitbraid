@@ -53,7 +53,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 ### Key Services
 
-**`ConfigService`** (`src/configService.ts`) — Persists the stack and file/hunk assignments to `.worktrees/gitbraid-config.json`. Uses atomic temp-file writes, mtime-based concurrent-write detection, a 50 ms debounce, and version migration. Fires `onDidChangeAssignment` / `onDidChangeStack` events consumed throughout the codebase.
+**`ConfigService`** (`src/configService.ts`) — Persists the stack and file/hunk assignments to `.worktrees/gitbraid-config.json`. Uses atomic temp-file writes, revision-based concurrent-write detection with a three-way merge, a 50 ms debounce, and version migration. Fires `onDidChangeAssignment` / `onDidChangeStack` events consumed throughout the codebase.
 
 **`BranchStackService`** (`src/branchStackService.ts`) — Manages git worktrees under `.worktrees/`. Branch name → directory mapping uses a slug + SHA1 suffix (`feature-docs__a1b2c3d`) to avoid collisions. Wraps ConfigService and is the authoritative source for stack membership. Also handles `virtual` branches — entries flagged `virtual: true` skip `git worktree add` and live only in `VirtualBranchStore`; `materialiseBranch()` promotes them to regular worktree branches.
 
@@ -96,7 +96,8 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 `.worktrees/gitbraid-config.json` is the primary persistent state:
 ```json
 {
-  "version": 1,
+  "version": 3,
+  "rev": 17,
   "stack": [
     { "name": "feature/docs", "color": "#4CAF50", "order": 1, "base": "main" },
     { "name": "feature/idea", "color": "#6C8EBF", "order": 2, "base": "feature/docs", "virtual": true }
@@ -105,6 +106,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
   "hunkAssignments": { "src/bar.ts": { "0": "feature/impl" } }
 }
 ```
+`rev` is a revision counter bumped on every write; `ConfigService` uses it (and the content it last saw) to detect that another window wrote, and merges three-way via `src/configMerge.ts`. A file with a newer `version` than this build supports is never overwritten.
 Never write this file directly — always go through `ConfigService`.
 
 Virtual branches (`virtual: true`) also persist their captured file

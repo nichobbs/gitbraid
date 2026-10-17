@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { ConfigService } from '../src/configService'
 import { ConfigError } from '../src/errors'
+import { CONFIG_SCHEMA_VERSION } from '../src/configTypes'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -490,5 +491,280 @@ suite('ConfigService', () => {
 
 		assert.ok(!fs.existsSync(lockPath), 'stale lock should have been cleaned up')
 		assert.ok(fs.existsSync(configPath()), 'config should have been written')
+	})
+
+	test('reload() during an in-flight write does not resurrect a removed branch', async () => {
+		// Regression: reload() only skipped while a flush was *debounced*.
+		// Once the timer fired, _performFlush cleared it and _writeNow ran
+		// asynchronously, so a late file-watcher event (from an earlier write)
+		// could call reload() in that window, replace the newer in-memory state
+		// with the stale on-disk snapshot, and have _writeNow write that stale
+		// state back - bringing a just-removed branch back to life.
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/gone', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+		assert.ok(svc.getBranch('feature/gone'), 'precondition: branch persisted')
+
+		// Hold the write lock so the next flush parks inside _acquireLock,
+		// i.e. after its debounce timer has fired but before it writes.
+		const lockPath = configPath() + '.lock'
+		fs.writeFileSync(lockPath, '', 'utf-8')
+		let removal: Promise<void> | undefined
+		try {
+			removal = svc.removeBranch('feature/gone')
+			await new Promise((r) => setTimeout(r, 200)) // debounce (50 ms) has elapsed
+
+			// A stale watcher event arrives now.
+			await svc.reload()
+			assert.strictEqual(
+				svc.getBranch('feature/gone'),
+				undefined,
+				'reload() must not restore a branch removed by an in-flight write',
+			)
+		} finally {
+			fs.rmSync(lockPath, { force: true })
+		}
+		await removal
+		await svc.flushPendingWrites()
+
+		const onDisk = JSON.parse(fs.readFileSync(configPath(), 'utf-8')) as { stack: Array<{ name: string }> }
+		assert.ok(!onDisk.stack.some((e) => e.name === 'feature/gone'), 'removed branch must stay removed on disk')
+	})
+
+	test('reload() does not drop a mutation made while its disk read is in flight', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/gone2', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+
+		// reload() runs synchronously up to its first await (the disk read);
+		// the removal below then mutates in-memory state before that read
+		// resolves, so the snapshot reload() obtains is already stale.
+		const reloading = svc.reload()
+		const removal = svc.removeBranch('feature/gone2')
+		await reloading
+		assert.strictEqual(svc.getBranch('feature/gone2'), undefined, 'reload() must not undo a newer in-memory removal')
+
+		await removal
+		await svc.flushPendingWrites()
+		const onDisk = JSON.parse(fs.readFileSync(configPath(), 'utf-8')) as { stack: Array<{ name: string }> }
+		assert.ok(!onDisk.stack.some((e) => e.name === 'feature/gone2'))
+	})
+
+	// ── Revision counter and three-way merge (plan 13) ───────────────────────
+
+	/** A second "window": an independent service on the same config file. */
+	async function secondWindow(): Promise<ConfigService> {
+		const other = new ConfigService()
+		await other.load(wsRoot())
+		return other
+	}
+
+	function readDisk(): { version: number, rev?: number, stack: Array<{ name: string, order: number }>, assignments: Record<string, string> } {
+		return JSON.parse(fs.readFileSync(configPath(), 'utf-8')) as ReturnType<typeof readDisk>
+	}
+
+	test('rev increases by one on every write and is persisted', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+		const first = readDisk().rev
+		assert.strictEqual(first, 1)
+		await svc.setAssignment('src/a.ts', 'feature/a')
+		await svc.flushPendingWrites()
+		assert.strictEqual(readDisk().rev, 2)
+		assert.strictEqual(readDisk().version, CONFIG_SCHEMA_VERSION)
+	})
+
+	test('a schema v2 file (no rev) loads intact and is upgraded on the next write', async () => {
+		writeConfig(JSON.stringify({
+			version: 2,
+			stack: [{ name: 'feature/old', color: '#4CAF50', order: 1, base: 'main' }],
+			assignments: { 'src/old.ts': 'feature/old' },
+			hunkAssignments: {},
+			hunkAnchors: {},
+		}))
+		await svc.load(wsRoot())
+		assert.strictEqual(svc.getAssignment('src/old.ts'), 'feature/old')
+		await svc.setAssignment('src/new.ts', 'feature/old')
+		await svc.flushPendingWrites()
+		const disk = readDisk()
+		assert.strictEqual(disk.version, CONFIG_SCHEMA_VERSION)
+		assert.strictEqual(disk.rev, 1)
+		assert.deepStrictEqual(Object.keys(disk.assignments).sort(), ['src/new.ts', 'src/old.ts'])
+	})
+
+	test('a file written by a newer GitBraid is left untouched and writes are refused', async () => {
+		const future = JSON.stringify({
+			version: CONFIG_SCHEMA_VERSION + 5,
+			rev: 9,
+			stack: [{ name: 'feature/x', color: '#111', order: 1, base: 'main', somethingNew: true }],
+			assignments: { 'src/x.ts': 'feature/x' },
+			theFuture: { keep: 'me' },
+		}, null, 2) + '\n'
+		writeConfig(future)
+		await svc.load(wsRoot()) // must not throw
+		assert.strictEqual(svc.isReadOnly, true)
+		assert.deepStrictEqual(svc.getStack(), [], 'we do not pretend to understand it')
+
+		await assert.rejects(
+			svc.addBranch({ name: 'feature/y', color: '#0f0', base: 'main' }),
+			(e: unknown) => e instanceof ConfigError && /newer GitBraid/.test(e.message),
+		)
+		assert.strictEqual(fs.readFileSync(configPath(), 'utf-8'), future, 'file must be byte-for-byte unchanged')
+	})
+
+	test('a deletion in one window is not undone by another window that still has the old copy', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.setAssignment('src/gone.ts', 'feature/a')
+		await svc.flushPendingWrites()
+
+		const other = await secondWindow() // sees src/gone.ts
+		try {
+			await svc.removeAssignment('src/gone.ts')
+			await svc.flushPendingWrites()
+
+			// The other window never saw the unassign, and now makes an unrelated change.
+			await other.addBranch({ name: 'feature/b', color: '#00f', base: 'feature/a' })
+			await other.flushPendingWrites()
+
+			const disk = readDisk()
+			assert.strictEqual(disk.assignments['src/gone.ts'], undefined, 'the unassign must survive')
+			assert.ok(disk.stack.some((e) => e.name === 'feature/b'), 'and the other window\'s branch is kept')
+			assert.strictEqual(other.getAssignment('src/gone.ts'), undefined, 'the other window adopts the deletion')
+		} finally {
+			other.dispose()
+		}
+	})
+
+	test('REGRESSION: a write is merged even when the file mtime looks unchanged', async () => {
+		// The previous scheme compared modification times, so a write that landed with
+		// an identical (or coarse, equal-second) mtime was treated as "no conflict" and
+		// the other window's change was overwritten.
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+		const stale = await secondWindow()
+		try {
+			const before = fs.statSync(configPath())
+			await svc.setAssignment('src/theirs.ts', 'feature/a')
+			await svc.flushPendingWrites()
+			fs.utimesSync(configPath(), before.atime, before.mtime) // make it look untouched
+
+			await stale.setAssignment('src/ours.ts', 'feature/a')
+			await stale.flushPendingWrites()
+
+			assert.deepStrictEqual(Object.keys(readDisk().assignments).sort(), ['src/ours.ts', 'src/theirs.ts'])
+		} finally {
+			stale.dispose()
+		}
+	})
+
+	test('a hand edit that does not bump rev is merged, not overwritten', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+
+		const disk = readDisk()
+		disk.assignments['src/hand.ts'] = 'feature/a' // edit by hand; rev left as is
+		fs.writeFileSync(configPath(), JSON.stringify(disk, null, 2) + '\n')
+
+		await svc.setAssignment('src/api.ts', 'feature/a')
+		await svc.flushPendingWrites()
+		assert.deepStrictEqual(Object.keys(readDisk().assignments).sort(), ['src/api.ts', 'src/hand.ts'])
+	})
+
+	test('onDidResolveConflict reports a key both windows changed differently', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.addBranch({ name: 'feature/b', color: '#00f', base: 'feature/a' })
+		await svc.flushPendingWrites()
+
+		const w1 = await secondWindow()
+		const w2 = await secondWindow() // both start from the same revision
+		try {
+			const seen: Array<{ kind: string, key: string, kept: string }> = []
+			w2.onDidResolveConflict((c) => seen.push(...c))
+			await w1.setAssignment('src/clash.ts', 'feature/a')
+			await w1.flushPendingWrites()
+			await w2.setAssignment('src/clash.ts', 'feature/b') // a different choice for the same file
+			await w2.flushPendingWrites()
+			assert.deepStrictEqual(seen.map((c) => [c.kind, c.key, c.kept]), [['assignment', 'src/clash.ts', 'ours']])
+			assert.strictEqual(readDisk().assignments['src/clash.ts'], 'feature/b', 'the later writer\'s own choice wins')
+		} finally {
+			w1.dispose()
+			w2.dispose()
+		}
+	})
+
+	test('reload() of our own just-written file applies nothing and fires no events', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.setAssignment('src/a.ts', 'feature/a')
+		await svc.flushPendingWrites()
+
+		let events = 0
+		svc.onDidChangeStack(() => events++)
+		svc.onDidChangeAssignment(() => events++)
+		await svc.reload() // what the file watcher does after our own write
+		assert.strictEqual(events, 0)
+		assert.strictEqual(svc.getAssignment('src/a.ts'), 'feature/a')
+	})
+
+	test('reload() still picks up a genuine external change', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+
+		const other = await secondWindow()
+		try {
+			await other.setAssignment('src/ext.ts', 'feature/a')
+			await other.flushPendingWrites()
+		} finally {
+			other.dispose()
+		}
+		const changes: Array<string | undefined> = []
+		svc.onDidChangeAssignment((e) => changes.push(e.relativePath))
+		await svc.reload()
+		assert.strictEqual(svc.getAssignment('src/ext.ts'), 'feature/a')
+		assert.deepStrictEqual(changes, ['src/ext.ts'])
+	})
+
+	test('stress: two windows editing disjoint keys concurrently converge to the union of their edits', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/a', color: '#0f0', base: 'main' })
+		await svc.addBranch({ name: 'feature/b', color: '#00f', base: 'feature/a' })
+		await svc.flushPendingWrites()
+		const other = await secondWindow()
+
+		// Deterministic pseudo-random edit scripts; each window owns its own key namespace.
+		let seed = 12345
+		const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed / 4294967296 }
+		const expected: Record<string, string> = {}
+		const script = async (win: ConfigService, prefix: string) => {
+			for (let i = 0; i < 25; i++) {
+				const key = `src/${prefix}${String(Math.floor(rnd() * 8))}.ts`
+				if (rnd() < 0.3) {
+					await win.removeAssignment(key)
+					delete expected[key]
+				} else {
+					const branch = rnd() < 0.5 ? 'feature/a' : 'feature/b'
+					await win.setAssignment(key, branch)
+					expected[key] = branch
+				}
+				if (i % 5 === 0) await win.flushPendingWrites()
+			}
+			await win.flushPendingWrites()
+		}
+		try {
+			await Promise.all([script(svc, 'one'), script(other, 'two')])
+			const onDisk = readDisk().assignments
+			assert.deepStrictEqual(
+				Object.fromEntries(Object.entries(onDisk).sort()),
+				Object.fromEntries(Object.entries(expected).sort()),
+			)
+		} finally {
+			other.dispose()
+		}
 	})
 })

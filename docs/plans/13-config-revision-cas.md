@@ -3,7 +3,7 @@
 **Inspiration:** Scion's refs, which move by compare-and-swap on a single
 row (https://www.anthropic.com/engineering/redesigning-source-control).
 
-**Status:** **Not started.** Tracking issue: #37.
+**Status:** **Implemented.** `src/configMerge.ts`, `src/configService.ts`. Tracking issue: #37.
 
 ## Goal
 
@@ -23,66 +23,105 @@ three-way merge so deletions are not resurrected.
   is undone by another window's older copy;
 - relies on a time-based stale-lock check.
 
-## Design
+## Design (as built)
+
+### What differed from the original draft
+
+- The schema was already **version 2** (hunk anchors), so `rev` makes it
+  **version 3**, not 1 to 2.
+- The old `mergeConfigs` also **dropped `hunkAnchors`** on every conflict merge.
+  The new merge handles them.
+- A conflict is detected by **revision or content**, not revision alone: if the
+  file's `rev` equals what we last saw but its content differs (a hand edit, or
+  an older GitBraid that does not bump `rev`), it is still merged.
+- `migrateConfig` stamps the current version unconditionally, which would have
+  silently downgraded a newer file. The version check now happens before it.
 
 ### Data model
 
-Config version 2 adds `rev: number`.
-
-```json
-{ "version": 2, "rev": 17, "stack": [], "assignments": {}, "hunkAssignments": {} }
-```
-
-`migrateConfig` maps version 1 to version 2 with `rev = 0`. A file with
-a version above the supported one throws `ConfigError` and is left
-untouched (it must never fall through to `emptyConfig()`).
+`BranchConfig.rev?: number`, `CONFIG_SCHEMA_VERSION = 3`. Files without `rev`
+read as 0. `ConfigService` remembers `_baseRev` and `_baseSnapshot`, the
+revision and content it last read or wrote. No file modification times and no
+synchronous filesystem calls remain in the write path.
 
 ### Write protocol
 
 Inside the existing O_EXCL lock:
 
-1. Async read of the file; missing means `rev = 0`.
-2. `disk.rev === baseRev`: write `rev = baseRev + 1` via tmp and rename.
-3. Otherwise run `mergeConfigs3(base, ours, theirs)` and write
-   `rev = disk.rev + 1`.
+1. Read the file asynchronously.
+2. **Newer schema:** refuse (see below).
+3. **File equals our base** (same `rev`, same canonical content): write ours.
+4. **File differs:** `mergeConfigs3(base, ours, theirs)`, adopt the result,
+   fire `onDidResolveConflict` if anything conflicted, then write.
+5. **File missing or unreadable:** write ours as is (this matches the old
+   behaviour, and means deleting the file by hand cannot erase a live window's
+   state).
 
-`ConfigService` keeps `_baseRev` and `_baseSnapshot` (last read or
-written document).
+The written revision is `max(disk rev, base rev) + 1`.
 
-### Three-way merge
+### Three-way merge (`src/configMerge.ts`, pure)
 
-For each map entry, compare `ours` and `theirs` to `base`:
+Per key of `assignments`, `hunkAssignments` and `hunkAnchors` (nested maps are
+flattened so one routine covers them): a side that did not change defers to the
+side that did, **including when the change is a deletion**. When both changed
+differently, ours wins, except that a deletion never beats a modification, so
+nothing the other window wrote is discarded.
 
-- one side changed: take it, including deletion;
-- both changed identically: take it;
-- both changed differently: ours wins and a conflict is recorded.
+Stack entries are merged by `name`, and when both sides modified the same
+branch, **field by field**, so a colour change in one window and a cached PR
+number in another both survive. Afterwards `order` is renumbered 1..n, which is
+a no-op when it already was contiguous.
 
-Stack entries merge by `name`; `order` is recomputed from base order
-plus additions. Conflicts fire `onDidResolveConflict` and log to the
-output channel; the UI shows a one-time notice.
+### Newer schema
+
+A file whose `version` is greater than ours loads as an empty, **read-only**
+config (`isReadOnly`), is never overwritten, and every mutation throws a
+`ConfigError` saying so. Detected again at write time in case the file was
+upgraded while we were running.
 
 ### Watching
 
-The file watcher compares `rev` so our own writes do not reload.
+`reload()` ignores the watcher event for our own write: if the file has our
+base revision and content, nothing is applied and no events fire.
+
+### User notice
+
+`FolderContext` shows one warning (throttled to once per 10 s) when
+`onDidResolveConflict` fires. Details go to the output channel.
+
+### Known gaps
+
+- A **malformed** file is still replaced by an empty config and overwritten on
+  the next write (existing behaviour, not changed here).
+- Conflict resolution is last-writer-wins on the same key; there is no
+  interactive resolution.
+- `ConfigService` keeps its own lock loop; moving it onto `withFileLock`
+  (plan 14) is a separate small change.
+- The notice in `FolderContext` is not unit tested.
 
 ## Sequencing
 
-1. Land `mergeConfigs3` and its tests (pure).
-2. Add `rev` and migration, keep mtime as a secondary check.
-3. Remove mtime detection and `statSync`.
-
-Do after plan 14 only if the lock helper is shared; otherwise independent.
+Landed as one change: the pure merge first (with its tests), then `rev` and the
+write protocol, then removal of the mtime check and `statSync`. It is stacked on
+the `reload()` race fix, since both rewrite the same part of `ConfigService`.
+It does not depend on plan 14.
 
 ## Tests
 
-- Pure table tests for `mergeConfigs3` (delete vs untouched, delete vs
-  modify, add vs add, nested hunk maps, reorder on both sides).
-- Two `ConfigService` instances, 200 random interleaved mutations each,
-  final state equals a sequential replay.
-- Stubbed second-resolution mtimes: no lost update.
-- Newer-version file untouched and surfaces `ConfigError`.
+- `test/configMerge.test.ts` (27): pure merge cases (delete vs untouched,
+  delete vs modify, add vs add, nested hunk maps and anchors, field-level stack
+  merge, reorder plus add) and a 200-seed property test that disjoint edits
+  always combine to "apply both" with no conflicts. Mutation-checked: degrading
+  the merge to the old union fails 9 of them.
+- `test/configService.test.ts`: `rev` increments; a v2 file upgrades; a newer
+  file is untouched and writes are refused; a deletion survives a stale window;
+  a write is merged even when the mtime is unchanged; a hand edit without a
+  `rev` bump is merged; conflicts are reported; our own write's watcher echo is
+  ignored; and a two-window concurrent stress run converges. Mutation-checked:
+  disabling the merge step fails five of them.
 
 ## Open questions
 
-- Apply the same idea to `VirtualBranchStore` compaction?
+- Apply the same idea to `VirtualBranchStore` compaction? (Not needed once it
+  is on `JsonlLog`, which locks every write.)
 - Should conflicts be surfaced in the dashboard rather than a toast?
