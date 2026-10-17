@@ -307,8 +307,11 @@ suite('DiffEngine — spawn-based invocation', () => {
 			const hunks = await engine.getHunksForFile(wsRoot, p)
 			assert.deepStrictEqual(hunks, [])
 
-			assert.strictEqual(fake.calls.length, 1)
-			const call = fake.calls[0]
+			// The engine also asks git for HEAD (`rev-parse`); the contract here is about
+			// the `diff` invocation, which must be exactly one.
+			const diffCalls = fake.calls.filter((c) => c.args[0] === 'diff')
+			assert.strictEqual(diffCalls.length, 1)
+			const call = diffCalls[0]
 			// The payload must appear as a standalone argv entry, not inlined
 			// into a shell string, and must retain its original characters.
 			// Normalise backslashes on both sides — on Windows, `path.normalize`
@@ -354,33 +357,27 @@ suite('DiffEngine — spawn-based invocation', () => {
 
 		await engine.getHunksForFile(wsRoot, 'foo.ts')
 		await engine.getHunksForFile(wsRoot, 'foo.ts')
-		assert.strictEqual(fake.calls.length, 1, 'unchanged mtime should be served from cache without a second git diff')
+		const diffs = fake.calls.filter((c) => c.args[0] === 'diff').length
+		assert.strictEqual(diffs, 1, 'unchanged content and HEAD should be served from cache without a second git diff')
 	})
 
 	test('getHunksForFile: does not serve stale cached hunks when the file changes immediately ' +
-		'after the cache was filled (regression — a time-based TTL previously skipped the mtime ' +
+		'after the cache was filled (regression - a time-based TTL previously skipped the staleness ' +
 		'check for ~1.5s after a fresh fill, serving stale hunks to a save that landed in that window)', async () => {
 		const filePath = pathNode.join(wsRoot, 'foo.ts')
 		fs.writeFileSync(filePath, 'content')
 		const fake = new FakeGitRunner()
 		fake.fixture('diff HEAD', { stdout: '', exitCode: 0 })
 		const engine = new DiffEngine(fake)
+		const diffs = () => fake.calls.filter((c) => c.args[0] === 'diff').length
 
 		await engine.getHunksForFile(wsRoot, 'foo.ts')
-		assert.strictEqual(fake.calls.length, 1)
+		assert.strictEqual(diffs(), 1)
 
-		// Force a distinctly different mtime — simulating a second save that
-		// lands well within any TTL window, regardless of the host
-		// filesystem's mtime resolution.
-		const past = new Date(Date.now() - 5_000)
-		const future = new Date(Date.now() + 5_000)
-		fs.utimesSync(filePath, past, future)
+		// A second save lands straight away, with different content.
+		fs.writeFileSync(filePath, 'changed content')
 
 		await engine.getHunksForFile(wsRoot, 'foo.ts')
-		assert.strictEqual(
-			fake.calls.length, 2,
-			'a changed mtime must trigger a fresh git diff even immediately after the cache was filled',
-		)
+		assert.strictEqual(diffs(), 2, 'changed content must trigger a fresh git diff even immediately after the cache was filled')
 	})
 })
-
