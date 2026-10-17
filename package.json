@@ -366,6 +366,11 @@
 				"icon": "$(trash)"
 			},
 			{
+				"command": "gitbraid.setWorktreeSparse",
+				"title": "Convert Branch Worktree to Sparse or Full",
+				"category": "GitBraid"
+			},
+			{
 				"command": "gitbraid.rebaseBranch",
 				"title": "Rebase Branch onto Parent",
 				"category": "GitBraid",
@@ -895,6 +900,13 @@
 					"description": "Milliseconds to debounce workspace-sync file-change events.",
 					"minimum": 0
 				},
+				"gitbraid.diffCacheEntries": {
+					"type": "number",
+					"default": 256,
+					"description": "How many files' diff hunks GitBraid keeps cached. Raise it for large change sets; takes effect when the window is reloaded.",
+					"minimum": 32,
+					"maximum": 2048
+				},
 				"gitbraid.showFloatingWarningOnCommit": {
 					"type": "boolean",
 					"default": true,
@@ -920,6 +932,24 @@
 					"default": "#4ec9b0",
 					"description": "Default hex color for newly added stack branches.",
 					"pattern": "^#[0-9a-fA-F]{6}$"
+				},
+				"gitbraid.sparseWorktrees": {
+					"type": "string",
+					"enum": ["off", "auto", "always"],
+					"default": "auto",
+					"description": "Create branch worktrees with git sparse-checkout limited to the directories the branch owns (grown on demand). \"auto\" does so only when the repository has more than gitbraid.sparseWorktreeThreshold tracked files. Requires git 2.25 or later."
+				},
+				"gitbraid.sparseWorktreeThreshold": {
+					"type": "number",
+					"default": 20000,
+					"minimum": 0,
+					"description": "Tracked-file count above which gitbraid.sparseWorktrees=auto creates sparse worktrees."
+				},
+				"gitbraid.sparseAlwaysInclude": {
+					"type": "array",
+					"items": { "type": "string" },
+					"default": [],
+					"description": "Directories (repo-relative) that every sparse worktree always contains, e.g. build config."
 				},
 				"gitbraid.maxSyncFileSizeKb": {
 					"type": "number",
@@ -972,6 +1002,22 @@
 					"minimum": 10,
 					"description": "Maximum number of entries retained in the persistent undo log (.worktrees/undo-log.jsonl)."
 				},
+				"gitbraid.showHunkKind": {
+					"type": "boolean",
+					"default": true,
+					"description": "Tag hunk CodeLenses that are whitespace-only, comment-only, import-only or comment+code. Classification is conservative: anything uncertain is shown as a normal change."
+				},
+				"gitbraid.autoRouteTrivialHunks": {
+					"type": "string",
+					"enum": ["off", "whitespace", "whitespace+comment"],
+					"default": "off",
+					"description": "When routing hunks, let unassigned whitespace-only (or whitespace and comment-only) hunks follow the nearest assigned hunk's branch. Never applies to code changes."
+				},
+				"gitbraid.absorbSkipTrivial": {
+					"type": "boolean",
+					"default": true,
+					"description": "Absorb leaves whitespace-only and comment-only hunks in the worktree instead of folding them into the commit that blame points at."
+				},
 				"gitbraid.mergeQueuePollSeconds": {
 					"type": "number",
 					"default": 30,
@@ -1000,6 +1046,18 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Send anonymous usage counters (command names and stack-shape counts only — never file contents, paths, branch names, or remote URLs). Disabled by default; also requires VS Code's global telemetry setting to be on. No data leaves the machine unless a reporter sink is also configured."
+				},
+				"gitbraid.agentAllowForce": {
+					"type": "boolean",
+					"default": false,
+					"description": "Allow AI agents (the MCP server and chat tools) to remove a branch with force, discarding its uncommitted work. Off by default: agents must commit or stash first."
+				},
+				"gitbraid.agentMaxDiffBytes": {
+					"type": "number",
+					"default": 200000,
+					"minimum": 1000,
+					"maximum": 5000000,
+					"description": "Largest diff, in bytes, that the getBranchDiff tool returns to an agent before truncating it."
 				}
 			}
 		},
@@ -1116,7 +1174,7 @@
 			{
 				"name": "gitbraid_assignHunk",
 				"displayName": "GitBraid: Assign Hunk to Branch",
-				"modelDescription": "Assigns a specific diff hunk within a file to a branch, identified by its 0-based index in the unified diff output.",
+				"modelDescription": "Assigns a specific diff hunk within a file to a branch, identified by its 0-based index. Get the index from getFileHunks first; indices change whenever the file is edited.",
 				"userDescription": "Assign a specific hunk to a GitBraid branch.",
 				"canBeReferencedInPrompt": true,
 				"toolReferenceName": "gitbraidAssignHunk",
@@ -1212,6 +1270,159 @@
 						"branch",
 						"message"
 					],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_pullBranch",
+				"displayName": "GitBraid: Pull Branch",
+				"modelDescription": "Pulls the latest changes from origin into a branch's worktree (git pull --rebase). Refused for scratch and virtual branches.",
+				"userDescription": "Pull the latest changes into a GitBraid branch.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidPullBranch",
+				"icon": "$(repo-pull)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"branch": {
+							"type": "string",
+							"description": "The branch to pull."
+						}
+					},
+					"required": [
+						"branch"
+					],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_syncBranch",
+				"displayName": "GitBraid: Sync Branch",
+				"modelDescription": "Pulls (rebase) then pushes a branch to origin. Refused for scratch and virtual branches.",
+				"userDescription": "Pull and push a GitBraid branch.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidSyncBranch",
+				"icon": "$(sync)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"branch": {
+							"type": "string",
+							"description": "The branch to sync."
+						}
+					},
+					"required": [
+						"branch"
+					],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_getStackStatus",
+				"displayName": "GitBraid: Get Stack Status",
+				"modelDescription": "Returns staged / unstaged / untracked counts for every branch in the stack, plus the total number of floating files.",
+				"userDescription": "Show status for every GitBraid branch.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetStackStatus",
+				"icon": "$(checklist)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_getFileOwnership",
+				"displayName": "GitBraid: Get File Ownership",
+				"modelDescription": "Says which branch a file is assigned to, which of its hunks are assigned to other branches, and whether it is floating (modified but unassigned). Check this before assigning a file.",
+				"userDescription": "See which GitBraid branch owns a file.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetFileOwnership",
+				"icon": "$(file)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"relativePath": {
+							"type": "string",
+							"description": "Workspace-relative path to the file."
+						}
+					},
+					"required": [
+						"relativePath"
+					],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_getFileHunks",
+				"displayName": "GitBraid: Get File Hunks",
+				"modelDescription": "Lists the hunks in a file's uncommitted changes with their index, line range, header and the branch each is assigned to. Hunk indices change whenever the file is edited, so call this immediately before assignHunk.",
+				"userDescription": "List the hunks in a file.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetFileHunks",
+				"icon": "$(diff)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"relativePath": {
+							"type": "string",
+							"description": "Workspace-relative path to the file."
+						},
+						"includePatch": {
+							"type": "boolean",
+							"description": "Include each hunk's patch text. Large; off by default."
+						}
+					},
+					"required": [
+						"relativePath"
+					],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_getBranchDiff",
+				"displayName": "GitBraid: Get Branch Diff",
+				"modelDescription": "Returns what a branch changes relative to the point it forked from its base, including uncommitted edits to tracked files in its worktree. Pass stat for a summary first; large output is truncated. Not available for virtual branches.",
+				"userDescription": "Show what a GitBraid branch changes.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetBranchDiff",
+				"icon": "$(git-compare)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"branch": {
+							"type": "string",
+							"description": "The branch to diff."
+						},
+						"stat": {
+							"type": "boolean",
+							"description": "Return git diff --stat instead of the full diff."
+						}
+					},
+					"required": [
+						"branch"
+					],
+					"additionalProperties": false
+				}
+			},
+			{
+				"name": "gitbraid_getUndoLog",
+				"displayName": "GitBraid: Get Undo Log",
+				"modelDescription": "Returns the most recent recorded GitBraid actions, newest first.",
+				"userDescription": "Show recent GitBraid actions.",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "gitbraidGetUndoLog",
+				"icon": "$(history)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"limit": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 200,
+							"description": "How many entries to return. Default 20."
+						}
+					},
 					"additionalProperties": false
 				}
 			}

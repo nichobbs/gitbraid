@@ -1,3 +1,4 @@
+import { autoRouteMode, withInheritedTrivial } from './hunkKinds'
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
@@ -6,10 +7,31 @@ import { WorkspaceSync } from './workspaceSync'
 import { BranchStackEntry, BranchStatus, StackStatus, AssignmentChangeEvent, StackChangeEvent } from './configTypes'
 import { GitError } from './errors'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
-import type { GitBraidExportedAPI, BranchOptions, CommitOptions } from './@types/GitBraidAPI'
+import type {
+	GitBraidExportedAPI,
+	BranchOptions,
+	CommitOptions,
+	FileOwnership,
+	FileHunkInfo,
+	FileHunkOptions,
+	BranchDiff,
+	BranchDiffOptions,
+} from './@types/GitBraidAPI'
 import { hideAssignedFile, unhideAssignedFile } from './gitIndex'
-import { HunkRouter } from './hunkRouter'
+import { HunkRouter, anchorFor } from './hunkRouter'
 import { DiffEngine } from './diffEngine'
+import type { PersistentUndoLog, UndoLogEntry } from './persistentUndoLog'
+import {
+	requireBranch,
+	requireHunkInRange,
+	requireNotScratch,
+	requirePermutation,
+	requireWorkspacePath,
+	requireWorktree,
+} from './stackInvariants'
+
+/** Default cap on `getBranchDiff` output, in bytes. */
+const DEFAULT_BRANCH_DIFF_BYTES = 200_000
 
 // ─── Git status helper ────────────────────────────────────────────────────────
 
@@ -61,8 +83,28 @@ export class GitBraidApi implements GitBraidExportedAPI {
 		private readonly _workspaceRoot: vscode.Uri,
 		private readonly _runner: IGitRunner = getDefaultGitRunner(),
 		hunkRouter?: HunkRouter,
+		private readonly _undoLog?: PersistentUndoLog,
 	) {
 		this._hunkRouter = hunkRouter ?? new HunkRouter(new DiffEngine())
+	}
+
+	// ── Invariant helpers (plan 12) ───────────────────────────────────────────
+	// Structural rules are enforced here, once, so every caller (chat tools, the
+	// MCP server, other extensions) gets the same protection and the same errors.
+
+	private _branch(name: string): BranchStackEntry {
+		return requireBranch(this._config.getStack(), name)
+	}
+
+	private _path(relativePath: string): string {
+		return requireWorkspacePath(this._workspaceRoot.fsPath, relativePath)
+	}
+
+	/** A branch whose worktree git commands will run in. */
+	private _worktreeBranch(name: string, action: string): BranchStackEntry {
+		const entry = this._branch(name)
+		requireWorktree(entry, action)
+		return entry
 	}
 
 	// ── Stack management ──────────────────────────────────────────────────────
@@ -84,6 +126,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	}
 
 	async removeBranch(name: string, force = false): Promise<void> {
+		this._branch(name)
 		// Collect files assigned to this branch before removing it from the stack
 		// so we can undo skip-worktree / exclude entries after removal.
 		const allAssignments = this._config.getAllAssignments()
@@ -104,7 +147,35 @@ export class GitBraidApi implements GitBraidExportedAPI {
 		return this._config.getAssignment(relativePath)
 	}
 
+	getFileOwnership(relativePath: string): FileOwnership {
+		const rel = this._path(relativePath)
+		const hunks: Record<string, string> = {}
+		for (const [idx, branch] of this._config.getHunkAssignments(rel) ?? []) hunks[String(idx)] = branch
+		return {
+			path: rel,
+			...(this._config.getAssignment(rel) ? { branch: this._config.getAssignment(rel) } : {}),
+			hunkAssignments: hunks,
+			floating: this._sync.getFloatingDirty().includes(rel),
+		}
+	}
+
+	async getFileHunks(relativePath: string, options: FileHunkOptions = {}): Promise<FileHunkInfo[]> {
+		const rel = this._path(relativePath)
+		const hunks = await this._hunkRouter.diffEngine.getHunksForFile(this._workspaceRoot.fsPath, rel)
+		const assigned = this._config.getHunkAssignments(rel)
+		return hunks.map((h) => ({
+			index: h.index,
+			startLine: h.startLine,
+			endLine: h.endLine,
+			header: h.header,
+			...(assigned?.get(h.index) ? { assignedBranch: assigned.get(h.index) } : {}),
+			...(options.includePatch === true ? { patch: h.patch } : {}),
+		}))
+	}
+
 	async assignFile(relativePath: string, branch: string): Promise<void> {
+		relativePath = this._path(relativePath)
+		this._branch(branch)
 		await this._config.setAssignment(relativePath, branch)
 		// Only hide from main git status when the branch has a real worktree.
 		// If there is no worktree (i.e. the file is being assigned to the currently
@@ -116,10 +187,17 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	}
 
 	async assignHunk(relativePath: string, hunkIndex: number, branch: string): Promise<void> {
-		await this._config.setHunkAssignment(relativePath, hunkIndex, branch)
+		relativePath = this._path(relativePath)
+		this._branch(branch)
+		const hunks = await this._hunkRouter.diffEngine.getHunksForFile(this._workspaceRoot.fsPath, relativePath)
+		requireHunkInRange(relativePath, hunkIndex, hunks.length)
+		// Anchor the assignment to the hunk's content, as the editor does, so it
+		// survives later edits that renumber the hunks.
+		await this._config.setHunkAssignment(relativePath, hunkIndex, branch, anchorFor(hunks[hunkIndex]))
 	}
 
 	async unassignFile(relativePath: string): Promise<void> {
+		relativePath = this._path(relativePath)
 		await this._config.removeAssignment(relativePath)
 		await unhideAssignedFile(this._runner, this._workspaceRoot.fsPath, relativePath)
 	}
@@ -131,6 +209,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	// ── Status queries ────────────────────────────────────────────────────────
 
 	async getBranchStatus(branch: string): Promise<BranchStatus> {
+		this._branch(branch)
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 		const statuses = await _gitStatus(this._runner, wtDir)
 
@@ -169,6 +248,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	// ── Actions ───────────────────────────────────────────────────────────────
 
 	async commitBranch(branch: string, message: string, options: CommitOptions = {}): Promise<void> {
+		requireNotScratch(this._worktreeBranch(branch, 'be committed'), 'be committed')
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 
 		if (options.stageAll) {
@@ -192,6 +272,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	}
 
 	async stageBranch(branch: string, files?: string[]): Promise<void> {
+		this._worktreeBranch(branch, 'stage changes')
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 
 		if (files && files.length > 0) {
@@ -221,6 +302,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	}
 
 	async pullBranch(branch: string): Promise<void> {
+		requireNotScratch(this._worktreeBranch(branch, 'be pulled'), 'be pulled')
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 		const { exitCode, stderr } = await this._runner.run(['pull', '--rebase'], { cwd: wtDir })
 		if (exitCode !== 0) {
@@ -230,6 +312,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	}
 
 	async syncBranch(branch: string): Promise<void> {
+		requireNotScratch(this._worktreeBranch(branch, 'be synced'), 'be synced')
 		await this.pullBranch(branch)
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 		const pushResult = await this._runner.run(['push'], { cwd: wtDir })
@@ -253,6 +336,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 
 	/** Reorder branches in the stack by providing the desired name sequence. */
 	async reorderStack(orderedNames: string[]): Promise<void> {
+		requirePermutation(this._config.getStack(), orderedNames)
 		await this._branchStack.reorderStack(orderedNames)
 	}
 
@@ -263,12 +347,11 @@ export class GitBraidApi implements GitBraidExportedAPI {
 
 	/** Remove a single hunk assignment. */
 	async removeHunkAssignment(relativePath: string, hunkIndex: number): Promise<void> {
-		await this._config.removeHunkAssignment(relativePath, hunkIndex)
+		await this._config.removeHunkAssignment(this._path(relativePath), hunkIndex)
 	}
 
 	async rebaseBranch(branch: string): Promise<void> {
-		const entry = this._config.getBranch(branch)
-		if (!entry) throw new Error(`Branch "${branch}" is not in the stack`)
+		const entry = this._worktreeBranch(branch, 'be rebased')
 		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
 		const { exitCode, stderr } = await this._runner.run(['rebase', '--autostash', entry.base], { cwd: wtDir })
 		if (exitCode !== 0) {
@@ -278,6 +361,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 	}
 
 	async routeHunks(relativePath: string): Promise<{ routed: number, skipped: number }> {
+		relativePath = this._path(relativePath)
 		const assignments = this._config.getHunkAssignments(relativePath)
 		if (!assignments || assignments.size === 0) {
 			return { routed: 0, skipped: 0 }
@@ -291,14 +375,16 @@ export class GitBraidApi implements GitBraidExportedAPI {
 			const a = this._config.getHunkAnchor(relativePath, idx)
 			if (a) anchors.set(idx, a)
 		}
+		const mode = autoRouteMode(vscode.workspace.getConfiguration('gitbraid').get('autoRouteTrivialHunks'))
+		const effective = await withInheritedTrivial(this._hunkRouter.diffEngine, this._workspaceRoot.fsPath, relativePath, assignments, mode)
 		const result = await this._hunkRouter.routeFile(
 			this._workspaceRoot.fsPath,
 			relativePath,
 			worktreeDirs,
-			assignments,
+			new Map(effective),
 			anchors,
 		)
-		const total = assignments.size
+		const total = effective.size
 		if (result.ok) {
 			await this._config.clearHunkAssignments(relativePath)
 			log.info(`GitBraidApi.routeHunks: routed ${String(total)} hunk(s) for "${relativePath}"`)
@@ -308,6 +394,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 		// assigned prevents a retry from re-applying an already-applied
 		// branch's patch (which would then fail too).
 		for (const idx of result.appliedIndices) {
+			if (!assignments.has(idx)) continue   // inherited for this run only; never persisted
 			await this._config.removeHunkAssignment(relativePath, idx)
 		}
 		log.warn(
@@ -315,6 +402,33 @@ export class GitBraidApi implements GitBraidExportedAPI {
 			`(${String(result.appliedIndices.length)} routed, ${String(result.failedIndices.length)} failed)`,
 		)
 		return { routed: result.appliedIndices.length, skipped: result.failedIndices.length }
+	}
+
+	async getBranchDiff(branch: string, options: BranchDiffOptions = {}): Promise<BranchDiff> {
+		const entry = this._worktreeBranch(branch, 'be diffed')
+		const wtDir = worktreePath(this._workspaceRoot, branch).fsPath
+		// Diff against the fork point, not the tip of the base, so commits that landed
+		// on the base since this branch was created do not show up as its changes.
+		const mergeBase = await this._runner.run(['merge-base', entry.base, 'HEAD'], { cwd: wtDir })
+		const baseRef = mergeBase.exitCode === 0 && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : entry.base
+		const args = ['diff', '--no-color', ...(options.stat === true ? ['--stat'] : []), baseRef]
+		const { stdout, stderr, exitCode } = await this._runner.run(args, { cwd: wtDir })
+		if (exitCode !== 0) {
+			throw new GitError(`Diff of "${branch}" against "${entry.base}" failed: ${stderr}`, exitCode)
+		}
+		const limit = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_BRANCH_DIFF_BYTES))
+		if (Buffer.byteLength(stdout) <= limit) {
+			return { branch, base: entry.base, diff: stdout, truncated: false }
+		}
+		// Cut on a line boundary so the output never ends mid-line or mid-character.
+		const cut = Buffer.from(stdout).subarray(0, limit).toString('utf-8')
+		return { branch, base: entry.base, diff: cut.slice(0, cut.lastIndexOf('\n') + 1), truncated: true }
+	}
+
+	async getUndoLog(limit = 20): Promise<UndoLogEntry[]> {
+		if (!this._undoLog) return []
+		const n = Math.min(200, Math.max(1, Math.floor(limit)))
+		return (await this._undoLog.load()).slice(-n).reverse()
 	}
 
 	// ── Events ────────────────────────────────────────────────────────────────

@@ -265,8 +265,8 @@ class Worktree {
 		this._defaultCwd = defaultCwd
 	}
 
-	private async _run(args: string[]): Promise<string> {
-		const cwd = this._defaultCwd()
+	private async _run(args: string[], cwdOverride?: string): Promise<string> {
+		const cwd = cwdOverride ?? this._defaultCwd()
 		log.info(`executing (spawn): git ${args.join(' ')} (in ${cwd})`)
 		const { stdout, stderr, exitCode } = await this._getRunner().run(args, { cwd })
 		if (exitCode !== 0) {
@@ -308,23 +308,27 @@ class Worktree {
 		})
 	}
 
-	/** Check out an existing branch into a new worktree directory. */
-	public add (worktreePath: string, branch: string) {
-		return this._run(['worktree', 'add', worktreePath, branch])
+	/**
+	 * Check out an existing branch into a new worktree directory.  `cwd` names
+	 * the repository to run in; it defaults to the first workspace folder, which
+	 * is wrong for any other folder of a multi-root workspace.
+	 */
+	public add (worktreePath: string, branch: string, noCheckout = false, cwd?: string) {
+		return this._run(['worktree', 'add', ...(noCheckout ? ['--no-checkout'] : []), worktreePath, branch], cwd)
 	}
 
 	/** Create a new branch and add a worktree for it in one step. */
-	public addNew (branchName: string, worktreePath: string, base: string) {
-		return this._run(['worktree', 'add', '-b', branchName, worktreePath, base])
+	public addNew (branchName: string, worktreePath: string, base: string, noCheckout = false, cwd?: string) {
+		return this._run(['worktree', 'add', ...(noCheckout ? ['--no-checkout'] : []), '-b', branchName, worktreePath, base], cwd)
 	}
 
-	public remove(worktreePath: string, force?: boolean) {
+	public remove(worktreePath: string, force?: boolean, cwd?: string) {
 		const args = ['worktree', 'remove']
 		if (force) {
 			args.push('--force')
 		}
 		args.push(worktreePath)
-		return this._run(args)
+		return this._run(args, cwd)
 	}
 
 	public lock(worktreePath: string) {

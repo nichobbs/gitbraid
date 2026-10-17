@@ -341,4 +341,59 @@ suite('VirtualBranchStore', () => {
 		)
 	})
 
+	// ─── JsonlLog integration ────────────────────────────────────────────────
+
+	test('a large snapshot (over the lock threshold) round-trips through a fresh store', async () => {
+		const big = Buffer.alloc(200_000, 'z') // a ~270 KB base64 line
+		await store.writeFile('b', 'src/big.bin', big)
+		await store.writeFile('b', 'src/small.txt', bytes('hi'))
+		store.dispose()
+		const fresh = new VirtualBranchStore()
+		await fresh.load(root, ['b'])
+		try {
+			assert.strictEqual(fresh.readFile('b', 'src/big.bin')?.byteLength, 200_000)
+			assert.strictEqual(toString(fresh.readFile('b', 'src/small.txt')), 'hi')
+		} finally {
+			fresh.dispose()
+		}
+	})
+
+	test('writeFile: a stale lock left by a crashed process does not block it', async () => {
+		const file = virtualFile(root, 'b')
+		fs.mkdirSync(path.dirname(file), { recursive: true })
+		fs.writeFileSync(file + '.lock', '')
+		const old = new Date(Date.now() - 120_000)
+		fs.utimesSync(file + '.lock', old, old)
+		await store.writeFile('b', 'src/big.bin', Buffer.alloc(50_000, 'q'))
+		assert.strictEqual(store.readFile('b', 'src/big.bin')?.byteLength, 50_000)
+		assert.ok(!fs.existsSync(file + '.lock'))
+	})
+
+	test('removeBranch leaves no lock or tmp file behind', async () => {
+		await store.writeFile('b', 'src/f.ts', bytes('v'))
+		await store.removeBranch('b')
+		const file = virtualFile(root, 'b')
+		for (const f of [file, file + '.lock', file + '.tmp']) assert.ok(!fs.existsSync(f), f)
+	})
+
+	test('load: a torn tail is repaired by the next write so nothing is lost', async () => {
+		await store.writeFile('b', 'src/f.ts', bytes('v1'))
+		fs.appendFileSync(virtualFile(root, 'b'), '{"path":"src/g.ts","con') // torn, no newline
+		store.dispose()
+		const fresh = new VirtualBranchStore()
+		await fresh.load(root, ['b'])
+		try {
+			await fresh.writeFile('b', 'src/h.ts', bytes('v3'))
+		} finally {
+			fresh.dispose()
+		}
+		const again = new VirtualBranchStore()
+		await again.load(root, ['b'])
+		try {
+			assert.strictEqual(toString(again.readFile('b', 'src/f.ts')), 'v1')
+			assert.strictEqual(toString(again.readFile('b', 'src/h.ts')), 'v3', 'the entry after the torn tail must survive')
+		} finally {
+			again.dispose()
+		}
+	})
 })

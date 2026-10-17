@@ -185,7 +185,16 @@ class StubDiffEngine extends DiffEngine {
 	}
 
 	override async getHunksForFile(_root: string, rel: string): Promise<DiffHunk[]> {
+		this.singleCalls++
 		return this._byFile.get(rel) ?? []
+	}
+
+	batchCalls = 0
+	singleCalls = 0
+
+	override async getHunksForFiles(_root: string, rels: readonly string[]): Promise<Map<string, DiffHunk[]>> {
+		this.batchCalls++
+		return new Map(rels.map((rel) => [rel, this._byFile.get(rel) ?? []]))
 	}
 }
 
@@ -234,6 +243,14 @@ suite('absorb: absorbFiles', () => {
 		// No mutating commands ran
 		const mutating = r.calls.filter((c) => c.args[0] === 'commit' || c.args[0] === 'apply')
 		assert.strictEqual(mutating.length, 0)
+	})
+
+	test('asks the diff engine for all files in one batched call, not one call per file', async () => {
+		const r = fakeRunnerForAbsorb()
+		const engine = new StubDiffEngine(new Map([['a.ts', []], ['b.ts', []], ['c.ts', []]]))
+		await absorbFiles('/tmp', 'feat/a', ['a.ts', 'b.ts', 'c.ts'], engine, { mergeBase: mergeBase2, dryRun: true }, r)
+		assert.strictEqual(engine.batchCalls, 1)
+		assert.strictEqual(engine.singleCalls, 0)
 	})
 
 	test('full run: stages hunks, fixup-commits, and runs autosquash', async () => {

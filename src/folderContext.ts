@@ -94,7 +94,10 @@ export class FolderContext implements vscode.Disposable {
 		this.virtualStore = new VirtualBranchStore()
 		this.branchStack = new BranchStackService(this.config, this.virtualStore)
 		this.workspaceSync = new WorkspaceSync(this.config, this.virtualStore)
-		this.diffEngine = new DiffEngine()
+		this.workspaceSync.setSparseService(this.branchStack.sparse)
+		this.diffEngine = new DiffEngine(undefined, {
+			maxEntries: vscode.workspace.getConfiguration('gitbraid').get<number>('diffCacheEntries'),
+		})
 		this.hunkRouter = new HunkRouter(this.diffEngine)
 		this.stackResolver = new StackResolver(this.config, this.branchStack, undefined, this.virtualStore)
 		this.rebaseRecovery = new RebaseRecovery()
@@ -103,12 +106,12 @@ export class FolderContext implements vscode.Disposable {
 		this.stackShare = new StackShareService(this.config, root)
 		this.scmManager = new BranchScmProviderManager(this.config, this.workspaceSync, root)
 		this.undoStack = new UndoStack()
-		this.api = new GitBraidApi(this.config, this.branchStack, this.workspaceSync, root, undefined, this.hunkRouter)
+		this.undoLog = new PersistentUndoLog(path.join(root.fsPath, '.worktrees'))
+		this.api = new GitBraidApi(this.config, this.branchStack, this.workspaceSync, root, undefined, this.hunkRouter, this.undoLog)
 		this.healthSvc = new WorktreeHealthService(this.config, this.branchStack, root)
 		this.checkpoint = new CheckpointService(this.config, vscode.Uri.joinPath(root, '.worktrees'))
 		this.stackPopulator = new StackPopulator(this.config)
 		this.stackedToolImporter = new StackedPRToolImporter(this.config, root)
-		this.undoLog = new PersistentUndoLog(path.join(root.fsPath, '.worktrees'))
 		this.commitList = new CommitListService()
 	}
 
@@ -168,6 +171,22 @@ export class FolderContext implements vscode.Disposable {
 		)
 		this._configWatcher.onDidChange(() => void this.config.reload())
 		this._configWatcher.onDidCreate(() => void this.config.reload())
+
+		// Tell the user when another window changed the same item differently, so a
+		// silently-resolved conflict is not a mystery. Throttled: a burst of
+		// conflicts from one write is reported once.
+		let lastConflictNotice = 0
+		this.config.onDidResolveConflict((conflicts) => {
+			const now = Date.now()
+			if (now - lastConflictNotice < 10_000) return
+			lastConflictNotice = now
+			const first = conflicts[0]
+			const more = conflicts.length > 1 ? ` and ${String(conflicts.length - 1)} more` : ''
+			void vscode.window.showWarningMessage(
+				`GitBraid: a change here conflicted with another VS Code window's edit of "${first.key}"${more}. ` +
+				'Your version was kept unless the other window had only modified something you removed. Details are in the GitBraid output.',
+			)
+		})
 		await this.stackShare.detectAndOfferTemplate()
 		await this.stackedToolImporter.suggestImportIfEmpty()
 		await this.branchStack.initStack(this.root)
