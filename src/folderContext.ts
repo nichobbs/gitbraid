@@ -103,12 +103,12 @@ export class FolderContext implements vscode.Disposable {
 		this.stackShare = new StackShareService(this.config, root)
 		this.scmManager = new BranchScmProviderManager(this.config, this.workspaceSync, root)
 		this.undoStack = new UndoStack()
-		this.api = new GitBraidApi(this.config, this.branchStack, this.workspaceSync, root, undefined, this.hunkRouter)
+		this.undoLog = new PersistentUndoLog(path.join(root.fsPath, '.worktrees'))
+		this.api = new GitBraidApi(this.config, this.branchStack, this.workspaceSync, root, undefined, this.hunkRouter, this.undoLog)
 		this.healthSvc = new WorktreeHealthService(this.config, this.branchStack, root)
 		this.checkpoint = new CheckpointService(this.config, vscode.Uri.joinPath(root, '.worktrees'))
 		this.stackPopulator = new StackPopulator(this.config)
 		this.stackedToolImporter = new StackedPRToolImporter(this.config, root)
-		this.undoLog = new PersistentUndoLog(path.join(root.fsPath, '.worktrees'))
 		this.commitList = new CommitListService()
 	}
 
