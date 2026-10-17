@@ -45,6 +45,14 @@
   so every macOS test run failed before any test started.
 
 ### Fixed
+- **`ConfigService.reload()` could undo a newer in-memory change** - the
+  existing guard only covered a debounced flush. Once the debounce timer fired
+  the write ran with no guard, so a late file-watcher event could reload the
+  stale on-disk snapshot over the newer state and the write would then persist
+  it, resurrecting e.g. a just-discarded virtual branch. `reload()` now also
+  skips while a write is in flight and drops a read that a local mutation
+  overtook. This was the cause of the recurring `discardVirtualBranch` test
+  flake in `extension.test.ts`.
 - **Windows CI teardown timeouts** — test temp-dir cleanup used
   `rmSync(..., { maxRetries: 10, retryDelay: 200 })`, which blocks for about
   11 s when Windows holds a handle on `.git`, longer than mocha's 10 s hook

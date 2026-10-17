@@ -491,4 +491,61 @@ suite('ConfigService', () => {
 		assert.ok(!fs.existsSync(lockPath), 'stale lock should have been cleaned up')
 		assert.ok(fs.existsSync(configPath()), 'config should have been written')
 	})
+
+	test('reload() during an in-flight write does not resurrect a removed branch', async () => {
+		// Regression: reload() only skipped while a flush was *debounced*.
+		// Once the timer fired, _performFlush cleared it and _writeNow ran
+		// asynchronously, so a late file-watcher event (from an earlier write)
+		// could call reload() in that window, replace the newer in-memory state
+		// with the stale on-disk snapshot, and have _writeNow write that stale
+		// state back - bringing a just-removed branch back to life.
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/gone', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+		assert.ok(svc.getBranch('feature/gone'), 'precondition: branch persisted')
+
+		// Hold the write lock so the next flush parks inside _acquireLock,
+		// i.e. after its debounce timer has fired but before it writes.
+		const lockPath = configPath() + '.lock'
+		fs.writeFileSync(lockPath, '', 'utf-8')
+		let removal: Promise<void> | undefined
+		try {
+			removal = svc.removeBranch('feature/gone')
+			await new Promise((r) => setTimeout(r, 200)) // debounce (50 ms) has elapsed
+
+			// A stale watcher event arrives now.
+			await svc.reload()
+			assert.strictEqual(
+				svc.getBranch('feature/gone'),
+				undefined,
+				'reload() must not restore a branch removed by an in-flight write',
+			)
+		} finally {
+			fs.rmSync(lockPath, { force: true })
+		}
+		await removal
+		await svc.flushPendingWrites()
+
+		const onDisk = JSON.parse(fs.readFileSync(configPath(), 'utf-8')) as { stack: Array<{ name: string }> }
+		assert.ok(!onDisk.stack.some((e) => e.name === 'feature/gone'), 'removed branch must stay removed on disk')
+	})
+
+	test('reload() does not drop a mutation made while its disk read is in flight', async () => {
+		await svc.load(wsRoot())
+		await svc.addBranch({ name: 'feature/gone2', color: '#0f0', base: 'main' })
+		await svc.flushPendingWrites()
+
+		// reload() runs synchronously up to its first await (the disk read);
+		// the removal below then mutates in-memory state before that read
+		// resolves, so the snapshot reload() obtains is already stale.
+		const reloading = svc.reload()
+		const removal = svc.removeBranch('feature/gone2')
+		await reloading
+		assert.strictEqual(svc.getBranch('feature/gone2'), undefined, 'reload() must not undo a newer in-memory removal')
+
+		await removal
+		await svc.flushPendingWrites()
+		const onDisk = JSON.parse(fs.readFileSync(configPath(), 'utf-8')) as { stack: Array<{ name: string }> }
+		assert.ok(!onDisk.stack.some((e) => e.name === 'feature/gone2'))
+	})
 })
