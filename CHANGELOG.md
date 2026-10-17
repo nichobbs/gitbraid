@@ -28,6 +28,12 @@
   (`fetchGithubReviewAndChecks`, `summariseGithubReviews`).
 
 ### Changed
+- **Diff cache is content-addressed and holds 256 files, not 32** (setting
+  `gitbraid.diffCacheEntries`), and `DiffEngine.getHunksForFiles` diffs many
+  files in one git process (used by Absorb). Touching a file without changing it
+  no longer re-runs `git diff`. Trade-off: a repeat lookup of one file now reads
+  and hashes it (about 1 ms) instead of calling `stat` (about 0.25 ms). See
+  `docs/plans/15-content-addressed-diff-cache.md`.
 - **SCM commit buttons no longer use the proposed `scmActionButton` API.**
   The proposal (microsoft/vscode#133935) has never been finalised, and
   current stable VS Code (1.141) refuses to let the extension use it, which
@@ -45,6 +51,11 @@
   so every macOS test run failed before any test started.
 
 ### Fixed
+- **Stale diff hunks** - the hunk cache was validated only by file mtime, and
+  `invalidateCache` was never called. After a commit (or rebase, checkout) that
+  moved `HEAD` with the file untouched it served the old hunks, and a rewrite
+  with a different content but the same size and mtime was served stale. The
+  cache is now keyed on the `HEAD` commit and a hash of the file's content.
 - **Windows CI teardown timeouts** — test temp-dir cleanup used
   `rmSync(..., { maxRetries: 10, retryDelay: 200 })`, which blocks for about
   11 s when Windows holds a handle on `.git`, longer than mocha's 10 s hook

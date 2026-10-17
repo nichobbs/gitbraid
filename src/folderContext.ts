@@ -94,7 +94,9 @@ export class FolderContext implements vscode.Disposable {
 		this.virtualStore = new VirtualBranchStore()
 		this.branchStack = new BranchStackService(this.config, this.virtualStore)
 		this.workspaceSync = new WorkspaceSync(this.config, this.virtualStore)
-		this.diffEngine = new DiffEngine()
+		this.diffEngine = new DiffEngine(undefined, {
+			maxEntries: vscode.workspace.getConfiguration('gitbraid').get<number>('diffCacheEntries'),
+		})
 		this.hunkRouter = new HunkRouter(this.diffEngine)
 		this.stackResolver = new StackResolver(this.config, this.branchStack, undefined, this.virtualStore)
 		this.rebaseRecovery = new RebaseRecovery()
