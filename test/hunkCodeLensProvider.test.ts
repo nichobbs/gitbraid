@@ -9,6 +9,7 @@ import {
 	OverlayDiagnostics,
 } from '../src/hunkCodeLensProvider'
 import { git } from '../src/gitFunctions'
+import { diffOf } from './helpers/diffOf'
 
 function wsRoot(): vscode.Uri {
 	return vscode.workspace.workspaceFolders![0].uri
@@ -114,6 +115,33 @@ suite('HunkCodeLensProvider', function () {
 		assert.strictEqual(lenses.length, 2)
 		assert.ok(lenses[0].command?.title?.includes('feat/a'))
 		assert.ok(lenses[1].command?.title?.toLowerCase().includes('unassign'))
+	})
+
+	test('a comment-only hunk gets a kind tag; the setting turns it off; a dirty document gets none', async () => {
+		const oldText = 'export function f() {\n  // one\n  return 1\n}\n'
+		const newText = oldText.replace('// one', '// one more')
+		const file = path.join(wsRoot().fsPath, 'src', 'kind.ts')
+		fs.mkdirSync(path.dirname(file), { recursive: true })
+		fs.writeFileSync(file, newText)
+		diffEngine = new StubDiffEngine(diffOf(oldText, newText, 'kind.ts'))
+		provider = new HunkCodeLensProvider(diffEngine, config)
+		const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file))
+		const cfg = vscode.workspace.getConfiguration('gitbraid')
+		try {
+			const tagged = await provider.provideCodeLenses(doc, {} as vscode.CancellationToken)
+			assert.ok(tagged.some((l) => l.command?.title?.includes('comment only')), tagged.map((l) => l.command?.title).join(' | '))
+			assert.ok(tagged.some((l) => l.command?.title?.includes('Assign')), 'the assign lens is still there')
+
+			const dirty = { uri: doc.uri, version: doc.version, isDirty: true } as unknown as vscode.TextDocument
+			const untagged = await provider.provideCodeLenses(dirty, {} as vscode.CancellationToken)
+			assert.ok(!untagged.some((l) => l.command?.title?.includes('comment only')))
+
+			await cfg.update('showHunkKind', false, vscode.ConfigurationTarget.Global)
+			const off = await provider.provideCodeLenses(doc, {} as vscode.CancellationToken)
+			assert.ok(!off.some((l) => l.command?.title?.includes('comment only')))
+		} finally {
+			await cfg.update('showHunkKind', undefined, vscode.ConfigurationTarget.Global)
+		}
 	})
 
 	test('resolveCodeLens returns lens unchanged', async () => {

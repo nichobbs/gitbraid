@@ -59,9 +59,11 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`VirtualBranchStore`** (`src/virtualBranchStore.ts`) — Append-only JSONL store under `.worktrees/virtual/<slug>.jsonl` that captures file snapshots for branches flagged `virtual: true` in the stack. Crash-safe by construction (append-only), with lazy compaction when the log grows >2× the live working set. See `docs/plans/08-virtual-branches.md`.
 
+**`SparseWorktreeService`** (`src/sparseWorktree.ts`) — Optional `git sparse-checkout --cone` worktrees (`gitbraid.sparseWorktrees`). `BranchStackService` creates them; `WorkspaceSync` calls `ensureInCone` before copying a file in; `StackResolver` falls back to `git show` for out-of-cone paths.
+
 **`WorkspaceSync`** (`src/workspaceSync.ts`) — File system watcher that copies assigned files to their branch worktree on every save, with a configurable debounce (default 200 ms). Also tracks "floating" files (modified but unassigned). Saves for files assigned to a virtual branch go to `VirtualBranchStore` instead of a worktree. Bidirectional sync is present but experimental (disabled by default).
 
-**`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has a 32-entry LRU cache validated against the file's on-disk mtime on every lookup (no time-based staleness window — a stat() runs on each call so a save landing shortly after the previous one is never served stale hunks) to avoid redundant diff runs.
+**`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has an LRU cache (256 files / 16 MB by default) keyed on what the diff depends on: the `HEAD` commit (read straight from `.git`, falling back to `git rev-parse`) and a hash of the file's content, never its mtime, so touching a file is a hit and moving `HEAD` is a miss with nothing to invalidate. `getHunksForFiles` diffs many files in one git process.
 
 **`HunkRouter`** (`src/hunkRouter.ts`) — Routes individual diff hunks to branches via `git apply --cached`. Uses anchor tracking for hunk stability across edits.
 
@@ -69,7 +71,9 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`BranchScmProvider`** (`src/branchScmProvider.ts`) — Creates one `vscode.SourceControl` instance per branch so each branch gets its own SCM panel with independent staging and commit UI.
 
-**`LmTools`** (`src/lmTools.ts`) — Registers 9 VS Code Language Model tools (`gitbraid_getStack`, `gitbraid_getFloatingFiles`, `gitbraid_getBranchStatus`, `gitbraid_addBranch`, `gitbraid_assignFile`, `gitbraid_assignHunk`, `gitbraid_commitBranch`, `gitbraid_getStackDiagram`, `gitbraid_assignGlob`) that allow AI chat to inspect and mutate the stack.
+**`AgentToolRegistry`** (`src/agentToolRegistry.ts`) — Single source of agent tools: each entry (zod input, kind read/write, surfaces, confirmation text, `run`) generates both the MCP tool and the VS Code chat tool. Invariants (`src/stackInvariants.ts`, structured `StackInvariantError` codes) are enforced in `GitBraidApi`; caller policy (force removal needs `gitbraid.agentAllowForce`) lives in the registry. Adding a tool means one registry entry plus its `languageModelTools` manifest entry; `test/agentToolRegistry.test.ts` fails on drift.
+
+**`LmTools`** (`src/lmTools.ts`) — Registers every registry tool offered to chat (`gitbraid_*`) with `vscode.lm.registerTool`; failures surface the error code and hint to the model.
 
 **`McpServer` / `McpTools`** (`src/mcpServer.ts`, `src/mcpTools.ts`) — Hosts a Model Context Protocol server over stdio so non-VS-Code clients can drive the same stack. Read-only by default; mutation tools appear only when `gitbraid.mcpWriteEnabled` is true. Toggled by `GitBraid: Start / Stop MCP Server`.
 
@@ -77,7 +81,9 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`SubmitStackService`** (`src/submitStackService.ts`) — Pushes every layer and calls the selected adapter's `createPR` / `updatePR` to keep the stack's PRs in sync, rewriting each body with the `renderStackBlock` sentinel.
 
-**`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`.
+**`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`. `gitbraid.mergeStrategy: pipelined` (opt-in) keeps several layers in flight on adapters with `supportsOrderedQueue`, with pre-flight checks and a dequeue-everything-above failure policy.
+
+**`HunkClassifier`** (`src/hunkClassifier.ts`, `src/languageRules.ts`, `src/hunkKinds.ts`) — Conservative whitespace/comment/import/logic/mixed classification of diff hunks. Pure core, needs the working-tree file text; anything it cannot prove is `logic`. Feeds the hunk CodeLens tag, absorb `skipTrivial` and opt-in trivial-hunk auto-routing. Never loosen a rule without a failing-first test in `test/hunkClassifier*.test.ts`.
 
 **`Absorb`** (`src/absorb.ts`) — Plans and applies `git commit --fixup + rebase --autosquash` for hunks that belong to an earlier commit. Guarded by `gitbraid.absorbRewritePushed` when the target commits have already been pushed.
 

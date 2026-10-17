@@ -14,7 +14,7 @@ function wsRoot(): vscode.Uri {
 }
 
 function cleanup() {
-	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true }) } catch {}
+	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) } catch {}
 	try { fs.rmSync(path.join(wsRoot().fsPath, '.gitignore')) } catch {}
 }
 

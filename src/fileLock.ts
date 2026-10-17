@@ -48,6 +48,12 @@ async function acquire(lockPath: string, staleMs: number, retryDelayMs: number, 
 			return
 		} catch (e: unknown) {
 			const err = e as NodeJS.ErrnoException
+			// Windows reports a lock file that is mid-delete (another holder releasing
+			// it) as EPERM/EACCES/EBUSY rather than EEXIST: that is contention too.
+			if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY') {
+				await new Promise<void>((r) => setTimeout(r, retryDelayMs))
+				continue
+			}
 			if (err.code !== 'EEXIST') throw err
 			try {
 				const stat = await fs.promises.stat(lockPath)

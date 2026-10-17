@@ -142,6 +142,7 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 				await runAbsorbUi(wt, branch, relPaths, ctx.diffEngine, {
 					mergeBase,
 					allowPushed,
+					skipTrivial: vscode.workspace.getConfiguration('gitbraid').get<boolean>('absorbSkipTrivial', true),
 				})
 			}
 		})),
@@ -159,7 +160,9 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 				)
 				return
 			}
-			const pollSeconds = vscode.workspace.getConfiguration('gitbraid').get<number>('mergeQueuePollSeconds', 30)
+			const cfg = vscode.workspace.getConfiguration('gitbraid')
+			const pollSeconds = cfg.get<number>('mergeQueuePollSeconds', 30)
+			const strategy = cfg.get<string>('mergeStrategy', 'serial') === 'pipelined' ? 'pipelined' : 'serial'
 			const svc = new MergeQueueService(ctx.config, adapter)
 			const abort = new AbortController()
 			const results = await vscode.window.withProgress(
@@ -171,7 +174,12 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 				async (progress, token) => {
 					token.onCancellationRequested(() => abort.abort())
 					return svc.mergeStack(
-						{ pollIntervalMs: pollSeconds * 1000 },
+						{
+							pollIntervalMs: pollSeconds * 1000,
+							strategy,
+							pipelineDepth: cfg.get<number>('mergePipelineDepth', 2),
+							keepQueuedOnCancel: cfg.get<boolean>('mergeKeepQueuedOnCancel', false),
+						},
 						progressFromVsCode(progress),
 						abort.signal,
 					)
@@ -180,7 +188,9 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 
 			const ok = results.filter((r) => r.ok).length
 			const failed = results.filter((r) => !r.ok)
-			const summary = `GitBraid merge-stack: ${String(ok)} merged, ${String(failed.length)} failed`
+			const blocked = failed.filter((r) => r.state === 'blocked').length
+			const summary = `GitBraid merge-stack: ${String(ok)} merged, ${String(failed.length - blocked)} failed` +
+				(blocked > 0 ? `, ${String(blocked)} blocked` : '')
 			log.info(summary)
 			if (failed.length === 0) {
 				await vscode.window.showInformationMessage(summary)

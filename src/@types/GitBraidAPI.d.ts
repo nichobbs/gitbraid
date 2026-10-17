@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode'
 import { BranchStackEntry, BranchStatus, StackStatus, AssignmentChangeEvent, StackChangeEvent } from '../configTypes'
+import type { UndoLogEntry } from '../persistentUndoLog'
 
 // ─── Option types ─────────────────────────────────────────────────────────────
 
@@ -24,6 +25,54 @@ export interface CommitOptions {
 	noGpgSign?: boolean
 	/** Stage all modified tracked files before committing. */
 	stageAll?: boolean
+}
+
+/** Who owns a file right now, and which of its hunks go elsewhere. */
+export interface FileOwnership {
+	/** The workspace-relative path, normalised. */
+	path: string
+	/** Branch the whole file is assigned to, or `undefined`. */
+	branch?: string
+	/** Hunk-level assignments for this file: hunk index (as a string) to branch. */
+	hunkAssignments: Record<string, string>
+	/** True if the file is modified but assigned to no branch. */
+	floating: boolean
+}
+
+/** One hunk of a file's uncommitted changes. Indices are only valid until the file is next edited. */
+export interface FileHunkInfo {
+	index: number
+	/** 1-based first line in the current file. */
+	startLine: number
+	/** 1-based last line (inclusive). */
+	endLine: number
+	/** The raw `@@ -a,b +c,d @@` header. */
+	header: string
+	/** Branch this hunk is assigned to, if any. */
+	assignedBranch?: string
+	/** The patch text; present only when requested. */
+	patch?: string
+}
+
+export interface FileHunkOptions {
+	/** Include each hunk's patch text. Off by default because it can be large. */
+	includePatch?: boolean
+}
+
+export interface BranchDiffOptions {
+	/** Return `git diff --stat` instead of the full diff. */
+	stat?: boolean
+	/** Truncate the output to this many bytes. Default 200000. */
+	maxBytes?: number
+}
+
+/** What a branch changes relative to the point it forked from its base (tracked files only). */
+export interface BranchDiff {
+	branch: string
+	base: string
+	diff: string
+	/** True if `diff` was cut at `maxBytes`. */
+	truncated: boolean
 }
 
 // ─── Full extension API ───────────────────────────────────────────────────────
@@ -86,6 +135,15 @@ export interface GitBraidExportedAPI {
 	 */
 	getFloatingFiles(): string[]
 
+	/** Ownership of one file: whole-file branch, hunk assignments, and whether it is floating. */
+	getFileOwnership(relativePath: string): FileOwnership
+
+	/**
+	 * The hunks of a file's uncommitted changes, with the branch each is
+	 * assigned to. Use these indices with `assignHunk`.
+	 */
+	getFileHunks(relativePath: string, options?: FileHunkOptions): Promise<FileHunkInfo[]>
+
 	// ── Status queries ────────────────────────────────────────────────────────
 
 	/**
@@ -96,6 +154,16 @@ export interface GitBraidExportedAPI {
 
 	/** Returns status for all branches plus the total floating file count. */
 	getStackStatus(): Promise<StackStatus>
+
+	/**
+	 * What the branch changes relative to where it forked from its base,
+	 * including uncommitted edits to tracked files in its worktree.
+	 * Throws for a virtual branch (it has no worktree yet).
+	 */
+	getBranchDiff(branch: string, options?: BranchDiffOptions): Promise<BranchDiff>
+
+	/** The most recent recorded GitBraid actions, newest first. */
+	getUndoLog(limit?: number): Promise<UndoLogEntry[]>
 
 	// ── Actions ───────────────────────────────────────────────────────────────
 

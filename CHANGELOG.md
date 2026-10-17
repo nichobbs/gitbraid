@@ -11,6 +11,10 @@
   and carries uncommitted changes across. Stops cleanly at the first
   conflicting rebase. New module: `src/worktreeAdopter.ts`;
   `BranchStackService.addBranchToStack` gains a `prepareWorktree` hook.
+- **Pipelined merge queue** (plan 17) — opt-in `gitbraid.mergeStrategy: pipelined` keeps up to `gitbraid.mergePipelineDepth` (default 2) layers in flight on hosts with an ordered queue (GitHub), after a parallel pre-flight check. A child never merges before its parent; a failure dequeues and blocks the layers above it. `MergeStackResult` gained `state` (`merged`/`failed`/`blocked`/`skipped`) and `blockedBy`. New adapter capabilities `supportsOrderedQueue` and `retargetPR`. Default behaviour is unchanged.
+- **Semantic hunk classification** (plan 18) — hunks are classified as `whitespace`, `comment`, `import`, `logic` or `mixed` by a conservative lexer-based classifier (TS/JS, Java, Python, Go, Rust, C/C++, C#, shell, YAML; unknown languages only trust trailing-whitespace changes). Anything uncertain is `logic`. Shown as a CodeLens tag (`gitbraid.showHunkKind`), used by Absorb to leave trivial hunks in the worktree (`gitbraid.absorbSkipTrivial`, default on) and, opt-in, by Route Hunks to let trivial hunks follow their neighbour's branch (`gitbraid.autoRouteTrivialHunks`).
+- **Sparse worktrees** (plan 16) — `gitbraid.sparseWorktrees` (`off`/`auto`/`always`, default `auto`), `gitbraid.sparseWorktreeThreshold` and `gitbraid.sparseAlwaysInclude` create branch worktrees with a git sparse-checkout cone limited to the directories the branch owns; the cone grows on demand when a file is saved. `GitBraid: Convert Branch Worktree to Sparse or Full` converts existing worktrees. Needs git 2.25+. Also fixed `git worktree add/remove` running in the first workspace folder in multi-root workspaces.
+- **Agent-safe stack API** (plan 12) — one tool registry drives both MCP and chat tools, so the two surfaces can no longer drift (two chat tools were previously missing from the manifest). Structural invariants (unknown branch, cycles, base ordering, partial reorder) are enforced in the API with structured error codes and hints. New read tools (`getStackStatus`, `getFileOwnership`, `getFileHunks`, `getBranchDiff`, `getUndoLog`), working `pullBranch`/`syncBranch` in chat, MCP `getStackDiagram`/`assignGlob`. New settings `gitbraid.agentAllowForce` and `gitbraid.agentMaxDiffBytes`. MCP `addBranch` colour is now validated as `#rrggbb`.
 - **GitBraid Doctor** (`gitbraid.runDoctor`) — a one-shot health check for
   circular base references, orphaned worktrees, orphaned virtual-branch
   store files, missing worktrees, and out-of-workspace assignments, each
@@ -36,6 +40,12 @@
   (`fetchGithubReviewAndChecks`, `summariseGithubReviews`).
 
 ### Changed
+- **Diff cache is content-addressed and holds 256 files, not 32** (setting
+  `gitbraid.diffCacheEntries`), and `DiffEngine.getHunksForFiles` diffs many
+  files in one git process (used by Absorb). Touching a file without changing it
+  no longer re-runs `git diff`. Trade-off: a repeat lookup of one file now reads
+  and hashes it (about 1 ms) instead of calling `stat` (about 0.25 ms). See
+  `docs/plans/15-content-addressed-diff-cache.md`.
 - **Shared append-only log primitive** (`src/jsonlLog.ts`, `src/fileLock.ts`) -
   `PersistentUndoLog` and `VirtualBranchStore` now share one implementation of
   locked appends, corrupt-line tolerance, torn-tail repair, atomic rewrite
@@ -73,6 +83,11 @@
   so every macOS test run failed before any test started.
 
 ### Fixed
+- **Stale diff hunks** - the hunk cache was validated only by file mtime, and
+  `invalidateCache` was never called. After a commit (or rebase, checkout) that
+  moved `HEAD` with the file untouched it served the old hunks, and a rewrite
+  with a different content but the same size and mtime was served stale. The
+  cache is now keyed on the `HEAD` commit and a hash of the file's content.
 - **`ConfigService.reload()` could undo a newer in-memory change** - the
   existing guard only covered a debounced flush. Once the debounce timer fired
   the write ran with no guard, so a late file-watcher event could reload the
