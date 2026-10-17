@@ -24,7 +24,7 @@ documents — update them as decisions are made and link from
 | [09-undo-log.md](09-undo-log.md) | Persistent undo across sessions | git-branchless, Sapling | **Implemented (replay supported)** |
 | [10-core-extraction-and-cli.md](10-core-extraction-and-cli.md) | Extract core logic into a CLI/library usable outside VS Code | n/a | **Analysis only — not scheduled** |
 | [11-zero-worktree-virtual-branches.md](11-zero-worktree-virtual-branches.md) | Virtual branches that never get a worktree, even after committing | GitButler | **Design only — not scheduled** |
-| [12-agent-safe-stack-api.md](12-agent-safe-stack-api.md) | Shared invariants, structured errors and read tools for agents (#36) | Anthropic Scion article | **Not started** |
+| [12-agent-safe-stack-api.md](12-agent-safe-stack-api.md) | Shared invariants, structured errors and read tools for agents (#36) | Anthropic Scion article | **Implemented** |
 | [13-config-revision-cas.md](13-config-revision-cas.md) | Revision counter and three-way merge for `gitbraid-config.json` (#37) | Anthropic Scion article | **Not started** |
 | [14-jsonl-log-primitive.md](14-jsonl-log-primitive.md) | One `JsonlLog` for virtual store and undo log (#38) | Anthropic Scion article | **Not started** |
 | [15-content-addressed-diff-cache.md](15-content-addressed-diff-cache.md) | Hunk cache keyed on content, not mtime (#39) | Anthropic Scion article | **Not started** |

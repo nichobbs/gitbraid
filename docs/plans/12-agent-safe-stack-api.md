@@ -101,3 +101,9 @@ Land after plan 15 if `getFileHunks` should benefit from the new cache.
   the branch has been pushed?
 - Does the MCP client need a version handshake for the structured error
   change?
+
+## As built
+
+- `src/agentToolRegistry.ts` is the single tool registry; `src/agentHost.ts` builds the per-call context (settings read live) and logs write calls to the output channel; `src/mcpTools.ts` and `src/lmTools.ts` are thin adapters. Parity tests compare the registry with the chat manifest in `package.json` and with the MCP tool listing.
+- Invariants live in `GitBraidApi` (`src/stackInvariants.ts`), not the facade: UI commands call services directly and are not routed through them.
+- Deviations from the plan: `BRANCH_MERGED` is not implemented (needs network PR state); caller identity is not threaded through the API, force policy is enforced in the tool layer via `ctx.allowForce`, and the audit trail is the output channel rather than the undo log; MCP gained `getStackDiagram`/`assignGlob`, chat gained `getStackStatus` and working `pullBranch`/`syncBranch`; each omission from a surface carries a stated reason.

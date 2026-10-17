@@ -69,7 +69,9 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`BranchScmProvider`** (`src/branchScmProvider.ts`) — Creates one `vscode.SourceControl` instance per branch so each branch gets its own SCM panel with independent staging and commit UI.
 
-**`LmTools`** (`src/lmTools.ts`) — Registers 9 VS Code Language Model tools (`gitbraid_getStack`, `gitbraid_getFloatingFiles`, `gitbraid_getBranchStatus`, `gitbraid_addBranch`, `gitbraid_assignFile`, `gitbraid_assignHunk`, `gitbraid_commitBranch`, `gitbraid_getStackDiagram`, `gitbraid_assignGlob`) that allow AI chat to inspect and mutate the stack.
+**`AgentToolRegistry`** (`src/agentToolRegistry.ts`) — Single source of agent tools: each entry (zod input, kind read/write, surfaces, confirmation text, `run`) generates both the MCP tool and the VS Code chat tool. Invariants (`src/stackInvariants.ts`, structured `StackInvariantError` codes) are enforced in `GitBraidApi`; caller policy (force removal needs `gitbraid.agentAllowForce`) lives in the registry. Adding a tool means one registry entry plus its `languageModelTools` manifest entry; `test/agentToolRegistry.test.ts` fails on drift.
+
+**`LmTools`** (`src/lmTools.ts`) — Registers every registry tool offered to chat (`gitbraid_*`) with `vscode.lm.registerTool`; failures surface the error code and hint to the model.
 
 **`McpServer` / `McpTools`** (`src/mcpServer.ts`, `src/mcpTools.ts`) — Hosts a Model Context Protocol server over stdio so non-VS-Code clients can drive the same stack. Read-only by default; mutation tools appear only when `gitbraid.mcpWriteEnabled` is true. Toggled by `GitBraid: Start / Stop MCP Server`.
 
