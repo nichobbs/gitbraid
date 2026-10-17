@@ -1,435 +1,83 @@
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
 import type { GitBraidExportedAPI } from './@types/GitBraidAPI'
+import { lmToolName, toolsFor } from './agentToolRegistry'
+import type { AgentTool } from './agentToolRegistry'
+import { formatToolError, runTool } from './agentHost'
+
 type GitBraidApi = GitBraidExportedAPI
 
-// ─── Tool result helpers ──────────────────────────────────────────────────────
+/**
+ * One VS Code chat tool, driven by a registry entry (see `agentToolRegistry.ts`).
+ * The tool's name, description and input schema are declared in `package.json`
+ * under `languageModelTools`; a test keeps those in step with the registry.
+ */
+class RegistryLmTool implements vscode.LanguageModelTool<unknown> {
 
-function textResult(text: string): vscode.LanguageModelToolResult {
-	return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)])
-}
+	readonly name: string
 
-function jsonResult(value: unknown): vscode.LanguageModelToolResult {
-	return textResult(JSON.stringify(value, null, 2))
-}
-
-// ─── Tool implementations ─────────────────────────────────────────────────────
-
-class GetStackTool implements vscode.LanguageModelTool<Record<string, never>> {
-	readonly name = 'gitbraid_getStack'
-
-	constructor(private readonly _api: GitBraidApi) {}
+	constructor(
+		private readonly _tool: AgentTool,
+		private readonly _api: GitBraidApi,
+	) {
+		this.name = lmToolName(_tool)
+	}
 
 	async invoke(
-		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
+		options: vscode.LanguageModelToolInvocationOptions<unknown>,
 		_token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
-		const stack = this._api.getStack()
-		return jsonResult(stack)
+		try {
+			const text = await runTool(this._tool, this._api, options.input, 'lm')
+			return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)])
+		} catch (e) {
+			// A thrown error is how a chat tool reports failure to the model; give it
+			// the code and the hint, not just a message.
+			throw new Error(formatToolError(e))
+		}
 	}
 
 	prepareInvocation(
-		_options: vscode.LanguageModelToolInvocationPrepareOptions<Record<string, never>>,
+		options: vscode.LanguageModelToolInvocationPrepareOptions<unknown>,
 		_token: vscode.CancellationToken,
 	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		return { invocationMessage: 'Fetching branch stack…' }
-	}
-}
-
-// ─── assignFile ───────────────────────────────────────────────────────────────
-
-interface AssignFileInput {
-	relativePath: string
-	branch: string
-}
-
-class AssignFileTool implements vscode.LanguageModelTool<AssignFileInput> {
-	readonly name = 'gitbraid_assignFile'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<AssignFileInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const { relativePath, branch } = options.input
-		await this._api.assignFile(relativePath, branch)
-		return textResult(`Assigned "${relativePath}" to branch "${branch}".`)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<AssignFileInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		const { relativePath, branch } = options.input
+		let invocationMessage: string
+		let confirmation: { title: string, message: string } | undefined
+		try {
+			invocationMessage = this._tool.progress(options.input)
+			confirmation = this._tool.confirm?.(options.input)
+		} catch {
+			// Invalid input is reported when the tool runs; do not fail the prepare step.
+			return { invocationMessage: `Running ${this._tool.name}…` }
+		}
 		return {
-			invocationMessage: `Assigning "${relativePath}" to "${branch}"…`,
-			confirmationMessages: {
-				title: 'Assign File to Branch',
-				message: new vscode.MarkdownString(
-					`Assign \`${relativePath}\` to branch **${branch}**?`,
-				),
-			},
+			invocationMessage,
+			...(confirmation
+				? {
+					confirmationMessages: {
+						title: confirmation.title,
+						message: new vscode.MarkdownString(confirmation.message),
+					},
+				}
+				: {}),
 		}
 	}
 }
-
-// ─── assignHunk ───────────────────────────────────────────────────────────────
-
-interface AssignHunkInput {
-	relativePath: string
-	hunkIndex: number
-	branch: string
-}
-
-class AssignHunkTool implements vscode.LanguageModelTool<AssignHunkInput> {
-	readonly name = 'gitbraid_assignHunk'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<AssignHunkInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const { relativePath, hunkIndex, branch } = options.input
-		await this._api.assignHunk(relativePath, hunkIndex, branch)
-		return textResult(`Assigned hunk ${String(hunkIndex)} in "${relativePath}" to branch "${branch}".`)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<AssignHunkInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		const { relativePath, hunkIndex, branch } = options.input
-		return {
-			invocationMessage: `Assigning hunk ${String(hunkIndex)} in "${relativePath}" to "${branch}"…`,
-			confirmationMessages: {
-				title: 'Assign Hunk to Branch',
-				message: new vscode.MarkdownString(
-					`Assign hunk **${String(hunkIndex)}** in \`${relativePath}\` to branch **${branch}**?`,
-				),
-			},
-		}
-	}
-}
-
-// ─── getFloatingFiles ─────────────────────────────────────────────────────────
-
-class GetFloatingFilesTool implements vscode.LanguageModelTool<Record<string, never>> {
-	readonly name = 'gitbraid_getFloatingFiles'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const files = this._api.getFloatingFiles()
-		if (files.length === 0) {
-			return textResult('No floating (unassigned) files.')
-		}
-		return jsonResult(files)
-	}
-
-	prepareInvocation(
-		_options: vscode.LanguageModelToolInvocationPrepareOptions<Record<string, never>>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		return { invocationMessage: 'Fetching floating files…' }
-	}
-}
-
-// ─── commitBranch ─────────────────────────────────────────────────────────────
-
-interface CommitBranchInput {
-	branch: string
-	message: string
-}
-
-class CommitBranchTool implements vscode.LanguageModelTool<CommitBranchInput> {
-	readonly name = 'gitbraid_commitBranch'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<CommitBranchInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const { branch, message } = options.input
-		await this._api.commitBranch(branch, message, { stageAll: true })
-		return textResult(`Committed to branch "${branch}" with message: "${message}".`)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<CommitBranchInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		const { branch, message } = options.input
-		return {
-			invocationMessage: `Committing to "${branch}"…`,
-			confirmationMessages: {
-				title: 'Commit Branch',
-				message: new vscode.MarkdownString(
-					`Commit all staged changes to branch **${branch}** with message: "${message}"?`,
-				),
-			},
-		}
-	}
-}
-
-// ─── getBranchStatus ─────────────────────────────────────────────────────────
-
-interface GetBranchStatusInput {
-	branch: string
-}
-
-class GetBranchStatusTool implements vscode.LanguageModelTool<GetBranchStatusInput> {
-	readonly name = 'gitbraid_getBranchStatus'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<GetBranchStatusInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const status = await this._api.getBranchStatus(options.input.branch)
-		return jsonResult(status)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<GetBranchStatusInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		return { invocationMessage: `Fetching status for "${options.input.branch}"…` }
-	}
-}
-
-// ─── addBranch ────────────────────────────────────────────────────────────────
-
-interface AddBranchInput {
-	name: string
-	base: string
-	color?: string
-}
-
-class AddBranchTool implements vscode.LanguageModelTool<AddBranchInput> {
-	readonly name = 'gitbraid_addBranch'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<AddBranchInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const { name, base, color } = options.input
-		await this._api.addBranch(name, base, { color })
-		return textResult(`Branch "${name}" added to the stack (base: "${base}").`)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<AddBranchInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		const { name, base } = options.input
-		return {
-			invocationMessage: `Adding branch "${name}" to stack…`,
-			confirmationMessages: {
-				title: 'Add Branch to Stack',
-				message: new vscode.MarkdownString(
-					`Create branch **${name}** based on **${base}** and add it to the stack?`,
-				),
-			},
-		}
-	}
-}
-
-// ─── syncBranch ───────────────────────────────────────────────────────────────
-
-interface SyncBranchInput {
-	branch: string
-}
-
-class PullBranchTool implements vscode.LanguageModelTool<SyncBranchInput> {
-	readonly name = 'gitbraid_pullBranch'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<SyncBranchInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		await this._api.pullBranch(options.input.branch)
-		return textResult(`Pulled latest changes into branch "${options.input.branch}".`)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<SyncBranchInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		return {
-			invocationMessage: `Pulling "${options.input.branch}"…`,
-			confirmationMessages: {
-				title: 'Pull Branch',
-				message: new vscode.MarkdownString(
-					`Pull (rebase) the latest changes from origin into branch **${options.input.branch}**?`,
-				),
-			},
-		}
-	}
-}
-
-class SyncBranchTool implements vscode.LanguageModelTool<SyncBranchInput> {
-	readonly name = 'gitbraid_syncBranch'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<SyncBranchInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		await this._api.syncBranch(options.input.branch)
-		return textResult(`Synced branch "${options.input.branch}" (pull then push).`)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<SyncBranchInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		return {
-			invocationMessage: `Syncing "${options.input.branch}"…`,
-			confirmationMessages: {
-				title: 'Sync Branch',
-				message: new vscode.MarkdownString(
-					`Pull (rebase) then push branch **${options.input.branch}**?`,
-				),
-			},
-		}
-	}
-}
-
-// ─── getStackDiagram ─────────────────────────────────────────────────────────
-
-class GetStackDiagramTool implements vscode.LanguageModelTool<Record<string, never>> {
-	readonly name = 'gitbraid_getStackDiagram'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const stack = this._api.getStack()
-		if (stack.length === 0) {
-			return textResult('Stack is empty.')
-		}
-		const rootBase = stack[0].base
-		const lines: string[] = [rootBase]
-		const childrenOf = new Map<string, string[]>()
-		childrenOf.set(rootBase, [])
-		for (const entry of stack) {
-			if (!childrenOf.has(entry.base)) childrenOf.set(entry.base, [])
-			childrenOf.get(entry.base)!.push(entry.name)
-			childrenOf.set(entry.name, [])
-		}
-		const render = (parent: string, prefix: string): void => {
-			const children = childrenOf.get(parent) ?? []
-			for (let i = 0; i < children.length; i++) {
-				const branch = children[i]
-				const isLast = i === children.length - 1
-				lines.push(`${prefix}${isLast ? '└── ' : '├── '}${branch}`)
-				render(branch, prefix + (isLast ? '    ' : '│   '))
-			}
-		}
-		render(rootBase, '')
-		return textResult(lines.join('\n'))
-	}
-
-	prepareInvocation(
-		_options: vscode.LanguageModelToolInvocationPrepareOptions<Record<string, never>>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		return { invocationMessage: 'Building stack diagram…' }
-	}
-}
-
-// ─── assignGlob ───────────────────────────────────────────────────────────────
-
-interface AssignGlobInput {
-	pattern: string
-	branch: string
-}
-
-class AssignGlobTool implements vscode.LanguageModelTool<AssignGlobInput> {
-	readonly name = 'gitbraid_assignGlob'
-
-	constructor(private readonly _api: GitBraidApi) {}
-
-	async invoke(
-		options: vscode.LanguageModelToolInvocationOptions<AssignGlobInput>,
-		_token: vscode.CancellationToken,
-	): Promise<vscode.LanguageModelToolResult> {
-		const { pattern, branch } = options.input
-		const uris = await vscode.workspace.findFiles(
-			pattern,
-			'{.worktrees/**,.git/**,node_modules/**}',
-		)
-		if (uris.length === 0) {
-			return textResult(`No files matched pattern "${pattern}".`)
-		}
-		const paths = uris.map((u) => vscode.workspace.asRelativePath(u, false))
-		for (const rel of paths) {
-			await this._api.assignFile(rel, branch)
-		}
-		return textResult(`Assigned ${String(paths.length)} file(s) matching "${pattern}" to branch "${branch}":\n${paths.join('\n')}`)
-	}
-
-	prepareInvocation(
-		options: vscode.LanguageModelToolInvocationPrepareOptions<AssignGlobInput>,
-		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-		const { pattern, branch } = options.input
-		return {
-			invocationMessage: `Assigning files matching "${pattern}" to "${branch}"…`,
-			confirmationMessages: {
-				title: 'Assign Files by Glob to Branch',
-				message: new vscode.MarkdownString(
-					`Assign all files matching \`${pattern}\` to branch **${branch}**?`,
-				),
-			},
-		}
-	}
-}
-
-// ─── Registration ─────────────────────────────────────────────────────────────
 
 /**
- * Registers all GitBraid language model tools with VS Code.
+ * Registers every registry tool offered to chat with VS Code.
  * Returns disposables that unregister the tools when disposed.
  */
 export function registerLmTools(api: GitBraidApi): vscode.Disposable[] {
-	const tools: Array<vscode.LanguageModelTool<never>> = [
-		new GetStackTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new AssignFileTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new AssignHunkTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new GetFloatingFilesTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new CommitBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new GetBranchStatusTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new AddBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new PullBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new SyncBranchTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new GetStackDiagramTool(api) as unknown as vscode.LanguageModelTool<never>,
-		new AssignGlobTool(api) as unknown as vscode.LanguageModelTool<never>,
-	]
-
 	const disposables: vscode.Disposable[] = []
-	for (const tool of tools) {
+	for (const def of toolsFor('lm')) {
+		const tool = new RegistryLmTool(def, api)
 		try {
-			const d = vscode.lm.registerTool(tool.name, tool)
-			disposables.push(d)
+			disposables.push(vscode.lm.registerTool(tool.name, tool))
 			log.info(`LmTools: registered tool "${tool.name}"`)
 		} catch (e: unknown) {
-			// vscode.lm may not be available in older VS Code versions
-			log.warn(`LmTools: could not register "${tool.name}": ${JSON.stringify(e)}`)
+			// Not contributed in package.json, or vscode.lm is unavailable (older VS Code).
+			log.warn(`LmTools: could not register "${tool.name}": ${e instanceof Error ? e.message : JSON.stringify(e)}`)
 		}
 	}
 	return disposables

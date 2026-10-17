@@ -63,8 +63,10 @@ export async function absorbFiles(
 ): Promise<{ plan: AbsorbPlan, summary: AbsorbSummary | undefined }> {
 	// 1. Collect hunks per file.
 	const planHunks: AbsorbPlanHunk[] = []
+	// One batched lookup instead of a git process per file.
+	const hunksByFile = await diffEngine.getHunksForFiles(worktreeDir, relativePaths)
 	for (const rel of relativePaths) {
-		const hunks = await diffEngine.getHunksForFile(worktreeDir, rel)
+		const hunks = hunksByFile.get(rel) ?? []
 		for (const h of hunks) {
 			planHunks.push({ relativePath: rel, hunk: h, targetSha: undefined })
 		}

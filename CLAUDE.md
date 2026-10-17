@@ -53,7 +53,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 ### Key Services
 
-**`ConfigService`** (`src/configService.ts`) — Persists the stack and file/hunk assignments to `.worktrees/gitbraid-config.json`. Uses atomic temp-file writes, mtime-based concurrent-write detection, a 50 ms debounce, and version migration. Fires `onDidChangeAssignment` / `onDidChangeStack` events consumed throughout the codebase.
+**`ConfigService`** (`src/configService.ts`) — Persists the stack and file/hunk assignments to `.worktrees/gitbraid-config.json`. Uses atomic temp-file writes, revision-based concurrent-write detection with a three-way merge, a 50 ms debounce, and version migration. Fires `onDidChangeAssignment` / `onDidChangeStack` events consumed throughout the codebase.
 
 **`BranchStackService`** (`src/branchStackService.ts`) — Manages git worktrees under `.worktrees/`. Branch name → directory mapping uses a slug + SHA1 suffix (`feature-docs__a1b2c3d`) to avoid collisions. Wraps ConfigService and is the authoritative source for stack membership. Also handles `virtual` branches — entries flagged `virtual: true` skip `git worktree add` and live only in `VirtualBranchStore`; `materialiseBranch()` promotes them to regular worktree branches.
 
@@ -63,7 +63,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`WorkspaceSync`** (`src/workspaceSync.ts`) — File system watcher that copies assigned files to their branch worktree on every save, with a configurable debounce (default 200 ms). Also tracks "floating" files (modified but unassigned). Saves for files assigned to a virtual branch go to `VirtualBranchStore` instead of a worktree. Bidirectional sync is present but experimental (disabled by default).
 
-**`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has a 32-entry LRU cache validated against the file's on-disk mtime on every lookup (no time-based staleness window — a stat() runs on each call so a save landing shortly after the previous one is never served stale hunks) to avoid redundant diff runs.
+**`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has an LRU cache (256 files / 16 MB by default) keyed on what the diff depends on: the `HEAD` commit (read straight from `.git`, falling back to `git rev-parse`) and a hash of the file's content, never its mtime, so touching a file is a hit and moving `HEAD` is a miss with nothing to invalidate. `getHunksForFiles` diffs many files in one git process.
 
 **`HunkRouter`** (`src/hunkRouter.ts`) — Routes individual diff hunks to branches via `git apply --cached`. Uses anchor tracking for hunk stability across edits.
 
@@ -71,7 +71,9 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`BranchScmProvider`** (`src/branchScmProvider.ts`) — Creates one `vscode.SourceControl` instance per branch so each branch gets its own SCM panel with independent staging and commit UI.
 
-**`LmTools`** (`src/lmTools.ts`) — Registers 9 VS Code Language Model tools (`gitbraid_getStack`, `gitbraid_getFloatingFiles`, `gitbraid_getBranchStatus`, `gitbraid_addBranch`, `gitbraid_assignFile`, `gitbraid_assignHunk`, `gitbraid_commitBranch`, `gitbraid_getStackDiagram`, `gitbraid_assignGlob`) that allow AI chat to inspect and mutate the stack.
+**`AgentToolRegistry`** (`src/agentToolRegistry.ts`) — Single source of agent tools: each entry (zod input, kind read/write, surfaces, confirmation text, `run`) generates both the MCP tool and the VS Code chat tool. Invariants (`src/stackInvariants.ts`, structured `StackInvariantError` codes) are enforced in `GitBraidApi`; caller policy (force removal needs `gitbraid.agentAllowForce`) lives in the registry. Adding a tool means one registry entry plus its `languageModelTools` manifest entry; `test/agentToolRegistry.test.ts` fails on drift.
+
+**`LmTools`** (`src/lmTools.ts`) — Registers every registry tool offered to chat (`gitbraid_*`) with `vscode.lm.registerTool`; failures surface the error code and hint to the model.
 
 **`McpServer` / `McpTools`** (`src/mcpServer.ts`, `src/mcpTools.ts`) — Hosts a Model Context Protocol server over stdio so non-VS-Code clients can drive the same stack. Read-only by default; mutation tools appear only when `gitbraid.mcpWriteEnabled` is true. Toggled by `GitBraid: Start / Stop MCP Server`.
 
@@ -98,7 +100,8 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 `.worktrees/gitbraid-config.json` is the primary persistent state:
 ```json
 {
-  "version": 1,
+  "version": 3,
+  "rev": 17,
   "stack": [
     { "name": "feature/docs", "color": "#4CAF50", "order": 1, "base": "main" },
     { "name": "feature/idea", "color": "#6C8EBF", "order": 2, "base": "feature/docs", "virtual": true }
@@ -107,6 +110,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
   "hunkAssignments": { "src/bar.ts": { "0": "feature/impl" } }
 }
 ```
+`rev` is a revision counter bumped on every write; `ConfigService` uses it (and the content it last saw) to detect that another window wrote, and merges three-way via `src/configMerge.ts`. A file with a newer `version` than this build supports is never overwritten.
 Never write this file directly — always go through `ConfigService`.
 
 Virtual branches (`virtual: true`) also persist their captured file
