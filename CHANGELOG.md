@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Sparse worktrees** (plan 16) — `gitbraid.sparseWorktrees` (`off`/`auto`/`always`, default `auto`), `gitbraid.sparseWorktreeThreshold` and `gitbraid.sparseAlwaysInclude` create branch worktrees with a git sparse-checkout cone limited to the directories the branch owns; the cone grows on demand when a file is saved. `GitBraid: Convert Branch Worktree to Sparse or Full` converts existing worktrees. Needs git 2.25+. Also fixed `git worktree add/remove` running in the first workspace folder in multi-root workspaces.
 - **GitBraid Doctor** (`gitbraid.runDoctor`) — a one-shot health check for
   circular base references, orphaned worktrees, orphaned virtual-branch
   store files, missing worktrees, and out-of-workspace assignments, each

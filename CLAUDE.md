@@ -59,6 +59,8 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`VirtualBranchStore`** (`src/virtualBranchStore.ts`) — Append-only JSONL store under `.worktrees/virtual/<slug>.jsonl` that captures file snapshots for branches flagged `virtual: true` in the stack. Crash-safe by construction (append-only), with lazy compaction when the log grows >2× the live working set. See `docs/plans/08-virtual-branches.md`.
 
+**`SparseWorktreeService`** (`src/sparseWorktree.ts`) — Optional `git sparse-checkout --cone` worktrees (`gitbraid.sparseWorktrees`). `BranchStackService` creates them; `WorkspaceSync` calls `ensureInCone` before copying a file in; `StackResolver` falls back to `git show` for out-of-cone paths.
+
 **`WorkspaceSync`** (`src/workspaceSync.ts`) — File system watcher that copies assigned files to their branch worktree on every save, with a configurable debounce (default 200 ms). Also tracks "floating" files (modified but unassigned). Saves for files assigned to a virtual branch go to `VirtualBranchStore` instead of a worktree. Bidirectional sync is present but experimental (disabled by default).
 
 **`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has a 32-entry LRU cache validated against the file's on-disk mtime on every lookup (no time-based staleness window — a stat() runs on each call so a save landing shortly after the previous one is never served stale hunks) to avoid redundant diff runs.

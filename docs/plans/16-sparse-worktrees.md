@@ -4,7 +4,7 @@
 virtual checkouts need no special support
 (https://www.anthropic.com/engineering/redesigning-source-control).
 
-**Status:** **Not started.** Tracking issue: #40.
+**Status:** **Implemented** (see "As built"). Tracking issue: #40.
 
 ## Goal
 
@@ -81,3 +81,13 @@ Nothing is converted automatically.
 
 - Windows long paths and case-insensitivity under sparse-checkout.
 - Do any language servers or tools read the worktrees directly?
+
+## As built
+
+- `src/sparseWorktree.ts` (`SparseWorktreeService`): git version probe (once, one warning), `shouldUseSparse` (off / always / auto with a tracked-file count cached per base oid), `initCone`, `ensureInCone` (serialised per worktree, skips covered paths without touching git), `isInCone`, `convert`.
+- `BranchStackService._createWorktree` builds the worktree with `--no-checkout`, then `init --cone`, `set <owned dirs + gitbraid.sparseAlwaysInclude>`, `checkout`. Any failure removes the half-built worktree and falls back to a full one with a warning. `setWorktreeSparse` backs the new `gitbraid.setWorktreeSparse` command; nothing is converted automatically.
+- `WorkspaceSync._syncFile` calls `ensureInCone` before the copy (wired from `FolderContext`).
+- `StackResolver` needed no change: it already falls back to `git show` when the worktree lacks the file, which is exactly the out-of-cone case. A test pins that sparse and full modes return identical bytes.
+- Fixed on the way: `git.worktree.add/addNew/remove` ran in the first workspace folder, which is wrong for other folders of a multi-root workspace. They now take the folder's root.
+
+Not done: the "rebase conflict outside the cone" test, the Windows long-path / case-insensitivity check, and survey of tools that read worktrees directly (open questions above are unchanged). Writes other than `WorkspaceSync` (hunk routing, reverse sync) rely on the cone already covering owned directories.
