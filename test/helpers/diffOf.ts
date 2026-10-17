@@ -13,7 +13,7 @@ export function diffOf(oldText: string, newText: string, name = 'f.txt', context
 		fs.mkdirSync(path.join(dir, 'b'))
 		fs.writeFileSync(path.join(dir, 'a', name), oldText)
 		fs.writeFileSync(path.join(dir, 'b', name), newText)
-		const r = spawnSync('git', ['diff', '--no-index', '--no-color', `-U${String(context)}`, `a/${name}`, `b/${name}`], { cwd: dir, encoding: 'utf-8' })
+		const r = spawnSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', 'diff', '--no-index', '--no-color', `-U${String(context)}`, `a/${name}`, `b/${name}`], { cwd: dir, encoding: 'utf-8' })
 		// Exit status 1 means "differences found".
 		if (r.status !== 0 && r.status !== 1) throw new Error(`git diff failed: ${r.stderr}`)
 		return parseDiffHunks(r.stdout)
