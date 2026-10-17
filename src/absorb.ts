@@ -1,3 +1,5 @@
+import { classifyHunksOnDisk } from './hunkKinds'
+import { isTrivialKind } from './hunkClassifier'
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
 import { IGitRunner, getDefaultGitRunner } from './gitRunner'
@@ -46,6 +48,12 @@ export interface AbsorbOptions {
 	allowPushed?: boolean
 	/** When true, build the plan but don't mutate anything.  Default false. */
 	dryRun?: boolean
+	/**
+	 * Leave whitespace-only and comment-only hunks (plan 18) in the worktree
+	 * rather than blaming them into an old commit.  Default false here; the
+	 * command layer passes `gitbraid.absorbSkipTrivial` (default true).
+	 */
+	skipTrivial?: boolean
 }
 
 /**
@@ -67,13 +75,21 @@ export async function absorbFiles(
 	const hunksByFile = await diffEngine.getHunksForFiles(worktreeDir, relativePaths)
 	for (const rel of relativePaths) {
 		const hunks = hunksByFile.get(rel) ?? []
+		const kinds = opts.skipTrivial ? await classifyHunksOnDisk(worktreeDir, rel, hunks) : []
 		for (const h of hunks) {
-			planHunks.push({ relativePath: rel, hunk: h, targetSha: undefined })
+			const kind = kinds[h.index]
+			planHunks.push({
+				relativePath: rel,
+				hunk: h,
+				targetSha: undefined,
+				...(kind && isTrivialKind(kind) ? { reason: `${kind}-only hunk left in the worktree (skipTrivial)` } : {}),
+			})
 		}
 	}
 
 	// 2. Resolve each hunk to a dominant commit via blame.
 	for (const entry of planHunks) {
+		if (entry.reason) continue   // already decided: a trivial hunk skipped above
 		const target = await dominantCommitForHunk(
 			worktreeDir,
 			entry.relativePath,

@@ -83,6 +83,8 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`.
 
+**`HunkClassifier`** (`src/hunkClassifier.ts`, `src/languageRules.ts`, `src/hunkKinds.ts`) — Conservative whitespace/comment/import/logic/mixed classification of diff hunks. Pure core, needs the working-tree file text; anything it cannot prove is `logic`. Feeds the hunk CodeLens tag, absorb `skipTrivial` and opt-in trivial-hunk auto-routing. Never loosen a rule without a failing-first test in `test/hunkClassifier*.test.ts`.
+
 **`Absorb`** (`src/absorb.ts`) — Plans and applies `git commit --fixup + rebase --autosquash` for hunks that belong to an earlier commit. Guarded by `gitbraid.absorbRewritePushed` when the target commits have already been pushed.
 
 **`PersistentUndoLog`** (`src/persistentUndoLog.ts`) — Append-only JSON-Lines log at `.worktrees/undo-log.jsonl` that survives VS Code restarts. Bounded by `gitbraid.undoLogMaxEntries`.

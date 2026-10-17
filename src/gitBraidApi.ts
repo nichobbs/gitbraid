@@ -1,3 +1,4 @@
+import { autoRouteMode, withInheritedTrivial } from './hunkKinds'
 import * as vscode from 'vscode'
 import { log } from './channelLogger'
 import { ConfigService } from './configService'
@@ -374,14 +375,16 @@ export class GitBraidApi implements GitBraidExportedAPI {
 			const a = this._config.getHunkAnchor(relativePath, idx)
 			if (a) anchors.set(idx, a)
 		}
+		const mode = autoRouteMode(vscode.workspace.getConfiguration('gitbraid').get('autoRouteTrivialHunks'))
+		const effective = await withInheritedTrivial(this._hunkRouter.diffEngine, this._workspaceRoot.fsPath, relativePath, assignments, mode)
 		const result = await this._hunkRouter.routeFile(
 			this._workspaceRoot.fsPath,
 			relativePath,
 			worktreeDirs,
-			assignments,
+			new Map(effective),
 			anchors,
 		)
-		const total = assignments.size
+		const total = effective.size
 		if (result.ok) {
 			await this._config.clearHunkAssignments(relativePath)
 			log.info(`GitBraidApi.routeHunks: routed ${String(total)} hunk(s) for "${relativePath}"`)
@@ -391,6 +394,7 @@ export class GitBraidApi implements GitBraidExportedAPI {
 		// assigned prevents a retry from re-applying an already-applied
 		// branch's patch (which would then fail too).
 		for (const idx of result.appliedIndices) {
+			if (!assignments.has(idx)) continue   // inherited for this run only; never persisted
 			await this._config.removeHunkAssignment(relativePath, idx)
 		}
 		log.warn(

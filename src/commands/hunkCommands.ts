@@ -1,3 +1,4 @@
+import { autoRouteMode, withInheritedTrivial } from '../hunkKinds'
 import * as vscode from 'vscode'
 import { anchorFor } from '../hunkRouter'
 import { recordAssignHunk, recordUnassignHunk } from '../undoStack'
@@ -191,7 +192,9 @@ export function registerHunkCommands(deps: CommandDeps): vscode.Disposable[] {
 					const a = ctx.config.getHunkAnchor(rel, idx)
 					if (a) anchors.set(idx, a)
 				}
-				const result = await ctx.hunkRouter.routeFile(ctx.root.fsPath, rel, worktreeDirs, assignments, anchors)
+				const mode = autoRouteMode(vscode.workspace.getConfiguration('gitbraid').get('autoRouteTrivialHunks'))
+				const effective = await withInheritedTrivial(ctx.diffEngine, ctx.root.fsPath, rel, assignments, mode)
+				const result = await ctx.hunkRouter.routeFile(ctx.root.fsPath, rel, worktreeDirs, new Map(effective), anchors)
 				if (result.ok) {
 					await ctx.config.clearHunkAssignments(rel)
 					await vscode.window.showInformationMessage(`Routed hunks for ${rel} successfully.`)
@@ -200,6 +203,7 @@ export function registerHunkCommands(deps: CommandDeps): vscode.Disposable[] {
 					// failed ones assigned prevents a retry from re-applying an
 					// already-applied branch's patch (which would then fail too).
 					for (const idx of result.appliedIndices) {
+						if (!assignments.has(idx)) continue   // inherited for this run only; never persisted
 						await ctx.config.removeHunkAssignment(rel, idx)
 					}
 					if (result.appliedIndices.length > 0) {
