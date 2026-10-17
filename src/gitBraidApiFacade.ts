@@ -6,7 +6,13 @@ import type {
 	GitBraidExportedAPI,
 	BranchOptions,
 	CommitOptions,
+	FileOwnership,
+	FileHunkInfo,
+	FileHunkOptions,
+	BranchDiff,
+	BranchDiffOptions,
 } from './@types/GitBraidAPI'
+import type { UndoLogEntry } from './persistentUndoLog'
 import type {
 	BranchStackEntry,
 	BranchStatus,
@@ -132,6 +138,18 @@ export class GitBraidApiFacade implements GitBraidExportedAPI, vscode.Disposable
 	}
 	async getStackStatus(): Promise<StackStatus> {
 		return this._api().getStackStatus()
+	}
+	getFileOwnership(relativePath: string): FileOwnership {
+		return this._api().getFileOwnership(relativePath)
+	}
+	async getFileHunks(relativePath: string, options?: FileHunkOptions): Promise<FileHunkInfo[]> {
+		return this._api().getFileHunks(relativePath, options)
+	}
+	async getBranchDiff(branch: string, options?: BranchDiffOptions): Promise<BranchDiff> {
+		return this._api().getBranchDiff(branch, options)
+	}
+	async getUndoLog(limit?: number): Promise<UndoLogEntry[]> {
+		return this._api().getUndoLog(limit)
 	}
 	async commitBranch(branch: string, message: string, options?: CommitOptions): Promise<void> {
 		await this._api().commitBranch(branch, message, options)
