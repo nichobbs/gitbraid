@@ -26,7 +26,7 @@ documents — update them as decisions are made and link from
 | [11-zero-worktree-virtual-branches.md](11-zero-worktree-virtual-branches.md) | Virtual branches that never get a worktree, even after committing | GitButler | **Design only — not scheduled** |
 | [12-agent-safe-stack-api.md](12-agent-safe-stack-api.md) | Shared invariants, structured errors and read tools for agents (#36) | Anthropic Scion article | **Not started** |
 | [13-config-revision-cas.md](13-config-revision-cas.md) | Revision counter and three-way merge for `gitbraid-config.json` (#37) | Anthropic Scion article | **Not started** |
-| [14-jsonl-log-primitive.md](14-jsonl-log-primitive.md) | One `JsonlLog` for virtual store and undo log (#38) | Anthropic Scion article | **Not started** |
+| [14-jsonl-log-primitive.md](14-jsonl-log-primitive.md) | One `JsonlLog` for virtual store and undo log (#38) | Anthropic Scion article | **Implemented** |
 | [15-content-addressed-diff-cache.md](15-content-addressed-diff-cache.md) | Hunk cache keyed on content, not mtime (#39) | Anthropic Scion article | **Not started** |
 | [16-sparse-worktrees.md](16-sparse-worktrees.md) | Sparse-checkout worktrees for large repos (#40) | Anthropic Scion article | **Not started** |
 | [17-pipelined-merge-queue.md](17-pipelined-merge-queue.md) | Pipelined merge-queue mode (#41) | Anthropic Scion article | **Not started** |
