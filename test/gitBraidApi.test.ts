@@ -11,6 +11,26 @@ import { git } from '../src/gitFunctions'
 import { BranchStackError } from '../src/errors'
 import { FakeGitRunner } from './helpers/fakeGitRunner'
 import type { HunkRouter } from '../src/hunkRouter'
+import { HunkRouter as HunkRouterImpl, anchorFor } from '../src/hunkRouter'
+import { DiffEngine, parseDiffHunks } from '../src/diffEngine'
+
+/** Two hunks, so index 0 and 1 exist and 2 does not. */
+const SAMPLE_DIFF = [
+	'diff --git a/src/foo.ts b/src/foo.ts',
+	'index 111..222 100644',
+	'--- a/src/foo.ts',
+	'+++ b/src/foo.ts',
+	'@@ -1,3 +1,3 @@',
+	' a',
+	'-b',
+	'+B',
+	' c',
+	'@@ -20,3 +20,4 @@',
+	' x',
+	'+inserted',
+	' y',
+	' z',
+].join('\n')
 import type { RouteFileResult } from '../src/hunkRouter'
 
 function wsRoot(): vscode.Uri {
@@ -18,7 +38,7 @@ function wsRoot(): vscode.Uri {
 }
 
 function cleanup() {
-	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true }) } catch {}
+	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) } catch {}
 	try { fs.rmSync(path.join(wsRoot().fsPath, '.gitignore')) } catch {}
 }
 
@@ -48,12 +68,15 @@ suite('GitBraidApi', function () {
 		api = new GitBraidApi(config, branchStack, sync, wsRoot())
 	})
 
-	teardown(() => {
+	teardown(async () => {
+		// Settle config writes first: a pending debounced write would otherwise
+		// recreate the file right after cleanup() removed it (seen on Windows).
+		await config.flushPendingWrites()
 		sync.dispose()
-		cleanup()
 		BranchStackService.resetInstance()
 		ConfigService.resetInstance()
 		WorkspaceSync.resetInstance()
+		cleanup()
 	})
 
 	// ── Stack management ─────────────────────────────────────────────────────
@@ -93,9 +116,17 @@ suite('GitBraidApi', function () {
 		assert.strictEqual(api.getAssignment('src/foo.ts'), 'feature/docs')
 	})
 
-	test('assignHunk: delegates to config without throwing', async () => {
+	test('assignHunk: records the assignment with an anchor taken from the live hunk', async () => {
 		await config.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
-		await assert.doesNotReject(() => api.assignHunk('src/foo.ts', 0, 'feature/docs'))
+		const engine = new DiffEngine()
+		const hunks = parseDiffHunks(SAMPLE_DIFF)
+		engine.getHunksForFile = async () => hunks
+		const withHunks = new GitBraidApi(config, branchStack, sync, wsRoot(), undefined, new HunkRouterImpl(engine))
+
+		await withHunks.assignHunk('src/foo.ts', 1, 'feature/docs')
+
+		assert.strictEqual(config.getHunkAssignments('src/foo.ts')?.get(1), 'feature/docs')
+		assert.deepStrictEqual(config.getHunkAnchor('src/foo.ts', 1), anchorFor(hunks[1]), 'anchored, so it survives renumbering')
 	})
 
 	test('unassignFile: removes assignment', async () => {
@@ -115,7 +146,8 @@ suite('GitBraidApi', function () {
 
 	// ── Status queries ───────────────────────────────────────────────────────
 
-	test('getBranchStatus: returns zeros for nonexistent worktree', async () => {
+	test('getBranchStatus: returns zeros for a registered branch whose worktree does not exist', async () => {
+		await config.addBranch({ name: 'feature/docs', color: '#fff', base: 'main' })
 		const status = await api.getBranchStatus('feature/docs')
 		assert.strictEqual(status.branch, 'feature/docs')
 		assert.strictEqual(status.staged, 0)
@@ -289,14 +321,23 @@ suite('GitBraidApi — actions (fake runner)', function () {
 		sync = WorkspaceSync.getInstance(config)
 		runner = new FakeGitRunner()
 		api = new GitBraidApi(config, branchStack, sync, wsRoot(), runner)
+		// The API now refuses branches that are not in the stack, so register the
+		// one these tests act on. Its worktree is still only a path string: the
+		// fake runner never touches disk.
+		// Windows can refuse the cleanup's rmSync while a handle is still open, in
+		// which case the previous test's config is loaded back; register idempotently.
+		if (!config.getBranch('feature/x')) await config.addBranch({ name: 'feature/x', color: '#fff', base: 'main' })
 	})
 
-	teardown(() => {
+	teardown(async () => {
+		// Settle config writes first: a pending debounced write would otherwise
+		// recreate the file right after cleanup() removed it (seen on Windows).
+		await config.flushPendingWrites()
 		sync.dispose()
-		cleanup()
 		BranchStackService.resetInstance()
 		ConfigService.resetInstance()
 		WorkspaceSync.resetInstance()
+		cleanup()
 	})
 
 	// ── commitBranch ─────────────────────────────────────────────────────────
@@ -431,14 +472,12 @@ suite('GitBraidApi — actions (fake runner)', function () {
 	})
 
 	test('rebaseBranch: success', async () => {
-		await api.addBranch('feature/x', 'main')
 		runner.fixture('rebase --autostash main', { exitCode: 0 })
 		await assert.doesNotReject(() => api.rebaseBranch('feature/x'))
 		assert.ok(runner.calls.some((c) => c.args.join(' ') === 'rebase --autostash main'))
 	})
 
 	test('rebaseBranch: failure throws GitError', async () => {
-		await api.addBranch('feature/x', 'main')
 		runner.fixture('rebase --autostash main', { exitCode: 1, stderr: 'conflict' })
 		await assert.rejects(() => api.rebaseBranch('feature/x'), /Rebase "feature\/x" onto "main" failed/)
 	})
@@ -448,9 +487,9 @@ suite('GitBraidApi — actions (fake runner)', function () {
 	test('reorderStack: delegates to BranchStackService', async () => {
 		await api.addBranch('feature/a', 'main')
 		await api.addBranch('feature/b', 'feature/a')
-		await api.reorderStack(['feature/b', 'feature/a'])
+		await api.reorderStack(['feature/b', 'feature/a', 'feature/x'])
 		const names = api.getStack().map((e) => e.name)
-		assert.deepStrictEqual(names, ['feature/b', 'feature/a'])
+		assert.deepStrictEqual(names, ['feature/b', 'feature/a', 'feature/x'])
 	})
 
 	// ── routeHunks ───────────────────────────────────────────────────────────

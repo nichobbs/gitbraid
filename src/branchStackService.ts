@@ -1,3 +1,5 @@
+import { SparseWorktreeService, dirsForFiles } from './sparseWorktree'
+import type { SparseMode, SparseSettings } from './sparseWorktree'
 import * as vscode from 'vscode'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -140,6 +142,7 @@ export class BranchStackService implements vscode.Disposable {
 	constructor(
 		private readonly _config: ConfigService,
 		private readonly _virtualStore?: VirtualBranchStore,
+		readonly sparse: SparseWorktreeService = new SparseWorktreeService(),
 	) {}
 
 	/** Legacy singleton, retained for tests (see class header). */
@@ -455,15 +458,64 @@ export class BranchStackService implements vscode.Disposable {
 		// a perfectly normal "branch already exists" condition.
 		const branchExists = await this._localBranchExists(branchName)
 
-		if (branchExists) {
+		const settings = readSparseSettings()
+		const useSparse = await this.sparse.shouldUseSparse(this._workspaceRoot!.fsPath, base, settings)
+		if (useSparse) {
+			try {
+				await this._createSparseWorktree(branchName, base, absPath, branchExists, settings)
+				return
+			} catch (e: unknown) {
+				// A half-built sparse worktree is worse than a full one: clean up
+				// and fall through to the normal path.
+				log.warn(`BranchStackService: sparse worktree for "${branchName}" failed (${e instanceof Error ? e.message : String(e)}); creating a full worktree`)
+				this.sparse.forget(absPath)
+				try { await git.worktree.remove(absPath, true, this._workspaceRoot!.fsPath) } catch { /* nothing to remove */ }
+			}
+		}
+		const existsNow = branchExists || await this._localBranchExists(branchName)
+
+		if (existsNow) {
 			// Existing branch — check it out into a new worktree.
-			await git.worktree.add(absPath, branchName)
+			await git.worktree.add(absPath, branchName, false, this._workspaceRoot!.fsPath)
 			log.info(`BranchStackService: added existing branch "${branchName}" at ${absPath}`)
 		} else {
 			// New branch — create it from base and add the worktree in one step.
-			await git.worktree.addNew(branchName, absPath, base)
+			await git.worktree.addNew(branchName, absPath, base, false, this._workspaceRoot!.fsPath)
 			log.info(`BranchStackService: created new branch "${branchName}" at ${absPath}`)
 		}
+	}
+
+	/** Directories a branch's sparse cone must contain: everything it owns plus the always-include list. */
+	ownedDirs(branchName: string, alwaysInclude: readonly string[] = []): string[] {
+		const files: string[] = []
+		for (const [p, b] of Object.entries(this._config.getAllAssignments())) {
+			if (b === branchName) files.push(p)
+		}
+		for (const p of this._config.getHunkAssignedFiles()) {
+			const hunks = this._config.getHunkAssignments(p)
+			if (hunks && [...hunks.values()].includes(branchName)) files.push(p)
+		}
+		return dirsForFiles(files, alwaysInclude)
+	}
+
+	private async _createSparseWorktree(
+		branchName: string, base: string, absPath: string, branchExists: boolean, settings: SparseSettings,
+	): Promise<void> {
+		if (branchExists) await git.worktree.add(absPath, branchName, true, this._workspaceRoot!.fsPath)
+		else await git.worktree.addNew(branchName, absPath, base, true, this._workspaceRoot!.fsPath)
+		await this.sparse.initCone(absPath, this.ownedDirs(branchName, settings.alwaysInclude), branchName)
+		log.info(`BranchStackService: created sparse worktree for "${branchName}" at ${absPath}`)
+	}
+
+	/** Convert an existing branch worktree to or from sparse mode. */
+	async setWorktreeSparse(branchName: string, sparse: boolean): Promise<void> {
+		this._assertInitialised()
+		const wt = worktreePath(this._workspaceRoot!, branchName).fsPath
+		if (!fs.existsSync(wt)) throw new BranchStackError(`Branch "${branchName}" has no worktree to convert`)
+		if (sparse && !await this.sparse.gitSupportsSparse(wt)) {
+			throw new BranchStackError('This git version does not support sparse-checkout (2.25 or later is required)')
+		}
+		await this.sparse.convert(wt, sparse ? 'sparse' : 'full', this.ownedDirs(branchName, readSparseSettings().alwaysInclude))
 	}
 
 	private async _localBranchExists(branchName: string): Promise<boolean> {
@@ -590,4 +642,15 @@ export function detectStackCycle(
 		current = entry.base
 	}
 	return undefined
+}
+
+/** Read the sparse-worktree settings live. */
+export function readSparseSettings(): SparseSettings {
+	const cfg = vscode.workspace.getConfiguration('gitbraid')
+	const mode = cfg.get<SparseMode>('sparseWorktrees', 'auto')
+	return {
+		mode: mode === 'off' || mode === 'always' ? mode : 'auto',
+		threshold: Math.max(0, cfg.get<number>('sparseWorktreeThreshold', 20000)),
+		alwaysInclude: cfg.get<string[]>('sparseAlwaysInclude', []),
+	}
 }

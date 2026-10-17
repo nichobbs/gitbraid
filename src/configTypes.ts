@@ -5,7 +5,7 @@
  * committed to the repository — it is personal working state.
  */
 
-export const CONFIG_SCHEMA_VERSION = 2
+export const CONFIG_SCHEMA_VERSION = 3
 
 /** A single entry in the ordered branch stack. */
 export interface BranchStackEntry {
@@ -100,6 +100,13 @@ export interface HunkAnchor {
 /** Root structure of `.worktrees/gitbraid-config.json`. */
 export interface BranchConfig {
 	version: number
+	/**
+	 * Revision counter, bumped by every write.  Lets a writer tell whether
+	 * someone else has written since it last read, without trusting file
+	 * modification times.  Absent in files written before schema version 3;
+	 * treated as 0.
+	 */
+	rev?: number
 	stack: BranchStackEntry[]
 	assignments: AssignmentMap
 	/** Hunk-level assignments — present only when the user has assigned individual hunks. */
@@ -148,6 +155,7 @@ export interface StackChangeEvent {
 export function emptyConfig(): BranchConfig {
 	return {
 		version: CONFIG_SCHEMA_VERSION,
+		rev: 0,
 		stack: [],
 		assignments: {},
 		hunkAssignments: {},
@@ -179,8 +187,10 @@ export function isValidConfig(raw: unknown): raw is BranchConfig {
 
 /**
  * Migrate a config object to the current schema version in-place.
- * Currently only version 1 exists, so this is a no-op except for filling
- * in missing optional fields.
+ *
+ * Callers must reject files whose `version` is greater than
+ * {@link CONFIG_SCHEMA_VERSION} *before* calling this: it stamps the current
+ * version, which would silently downgrade a newer file.
  */
 export function migrateConfig(config: BranchConfig): BranchConfig {
 	// Ensure assignments object exists (may be missing in hand-edited files)
@@ -209,6 +219,10 @@ export function migrateConfig(config: BranchConfig): BranchConfig {
 	// applying them to the wrong lines.
 	if (!config.hunkAnchors) {
 		config.hunkAnchors = {}
+	}
+	// v2 → v3: introduce the revision counter.
+	if (typeof config.rev !== 'number') {
+		config.rev = 0
 	}
 	config.version = CONFIG_SCHEMA_VERSION
 	return config
