@@ -81,7 +81,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`SubmitStackService`** (`src/submitStackService.ts`) — Pushes every layer and calls the selected adapter's `createPR` / `updatePR` to keep the stack's PRs in sync, rewriting each body with the `renderStackBlock` sentinel.
 
-**`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`.
+**`MergeQueueService`** (`src/mergeQueueService.ts`) — Drives `gitbraid.mergeStack`. Enqueues the bottom-most unmerged PR, polls `queueStatus` until it lands, then proceeds up the stack. Polling interval comes from `gitbraid.mergeQueuePollSeconds`. `gitbraid.mergeStrategy: pipelined` (opt-in) keeps several layers in flight on adapters with `supportsOrderedQueue`, with pre-flight checks and a dequeue-everything-above failure policy.
 
 **`HunkClassifier`** (`src/hunkClassifier.ts`, `src/languageRules.ts`, `src/hunkKinds.ts`) — Conservative whitespace/comment/import/logic/mixed classification of diff hunks. Pure core, needs the working-tree file text; anything it cannot prove is `logic`. Feeds the hunk CodeLens tag, absorb `skipTrivial` and opt-in trivial-hunk auto-routing. Never loosen a rule without a failing-first test in `test/hunkClassifier*.test.ts`.
 

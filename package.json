@@ -1024,6 +1024,24 @@
 					"minimum": 5,
 					"description": "Polling interval (seconds) used by Merge Stack when waiting for each queued PR to merge."
 				},
+				"gitbraid.mergeStrategy": {
+					"type": "string",
+					"enum": ["serial", "pipelined"],
+					"default": "serial",
+					"description": "How Merge Stack drives the host's merge queue. \"serial\" waits for each layer to merge before enqueuing the next. \"pipelined\" keeps up to gitbraid.mergePipelineDepth layers in flight (hosts with an ordered queue only; others behave as serial but still run pre-flight checks). A child never merges before its parent."
+				},
+				"gitbraid.mergePipelineDepth": {
+					"type": "number",
+					"default": 2,
+					"minimum": 1,
+					"maximum": 5,
+					"description": "Layers in flight at once when gitbraid.mergeStrategy is \"pipelined\"."
+				},
+				"gitbraid.mergeKeepQueuedOnCancel": {
+					"type": "boolean",
+					"default": false,
+					"description": "When a pipelined Merge Stack is cancelled, leave the already-queued layers in the host's queue instead of dequeuing them."
+				},
 				"gitbraid.telemetry.enabled": {
 					"type": "boolean",
 					"default": false,
