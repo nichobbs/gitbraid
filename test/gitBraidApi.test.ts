@@ -38,7 +38,7 @@ function wsRoot(): vscode.Uri {
 }
 
 function cleanup() {
-	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true }) } catch {}
+	try { fs.rmSync(path.join(wsRoot().fsPath, '.worktrees'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) } catch {}
 	try { fs.rmSync(path.join(wsRoot().fsPath, '.gitignore')) } catch {}
 }
 
@@ -68,12 +68,15 @@ suite('GitBraidApi', function () {
 		api = new GitBraidApi(config, branchStack, sync, wsRoot())
 	})
 
-	teardown(() => {
+	teardown(async () => {
+		// Settle config writes first: a pending debounced write would otherwise
+		// recreate the file right after cleanup() removed it (seen on Windows).
+		await config.flushPendingWrites()
 		sync.dispose()
-		cleanup()
 		BranchStackService.resetInstance()
 		ConfigService.resetInstance()
 		WorkspaceSync.resetInstance()
+		cleanup()
 	})
 
 	// ── Stack management ─────────────────────────────────────────────────────
@@ -326,12 +329,15 @@ suite('GitBraidApi — actions (fake runner)', function () {
 		if (!config.getBranch('feature/x')) await config.addBranch({ name: 'feature/x', color: '#fff', base: 'main' })
 	})
 
-	teardown(() => {
+	teardown(async () => {
+		// Settle config writes first: a pending debounced write would otherwise
+		// recreate the file right after cleanup() removed it (seen on Windows).
+		await config.flushPendingWrites()
 		sync.dispose()
-		cleanup()
 		BranchStackService.resetInstance()
 		ConfigService.resetInstance()
 		WorkspaceSync.resetInstance()
+		cleanup()
 	})
 
 	// ── commitBranch ─────────────────────────────────────────────────────────
