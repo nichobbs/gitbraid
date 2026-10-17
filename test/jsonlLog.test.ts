@@ -254,6 +254,33 @@ suite('withFileLock', () => {
 		assert.ok(fs.existsSync(lock), 'a lock we did not take must not be deleted')
 	})
 
+	test('treats Windows-style EPERM/EACCES/EBUSY on open as contention and retries', async () => {
+		const realOpen = fs.promises.open
+		let calls = 0
+		const codes = ['EPERM', 'EACCES', 'EBUSY']
+		;(fs.promises as { open: unknown }).open = async (...args: Parameters<typeof realOpen>) => {
+			if (calls < codes.length) throw Object.assign(new Error('locked'), { code: codes[calls++] })
+			return realOpen(...args)
+		}
+		try {
+			const lock = path.join(dir, 'z.lock')
+			assert.strictEqual(await withFileLock(lock, async () => 7, { retryDelayMs: 1, maxRetries: 10 }), 7)
+			assert.strictEqual(calls, 3)
+		} finally {
+			;(fs.promises as { open: unknown }).open = realOpen
+		}
+	})
+
+	test('other open errors are not swallowed', async () => {
+		const realOpen = fs.promises.open
+		;(fs.promises as { open: unknown }).open = async () => { throw Object.assign(new Error('nope'), { code: 'ENOSPC' }) }
+		try {
+			await assert.rejects(withFileLock(path.join(dir, 'w.lock'), async () => 1, { retryDelayMs: 1, maxRetries: 3 }), /nope/)
+		} finally {
+			;(fs.promises as { open: unknown }).open = realOpen
+		}
+	})
+
 	test('returns the task result and removes the lock', async () => {
 		const lock = path.join(dir, 'y.lock')
 		assert.strictEqual(await withFileLock(lock, async () => 42), 42)
