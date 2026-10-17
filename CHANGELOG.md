@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- **Adopt existing worktrees** (`gitbraid.adoptWorktrees`) — bring branches
+  that already have their own `git worktree` checkouts (e.g. from a coding
+  agent) into the stack. Pick the order bottom-up while each candidate is
+  checked for conflicts against the simulated stack below it; GitBraid then
+  rebases each branch onto the previous layer, moves it under `.worktrees/`,
+  and carries uncommitted changes across. Stops cleanly at the first
+  conflicting rebase. New module: `src/worktreeAdopter.ts`;
+  `BranchStackService.addBranchToStack` gains a `prepareWorktree` hook.
 - **Pipelined merge queue** (plan 17) — opt-in `gitbraid.mergeStrategy: pipelined` keeps up to `gitbraid.mergePipelineDepth` (default 2) layers in flight on hosts with an ordered queue (GitHub), after a parallel pre-flight check. A child never merges before its parent; a failure dequeues and blocks the layers above it. `MergeStackResult` gained `state` (`merged`/`failed`/`blocked`/`skipped`) and `blockedBy`. New adapter capabilities `supportsOrderedQueue` and `retargetPR`. Default behaviour is unchanged.
 - **Semantic hunk classification** (plan 18) — hunks are classified as `whitespace`, `comment`, `import`, `logic` or `mixed` by a conservative lexer-based classifier (TS/JS, Java, Python, Go, Rust, C/C++, C#, shell, YAML; unknown languages only trust trailing-whitespace changes). Anything uncertain is `logic`. Shown as a CodeLens tag (`gitbraid.showHunkKind`), used by Absorb to leave trivial hunks in the worktree (`gitbraid.absorbSkipTrivial`, default on) and, opt-in, by Route Hunks to let trivial hunks follow their neighbour's branch (`gitbraid.autoRouteTrivialHunks`).
 - **Sparse worktrees** (plan 16) — `gitbraid.sparseWorktrees` (`off`/`auto`/`always`, default `auto`), `gitbraid.sparseWorktreeThreshold` and `gitbraid.sparseAlwaysInclude` create branch worktrees with a git sparse-checkout cone limited to the directories the branch owns; the cone grows on demand when a file is saved. `GitBraid: Convert Branch Worktree to Sparse or Full` converts existing worktrees. Needs git 2.25+. Also fixed `git worktree add/remove` running in the first workspace folder in multi-root workspaces.
