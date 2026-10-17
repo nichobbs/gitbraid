@@ -972,6 +972,22 @@
 					"minimum": 10,
 					"description": "Maximum number of entries retained in the persistent undo log (.worktrees/undo-log.jsonl)."
 				},
+				"gitbraid.showHunkKind": {
+					"type": "boolean",
+					"default": true,
+					"description": "Tag hunk CodeLenses that are whitespace-only, comment-only, import-only or comment+code. Classification is conservative: anything uncertain is shown as a normal change."
+				},
+				"gitbraid.autoRouteTrivialHunks": {
+					"type": "string",
+					"enum": ["off", "whitespace", "whitespace+comment"],
+					"default": "off",
+					"description": "When routing hunks, let unassigned whitespace-only (or whitespace and comment-only) hunks follow the nearest assigned hunk's branch. Never applies to code changes."
+				},
+				"gitbraid.absorbSkipTrivial": {
+					"type": "boolean",
+					"default": true,
+					"description": "Absorb leaves whitespace-only and comment-only hunks in the worktree instead of folding them into the commit that blame points at."
+				},
 				"gitbraid.mergeQueuePollSeconds": {
 					"type": "number",
 					"default": 30,

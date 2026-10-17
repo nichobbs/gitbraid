@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Semantic hunk classification** (plan 18) — hunks are classified as `whitespace`, `comment`, `import`, `logic` or `mixed` by a conservative lexer-based classifier (TS/JS, Java, Python, Go, Rust, C/C++, C#, shell, YAML; unknown languages only trust trailing-whitespace changes). Anything uncertain is `logic`. Shown as a CodeLens tag (`gitbraid.showHunkKind`), used by Absorb to leave trivial hunks in the worktree (`gitbraid.absorbSkipTrivial`, default on) and, opt-in, by Route Hunks to let trivial hunks follow their neighbour's branch (`gitbraid.autoRouteTrivialHunks`).
 - **GitBraid Doctor** (`gitbraid.runDoctor`) — a one-shot health check for
   circular base references, orphaned worktrees, orphaned virtual-branch
   store files, missing worktrees, and out-of-workspace assignments, each

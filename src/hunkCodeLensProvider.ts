@@ -1,3 +1,5 @@
+import { classifyHunksOnDisk } from './hunkKinds'
+import type { HunkKind } from './hunkClassifier'
 import * as vscode from 'vscode'
 import * as path from 'path'
 import { log } from './channelLogger'
@@ -145,8 +147,16 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 
 		const hunkAssignments = lookup.config.getHunkAssignments(lookup.relativePath)
 
+		// Kind tags (plan 18).  The hunks describe the on-disk file, so an
+		// unsaved document would be classified against the wrong text.
+		const showKinds = vscode.workspace.getConfiguration('gitbraid').get<boolean>('showHunkKind', true)
+		const kinds = showKinds && !document.isDirty
+			? await classifyHunksOnDisk(lookup.workspaceRoot, lookup.relativePath, hunks)
+			: []
+
 		const lenses: vscode.CodeLens[] = []
 		for (const hunk of hunks) {
+			const kindTitle = KIND_LENS[kinds[hunk.index] ?? 'logic']
 			const assignedBranch = hunkAssignments?.get(hunk.index)
 			const range = new vscode.Range(
 				Math.max(hunk.startLine - 1, 0),
@@ -155,6 +165,13 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 				0,
 			)
 			const tooltip = `Lines ${String(hunk.startLine)}–${String(hunk.endLine)}: ${assignedBranch ?? 'unassigned'}`
+			if (kindTitle) {
+				lenses.push(new vscode.CodeLens(range, {
+					title: kindTitle,
+					command: '',
+					tooltip: 'GitBraid classified this hunk conservatively; anything uncertain is shown as a normal change.',
+				}))
+			}
 
 			if (assignedBranch) {
 				// Two lenses: reassign (opens the picker) + unassign (one-click).
@@ -254,6 +271,15 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
 		log.debug(`HunkCodeLensProvider: ${hunks.length} hunks for ${lookup.relativePath}`)
 		return hunks
 	}
+}
+
+/** Lens text per hunk kind; `logic` is the default and gets no tag. */
+const KIND_LENS: Record<HunkKind, string | undefined> = {
+	whitespace: '$(whitespace) whitespace only',
+	comment: '$(comment) comment only',
+	import: '$(package) imports',
+	mixed: '$(warning) comment + code',
+	logic: undefined,
 }
 
 // ─── OverlayDiagnostics ────────────────────────────────────────────────────────

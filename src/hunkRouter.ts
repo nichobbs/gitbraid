@@ -61,6 +61,9 @@ export class HunkRouter {
 
 	constructor(private readonly _diffEngine: DiffEngine) {}
 
+	/** The engine hunks are read from (shared with auto-routing). */
+	get diffEngine(): DiffEngine { return this._diffEngine }
+
 	// ── Public API ─────────────────────────────────────────────────────────────
 
 	/**

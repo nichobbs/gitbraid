@@ -1,3 +1,4 @@
+import type { HunkKind } from './hunkClassifier'
 import path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { log } from './channelLogger'
@@ -31,6 +32,12 @@ export interface DiffHunk {
 	header: string
 	/** The full hunk text including the header line, ready for `git apply`. */
 	patch: string
+	/**
+	 * Coarse kind of change (plan 18), set by `classifyHunksOnDisk` for callers
+	 * that asked for it.  Absent means "not classified", which consumers must
+	 * treat like `logic`.
+	 */
+	classification?: HunkKind
 }
 
 // ─── Unified diff parser ───────────────────────────────────────────────────────

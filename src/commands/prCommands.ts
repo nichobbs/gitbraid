@@ -142,6 +142,7 @@ export function registerPrCommands(deps: CommandDeps, secrets: vscode.SecretStor
 				await runAbsorbUi(wt, branch, relPaths, ctx.diffEngine, {
 					mergeBase,
 					allowPushed,
+					skipTrivial: vscode.workspace.getConfiguration('gitbraid').get<boolean>('absorbSkipTrivial', true),
 				})
 			}
 		})),
