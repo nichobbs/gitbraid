@@ -331,6 +331,31 @@ suite('worktreeAdopter: WorktreeAdopter', () => {
 		assert.strictEqual(await gitOk(root, 'stash', 'list'), '')
 	})
 
+	test('widens a sparse worktree so committed and carried-over files are present', async () => {
+		const cfg = vscode.workspace.getConfiguration('gitbraid')
+		await cfg.update('sparseWorktrees', 'always', vscode.ConfigurationTarget.Global)
+		try {
+			const a = await external('a')
+			await commitFile(a, 'zadopt-dir/committed.txt', 'c\n', 'a')
+			fs.mkdirSync(path.join(a, 'zadopt-other'), { recursive: true })
+			fs.writeFileSync(path.join(a, 'zadopt-other', 'untracked.txt'), 'u\n')
+
+			const list = await adopter.listExternalWorktrees()
+			const results = await adopter.adopt([{ worktree: find(list, 'zadopt/a'), base }], '#123456')
+			assert.deepStrictEqual(results.map((r) => [r.ok, r.message]), [[true, undefined]])
+
+			const wt = svc.getWorktreePath('zadopt/a').fsPath
+			assert.strictEqual(await svc.sparse.isSparse(wt), true, 'expected a sparse worktree')
+			assert.strictEqual(readText(path.join(wt, 'zadopt-dir', 'committed.txt')), 'c\n')
+			assert.strictEqual(readText(path.join(wt, 'zadopt-other', 'untracked.txt')), 'u\n')
+		} finally {
+			await cfg.update('sparseWorktrees', undefined, vscode.ConfigurationTarget.Global)
+			for (const d of ['zadopt-dir', 'zadopt-other']) {
+				try { fs.rmSync(path.join(wsRoot().fsPath, d), { recursive: true, force: true }) } catch { /* ignore */ }
+			}
+		}
+	})
+
 	test('later steps are skipped after a failure', async () => {
 		const list: ExternalWorktree[] = [
 			{ branch: 'zadopt/a', path: path.join(outside, 'missing'), dirty: false, locked: true },

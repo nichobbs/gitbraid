@@ -365,6 +365,7 @@ export class WorktreeAdopter {
 			await this._branchStack.addBranchToStack(branch, step.base, color, {
 				prepareWorktree: async (dir) => {
 					newDir = dir
+					await this._widenSparseCone(dir, step.base, branch, stash)
 					if (stash) applied = await this._applyStash(dir, stash)
 				},
 			})
@@ -416,6 +417,34 @@ export class WorktreeAdopter {
 				log.warn(`WorktreeAdopter: could not mirror ${rel}: ${e instanceof Error ? e.message : String(e)}`)
 			}
 		}
+	}
+
+	/**
+	 * A sparse worktree starts with a cone built from the branch's
+	 * assignments, which an adopted branch doesn't have yet.  Widen it to
+	 * every file the branch commits or carries in its stash, so the stash
+	 * applies in full and StackPopulator finds the committed files on disk.
+	 */
+	private async _widenSparseCone(dir: string, base: string, branch: string, stash: string | undefined): Promise<void> {
+		const sparse = this._branchStack.sparse
+		if (!await sparse.isSparse(dir)) return
+		const lists = [
+			['diff', '--name-only', '--diff-filter=ACMR', base, branch],
+			...(stash
+				? [
+					['diff', '--name-only', `${stash}^1`, stash],
+					// The third parent only exists when the stash holds untracked files.
+					['ls-tree', '-r', '--name-only', `${stash}^3`],
+				]
+				: []),
+		]
+		const paths = new Set<string>()
+		for (const args of lists) {
+			const { stdout, exitCode } = await this._runner.run(args, { cwd: dir })
+			if (exitCode !== 0) continue
+			for (const l of stdout.split('\n')) if (l.trim()) paths.add(l.trim())
+		}
+		for (const p of paths) await sparse.ensureInCone(dir, p)
 	}
 
 	private async _isDirty(cwd: string): Promise<boolean> {
