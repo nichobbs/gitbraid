@@ -314,6 +314,8 @@ suite('sparseWorktree: BranchStackService integration', function () {
 		const full = await resolver.getResolvedContent(root, 'c/z.txt')
 		assert.ok(sparse, 'served from committed state')
 		assert.strictEqual(Buffer.from(sparse).toString(), 'c\n')
-		assert.deepStrictEqual(Buffer.from(sparse), Buffer.from(full ?? []))
+		// A full checkout may apply core.autocrlf (Windows); git show returns the stored bytes.
+		const lf = (b: Uint8Array | undefined) => Buffer.from(b ?? []).toString().replaceAll('\r\n', '\n')
+		assert.strictEqual(lf(sparse), lf(full))
 	})
 })
