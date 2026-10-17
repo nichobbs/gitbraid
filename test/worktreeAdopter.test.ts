@@ -29,6 +29,15 @@ async function gitOk(cwd: string, ...args: string[]): Promise<string> {
 	return r.stdout.trim()
 }
 
+/**
+ * Read a text file with line endings normalised: Windows runners check out
+ * with `core.autocrlf=true`, so files that round-trip through git (stash
+ * apply, rebase) come back as CRLF.
+ */
+function readText(file: string): string {
+	return fs.readFileSync(file, 'utf-8').replaceAll('\r\n', '\n')
+}
+
 async function commitFile(cwd: string, rel: string, content: string, message: string): Promise<void> {
 	fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true })
 	fs.writeFileSync(path.join(cwd, rel), content)
@@ -277,11 +286,11 @@ suite('worktreeAdopter: WorktreeAdopter', () => {
 		assert.strictEqual(fs.existsSync(a), false)
 		assert.strictEqual(fs.existsSync(b), false)
 		const newB = svc.getWorktreePath('zadopt/b').fsPath
-		assert.strictEqual(fs.readFileSync(path.join(newB, 'zadopt-b.txt'), 'utf-8'), 'b edited\n')
-		assert.strictEqual(fs.readFileSync(path.join(newB, 'zadopt-b-new.txt'), 'utf-8'), 'new\n')
+		assert.strictEqual(readText(path.join(newB, 'zadopt-b.txt')), 'b edited\n')
+		assert.strictEqual(readText(path.join(newB, 'zadopt-b-new.txt')), 'new\n')
 
 		// Uncommitted files are mirrored into the workspace and assigned.
-		assert.strictEqual(fs.readFileSync(path.join(root, 'zadopt-b-new.txt'), 'utf-8'), 'new\n')
+		assert.strictEqual(readText(path.join(root, 'zadopt-b-new.txt')), 'new\n')
 		assert.strictEqual(config.getAssignment('zadopt-b-new.txt'), 'zadopt/b')
 		assert.strictEqual(config.getAssignment('zadopt-b.txt'), 'zadopt/b')
 
@@ -318,7 +327,7 @@ suite('worktreeAdopter: WorktreeAdopter', () => {
 
 		// d is untouched: same commit, same worktree, uncommitted file restored.
 		assert.strictEqual(await gitOk(root, 'rev-parse', 'zadopt/d'), dHead)
-		assert.strictEqual(fs.readFileSync(path.join(d, 'wip.txt'), 'utf-8'), 'still here\n')
+		assert.strictEqual(readText(path.join(d, 'wip.txt')), 'still here\n')
 		assert.strictEqual(await gitOk(root, 'stash', 'list'), '')
 	})
 
