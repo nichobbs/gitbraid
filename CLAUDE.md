@@ -61,7 +61,7 @@ Git layer: git worktrees under .worktrees/, git apply, git diff, git commit
 
 **`WorkspaceSync`** (`src/workspaceSync.ts`) — File system watcher that copies assigned files to their branch worktree on every save, with a configurable debounce (default 200 ms). Also tracks "floating" files (modified but unassigned). Saves for files assigned to a virtual branch go to `VirtualBranchStore` instead of a worktree. Bidirectional sync is present but experimental (disabled by default).
 
-**`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has a 32-entry LRU cache validated against the file's on-disk mtime on every lookup (no time-based staleness window — a stat() runs on each call so a save landing shortly after the previous one is never served stale hunks) to avoid redundant diff runs.
+**`DiffEngine`** (`src/diffEngine.ts`) — Parses `git diff` unified output into `DiffHunk[]`. Has an LRU cache (256 files / 16 MB by default) keyed on what the diff depends on: the `HEAD` commit (read straight from `.git`, falling back to `git rev-parse`) and a hash of the file's content, never its mtime, so touching a file is a hit and moving `HEAD` is a miss with nothing to invalidate. `getHunksForFiles` diffs many files in one git process.
 
 **`HunkRouter`** (`src/hunkRouter.ts`) — Routes individual diff hunks to branches via `git apply --cached`. Uses anchor tracking for hunk stability across edits.
 

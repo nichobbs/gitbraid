@@ -705,7 +705,7 @@ export class ConfigService implements vscode.Disposable {
 			const content = JSON.stringify(this._config, null, 2) + '\n'
 			const tmpPath = this._configPath + '.tmp'
 			await fs.promises.writeFile(tmpPath, content, 'utf-8')
-			await fs.promises.rename(tmpPath, this._configPath)
+			await renameWithRetry(tmpPath, this._configPath)
 			this._baseRev = nextRev
 			this._baseSnapshot = clone(this._config)
 
@@ -806,4 +806,23 @@ function normalisePath(p: string): string {
 
 function isNodeError(e: unknown): e is NodeJS.ErrnoException {
 	return e instanceof Error && 'code' in e
+}
+
+/**
+ * `fs.rename` over an existing file can fail transiently on Windows (EPERM,
+ * EBUSY, EACCES) while another handle - a watcher, antivirus, a concurrent
+ * reader - briefly holds the target.  Retry with a short linear backoff.
+ */
+export async function renameWithRetry(from: string, to: string, attempts = 8): Promise<void> {
+	for (let i = 1; ; i++) {
+		try {
+			await fs.promises.rename(from, to)
+			return
+		} catch (e) {
+			const code = (e as NodeJS.ErrnoException).code
+			const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+			if (!transient || i >= attempts) throw e
+			await new Promise<void>((resolve) => setTimeout(resolve, 20 * i))
+		}
+	}
 }

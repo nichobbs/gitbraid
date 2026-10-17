@@ -28,6 +28,12 @@
   (`fetchGithubReviewAndChecks`, `summariseGithubReviews`).
 
 ### Changed
+- **Diff cache is content-addressed and holds 256 files, not 32** (setting
+  `gitbraid.diffCacheEntries`), and `DiffEngine.getHunksForFiles` diffs many
+  files in one git process (used by Absorb). Touching a file without changing it
+  no longer re-runs `git diff`. Trade-off: a repeat lookup of one file now reads
+  and hashes it (about 1 ms) instead of calling `stat` (about 0.25 ms). See
+  `docs/plans/15-content-addressed-diff-cache.md`.
 - **Shared append-only log primitive** (`src/jsonlLog.ts`, `src/fileLock.ts`) -
   `PersistentUndoLog` and `VirtualBranchStore` now share one implementation of
   locked appends, corrupt-line tolerance, torn-tail repair, atomic rewrite
@@ -65,6 +71,11 @@
   so every macOS test run failed before any test started.
 
 ### Fixed
+- **Stale diff hunks** - the hunk cache was validated only by file mtime, and
+  `invalidateCache` was never called. After a commit (or rebase, checkout) that
+  moved `HEAD` with the file untouched it served the old hunks, and a rewrite
+  with a different content but the same size and mtime was served stale. The
+  cache is now keyed on the `HEAD` commit and a hash of the file's content.
 - **`ConfigService.reload()` could undo a newer in-memory change** - the
   existing guard only covered a debounced flush. Once the debounce timer fired
   the write ran with no guard, so a late file-watcher event could reload the
