@@ -321,7 +321,9 @@ suite('GitBraidApi — actions (fake runner)', function () {
 		// The API now refuses branches that are not in the stack, so register the
 		// one these tests act on. Its worktree is still only a path string: the
 		// fake runner never touches disk.
-		await config.addBranch({ name: 'feature/x', color: '#fff', base: 'main' })
+		// Windows can refuse the cleanup's rmSync while a handle is still open, in
+		// which case the previous test's config is loaded back; register idempotently.
+		if (!config.getBranch('feature/x')) await config.addBranch({ name: 'feature/x', color: '#fff', base: 'main' })
 	})
 
 	teardown(() => {
